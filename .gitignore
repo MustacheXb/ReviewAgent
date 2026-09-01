@@ -1,0 +1,9 @@
+# 参考项目：外部克隆的仓库，不属于本项目源码
+参考项目/
+
+# Claude Code 本机配置（每台机器不同，不入库）
+.claude/settings.local.json
+
+# .claude/skills 是指向 .agents/skills 的 NTFS junction（本机链接，不入库；
+# 真实的 skills 存储在 .agents/skills/，随仓库提交）
+.claude/skills
