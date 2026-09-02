@@ -1,5 +1,5 @@
 # 参考项目：外部克隆的仓库，不属于本项目源码
-参考项目/
+reference_project/
 
 # Claude Code 本机配置（每台机器不同，不入库）
 .claude/settings.local.json
