@@ -1,0 +1,21 @@
+{
+  "name": "review-agent-poc1",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "POC1 薄 harness 实验平台（Review Agent 阶段 0，spec #1）",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

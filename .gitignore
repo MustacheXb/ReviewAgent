@@ -7,3 +7,12 @@ reference_project/
 # .claude/skills 是指向 .agents/skills 的 NTFS junction（本机链接，不入库；
 # 真实的 skills 存储在 .agents/skills/，随仓库提交）
 .claude/skills
+
+# Node 工程产物
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# /implement-spec 子代理 worktree 临时目录
+.claude/worktrees/
