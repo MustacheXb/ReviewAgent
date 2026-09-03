@@ -100,6 +100,12 @@ function validateOptions(options: RunReviewOptions): void {
   if (options.prefetch !== undefined) {
     validatePrefetchOptions(options.prefetch);
   }
+  if (options.fullRepoBudgetChars !== undefined) {
+    requirePositiveInt(options.fullRepoBudgetChars, "options.fullRepoBudgetChars");
+  }
+  if (options.toolResultBudgetChars !== undefined) {
+    requirePositiveInt(options.toolResultBudgetChars, "options.toolResultBudgetChars");
+  }
   if (options.now !== undefined && typeof options.now !== "function") {
     throw new Error("options.now must be a function returning a Date");
   }
@@ -125,6 +131,12 @@ function validatePrefetchOptions(prefetch: unknown): void {
         `options.prefetch.${field} must be a positive integer (got ${JSON.stringify(value)})`,
       );
     }
+  }
+}
+
+function requirePositiveInt(value: unknown, field: string): void {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${field} must be a positive integer (got ${JSON.stringify(value)})`);
   }
 }
 
