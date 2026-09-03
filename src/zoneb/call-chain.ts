@@ -88,7 +88,13 @@ function callerMethodNameOf(site: ReferenceSite): readonly string[] {
 }
 
 async function calleesOf(repo: RepoContext, ref: ChangedSymbolRef): Promise<readonly string[]> {
-  const index = await repo.symbolIndex(ref.file);
+  const index = await repo.symbolIndex(ref.file).catch((error: unknown) => {
+    // 归一为仓库相对路径消息（不泄漏绝对路径，与 get_file 的错误纪律一致）
+    throw new Error(
+      `symbol index unavailable for file "${ref.file}" (not found or unreadable)`,
+      { cause: error },
+    );
+  });
   const inRange = index.invocations.filter(
     (invocation) => invocation.line >= ref.symbol.line && invocation.line <= ref.symbol.endLine,
   );

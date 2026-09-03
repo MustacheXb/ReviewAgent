@@ -55,7 +55,7 @@ export const FIND_REFERENCES_TOOL: ReviewToolDefinition = {
     }
     const lines = sites.flatMap((site) => [
       `  ${site.file}:${site.line} [${site.isDeclaration ? "declaration" : "usage"}] ${enclosingLabel(site.enclosing)}`,
-      `      ${site.text}`,
+      `      ${site.text.trim()}`,
     ]);
     const budget = applyLineBudget(
       [header, ...lines],
@@ -175,8 +175,9 @@ async function findMethodRefs(repo: RepoContext, name: string): Promise<readonly
   const refs: ChangedSymbolRef[] = [];
   for (const file of repo.javaFiles) {
     const index = await repo.symbolIndex(file).catch((error: unknown) => {
+      // 归一为仓库相对路径消息（不泄漏绝对路径，与 get_file 的错误纪律一致）
       throw new Error(
-        `review.get_call_chain: symbol index unavailable for file "${file}" (file cannot be read from the repository snapshot): ${errorMessage(error)}`,
+        `review.get_call_chain: symbol index unavailable for file "${file}" (not found or unreadable)`,
         { cause: error },
       );
     });
