@@ -381,16 +381,24 @@ describe("runReview — config E Context Ledger (T07: tool-result dedup at the m
     }
   });
 
-  it("starts every run from an empty ledger: ids restart and request bytes reproduce", async () => {
-    const first = FakeLlmClient.fromResponses(configEScriptWithCalls([RANGE_READ, RANGE_READ_REPEAT]));
-    const second = FakeLlmClient.fromResponses(configEScriptWithCalls([RANGE_READ, RANGE_READ_REPEAT]));
-    const firstResult = await runReview(CONFIGS.E, SAMPLE_MR_CASE, first, { auditDir });
-    const secondResult = await runReview(CONFIGS.E, SAMPLE_MR_CASE, second, { auditDir });
+  it("starts every run from an empty ledger: ids restart and request bytes reproduce across four runs", async () => {
+    const fakes = Array.from({ length: 4 }, () =>
+      FakeLlmClient.fromResponses(configEScriptWithCalls([RANGE_READ, RANGE_READ_REPEAT])),
+    );
+    // 顺序执行（审计文件 runId 含毫秒时间戳，并行会碰撞文件名）
+    const results: Awaited<ReturnType<typeof runReview>>[] = [];
+    for (const fake of fakes) {
+      results.push(await runReview(CONFIGS.E, SAMPLE_MR_CASE, fake, { auditDir }));
+    }
 
-    // 两个 run 各自从 ctx#001 起（run 私有，互不影响），请求字节完全复现
-    expect(secondResult.audit.toolCallLog[1]?.resultSummary).toBe(RANGE_REFERENCE);
-    expect(secondResult.audit.ledger?.[0]?.id).toBe("ctx#001");
-    expect(second.capturedRequests).toEqual(first.capturedRequests);
+    // 每个 run 各自从 ctx#001 起（run 私有，互不影响）
+    for (const result of results) {
+      expect(result.audit.toolCallLog[1]?.resultSummary).toBe(RANGE_REFERENCE);
+      expect(result.audit.ledger?.[0]?.id).toBe("ctx#001");
+    }
+    for (const fake of fakes) {
+      expect(fake.capturedRequests).toEqual(fakes[0]?.capturedRequests);
+    }
   });
 });
 
