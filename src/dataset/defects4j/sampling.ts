@@ -1,4 +1,13 @@
 import { type Defects4jProjectInfo, DEFECTS4J_PROJECTS } from "./projects.js";
+import {
+  allocateSampleSizes as sharedAllocateSampleSizes,
+  sampleDeterministic,
+} from "../sampling.js";
+
+export {
+  /** 分层名额分配（共享工具，见 src/dataset/sampling.ts；重导出保持本模块既有 API） */
+  allocateSampleSizes,
+} from "../sampling.js";
 
 /**
  * Defects4J 分层抽样（Ticket 02：~100 条目标清单；实跑在 Ticket 12）。
@@ -33,74 +42,6 @@ export interface SamplingManifest {
 
 export const DEFAULT_SAMPLING_SEED = "poc1-d4j-2026";
 
-/** 比例分配 + 保底 + 上限（最大余数法）；返回各层名额 */
-export function allocateSampleSizes(
-  stratumSizes: readonly number[],
-  targetTotal: number,
-  minPerStratum: number,
-): number[] {
-  const n = stratumSizes.length;
-  if (n === 0 || targetTotal <= 0) {
-    return stratumSizes.map(() => 0);
-  }
-  if (stratumSizes.some((c) => !Number.isInteger(c) || c < 0)) {
-    throw new RangeError("stratumSizes 必须为非负整数");
-  }
-  const floorCap = Math.min(minPerStratum, targetTotal);
-  const alloc = stratumSizes.map((c) => Math.max(0, Math.min(c, floorCap)));
-  const floorSum = alloc.reduce((s, v) => s + v, 0);
-  // 保底总额已超目标（目标过小）：退化为无保底的纯比例分配，保证总额不超目标
-  if (floorSum > targetTotal) {
-    return allocateByLargestRemainder(stratumSizes, targetTotal, stratumSizes.reduce((s, v) => s + v, 0)).map((v, i) =>
-      Math.min(v, stratumSizes[i]!),
-    );
-  }
-  let remaining = targetTotal - floorSum;
-  while (remaining > 0) {
-    const capacity = stratumSizes.map((c, i) => Math.max(0, c - alloc[i]!));
-    const totalCapacity = capacity.reduce((s, v) => s + v, 0);
-    if (totalCapacity === 0) {
-      break;
-    }
-    const step = allocateByLargestRemainder(capacity, remaining, totalCapacity);
-    let granted = 0;
-    for (let i = 0; i < n; i += 1) {
-      const give = Math.min(step[i]!, capacity[i]!);
-      alloc[i] = alloc[i]! + give;
-      granted += give;
-    }
-    if (granted === 0) {
-      break;
-    }
-    remaining -= granted;
-  }
-  return alloc;
-}
-
-/** 按权重以最大余数法分配 quota 个名额（逐项不超过权重由调用方容量保证） */
-function allocateByLargestRemainder(
-  weights: readonly number[],
-  quota: number,
-  totalWeight: number,
-): number[] {
-  const raw = weights.map((w) => (quota * w) / totalWeight);
-  const base = raw.map((v) => Math.floor(v));
-  let left = quota - base.reduce((s, v) => s + v, 0);
-  const order = weights
-    .map((w, i) => ({ i, frac: raw[i]! - base[i]!, weight: w }))
-    .filter((x) => x.weight > 0)
-    .sort((a, b) => b.frac - a.frac || b.weight - a.weight);
-  const extra = weights.map(() => 0);
-  for (const item of order) {
-    if (left <= 0) {
-      break;
-    }
-    extra[item.i] = 1;
-    left -= 1;
-  }
-  return base.map((v, i) => v + extra[i]!);
-}
-
 /** 层内确定性抽样：从 ID 池中取 k 个不重复 ID（升序返回） */
 export function sampleBugIds(
   project: string,
@@ -108,19 +49,7 @@ export function sampleBugIds(
   k: number,
   seed: string,
 ): number[] {
-  if (k <= 0 || pool.length === 0) {
-    return [];
-  }
-  const take = Math.min(k, pool.length);
-  const ids = [...pool];
-  const rng = mulberry32(hashSeed(`${seed}:${project}`));
-  for (let i = 0; i < take; i += 1) {
-    const j = i + Math.floor(rng() * (ids.length - i));
-    const tmp = ids[i]!;
-    ids[i] = ids[j]!;
-    ids[j] = tmp;
-  }
-  return ids.slice(0, take).sort((a, b) => a - b);
+  return sampleDeterministic(pool, k, `${seed}:${project}`).sort((a, b) => a - b);
 }
 
 /** 连续 ID 池 [1..count]（默认；active ID 集未校准时的近似） */
@@ -142,7 +71,7 @@ export function buildSamplingManifest(
   activeBugIds?: Readonly<Record<string, readonly number[]>>,
 ): SamplingManifest {
   const pools = projects.map((p) => activeBugIds?.[p.key] ?? contiguousPool(p.bugCount));
-  const sizes = allocateSampleSizes(
+  const sizes = sharedAllocateSampleSizes(
     pools.map((pool) => pool.length),
     targetTotal,
     minPerStratum,
@@ -163,29 +92,4 @@ export function buildSamplingManifest(
     projects: manifestProjects,
     total,
   };
-}
-
-/** mulberry32 PRNG（32 位，确定性） */
-function mulberry32(seedValue: number): () => number {
-  let a = seedValue >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** 字符串种子 → 32 位整数（cyrb53 简化版） */
-function hashSeed(text: string): number {
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  return (h1 ^ (h2 >>> 16)) >>> 0;
 }
