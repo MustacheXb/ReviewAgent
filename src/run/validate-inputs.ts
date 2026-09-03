@@ -97,8 +97,34 @@ function validateOptions(options: RunReviewOptions): void {
   if (options.toolExecutor !== undefined && typeof options.toolExecutor.execute !== "function") {
     throw new Error("options.toolExecutor must implement execute(call): Promise<string>");
   }
+  if (options.prefetch !== undefined) {
+    validatePrefetchOptions(options.prefetch);
+  }
   if (options.now !== undefined && typeof options.now !== "function") {
     throw new Error("options.now must be a function returning a Date");
+  }
+}
+
+function validatePrefetchOptions(prefetch: unknown): void {
+  if (typeof prefetch !== "object" || prefetch === null) {
+    throw new Error("options.prefetch must be a PrefetchOptions object");
+  }
+  const budgetFields = [
+    "zoneBBudgetChars",
+    "symbolLayerBudgetChars",
+    "referenceLayerBudgetChars",
+    "callChainLayerBudgetChars",
+  ] as const;
+  for (const field of budgetFields) {
+    const value = (prefetch as Record<string, unknown>)[field];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+      throw new Error(
+        `options.prefetch.${field} must be a positive integer (got ${JSON.stringify(value)})`,
+      );
+    }
   }
 }
 

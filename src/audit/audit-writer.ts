@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ConfigId } from "../contracts/config.js";
 import type { Finding } from "../contracts/finding.js";
 import type { LlmRequest, LlmUsage } from "../contracts/llm-client.js";
+import type { PrefetchLayerRecord } from "../contracts/prefetch.js";
 import type { CandidateRejection, PhaseRecord, RunAudit, ToolCallRecord } from "../contracts/run.js";
 
 /** 审计文件默认落盘目录（相对 cwd；测试注入临时目录） */
@@ -32,6 +33,8 @@ export interface AuditFileContent {
   readonly rejections: readonly CandidateRejection[];
   readonly requests: readonly LlmRequest[];
   readonly toolCallLog: readonly ToolCallRecord[];
+  /** config B 预取注入层记账（非预取配置缺省） */
+  readonly prefetch?: readonly PrefetchLayerRecord[];
 }
 
 /** runId：毫秒时间戳 + 配置 + 用例，文件名安全 */
@@ -54,6 +57,7 @@ export function buildAuditFileContent(args: {
   readonly usage: LlmUsage;
   readonly findings: readonly Finding[];
   readonly audit: RunAudit;
+  readonly prefetch?: readonly PrefetchLayerRecord[];
 }): AuditFileContent {
   return {
     runId: args.runId,
@@ -74,6 +78,7 @@ export function buildAuditFileContent(args: {
     rejections: args.audit.rejections,
     requests: args.audit.requests,
     toolCallLog: args.audit.toolCallLog,
+    ...(args.prefetch !== undefined ? { prefetch: args.prefetch } : {}),
   };
 }
 

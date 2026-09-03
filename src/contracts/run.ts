@@ -1,6 +1,7 @@
 import type { ConfigId } from "./config.js";
 import type { Finding } from "./finding.js";
 import type { LlmRequest, LlmUsage } from "./llm-client.js";
+import type { PrefetchLayerRecord } from "./prefetch.js";
 
 /**
  * runReview(config, mrCase, llmClient) → RunResult 的输出契约（spec #1）。
@@ -43,6 +44,8 @@ export interface RunAudit {
   readonly truncated: boolean;
   /** 截断原因（MAX_ROUNDS_REACHED / TOOL_BUDGET_EXHAUSTED） */
   readonly truncationReasons: readonly string[];
+  /** config B（及未来复用预取的配置）的注入层记账：预算、截断、条目数（工单 #4 扩展字段） */
+  readonly prefetch?: readonly PrefetchLayerRecord[];
 }
 
 export interface ToolCallRecord {

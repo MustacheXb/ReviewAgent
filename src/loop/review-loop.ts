@@ -13,7 +13,7 @@ import type { MRCase } from "../contracts/mr-case.js";
 import type { CandidateRejection, PhaseRecord, ReviewPhase, ToolCallRecord } from "../contracts/run.js";
 import { applyCandidateGate } from "../gate/candidate-gate.js";
 import { MAX_ROUNDS, MAX_TOOL_CALLS, TRUNCATION_MAX_ROUNDS, TRUNCATION_TOOL_BUDGET } from "./constants.js";
-import { buildInitialUserMessage, buildSystemMessage } from "./messages.js";
+import { buildInitialMessages, type ContextMessages } from "./messages.js";
 import type { CandidatesParseResult, VerificationParseResult } from "./parse.js";
 import { parseCandidatesReply, parseVerificationReply } from "./parse.js";
 import { PHASE_INSTRUCTIONS, PHASE_ORDER } from "./phases.js";
@@ -32,6 +32,8 @@ export interface LoopInputs {
   readonly tools: readonly ToolSchema[];
   /** T03 挂载的工具执行器 */
   readonly toolExecutor: ToolExecutor | undefined;
+  /** 工单 #4：config B 的确定性上下文注入（Zone B + 预取层），循环开始前一次性构造 */
+  readonly contextMessages?: ContextMessages;
 }
 
 /** Review Loop 输出（组装 RunResult / RunAudit 的全部素材） */
@@ -82,7 +84,7 @@ interface ToolCycleResult {
  */
 export async function runReviewLoop(inputs: LoopInputs): Promise<LoopOutcome> {
   let state: LoopState = {
-    messages: [buildSystemMessage(), buildInitialUserMessage(inputs.mrCase)],
+    messages: buildInitialMessages(inputs.mrCase, inputs.contextMessages),
     requests: [],
     usage: ZERO_USAGE,
     phaseLog: [],

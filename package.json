@@ -18,5 +18,10 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
+  },
+  "dependencies": {
+    "@vscode/ripgrep": "1.18.0",
+    "tree-sitter-java": "0.23.5",
+    "web-tree-sitter": "0.27.0"
   }
 }

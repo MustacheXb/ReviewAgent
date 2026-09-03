@@ -59,6 +59,30 @@ export function buildSystemMessage(): LlmMessage {
   return { role: "system", content: SYSTEM_PROMPT };
 }
 
+/**
+ * config B 注入的确定性上下文消息（工单 #4 挂载点）。
+ * 消息在循环开始前一次性构造，循环内严格 append-only（只追加、不重排、不改写）。
+ */
+export interface ContextMessages {
+  /** Zone B：插在 system（Zone A）之后、初始 user 消息（Zone C 起点）之前 */
+  readonly zoneB?: readonly LlmMessage[];
+  /** 预取层：按固定管线顺序（Symbol → Reference → Call Chain）追加在初始 user 消息之后 */
+  readonly prefetch?: readonly LlmMessage[];
+}
+
+/** 初始消息序列：[system(Zone A), Zone B?, 初始 user(Zone C 起点 / Diff 层), 预取层...] */
+export function buildInitialMessages(
+  mrCase: MRCase,
+  contextMessages: ContextMessages = {},
+): readonly LlmMessage[] {
+  return [
+    buildSystemMessage(),
+    ...(contextMessages.zoneB ?? []),
+    buildInitialUserMessage(mrCase),
+    ...(contextMessages.prefetch ?? []),
+  ];
+}
+
 /** Zone C 起点：MR 输入（caseId、issue 描述、unified diff），只追加、不改写 */
 export function buildInitialUserMessage(mrCase: MRCase): LlmMessage {
   const issueDescription =
