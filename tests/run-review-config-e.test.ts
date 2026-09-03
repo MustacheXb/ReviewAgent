@@ -78,6 +78,25 @@ function configEScriptWithCalls(calls: readonly ToolCall[]): readonly LlmRespons
   ];
 }
 
+/** 两轮脚本：第一轮 complete=false 触发第二轮（六阶段 × 2），两轮的 Context Retrieval 各调一次工具 */
+function twoRoundEScript(round1Call: ToolCall, round2Call: ToolCall): readonly LlmResponse[] {
+  const round = (call: ToolCall, complete: boolean): readonly LlmResponse[] => [
+    reply(JSON.stringify({ summary: "The MR changes the loop bound of MathUtils.sumFirst." })),
+    reply(JSON.stringify({ riskClass: "Medium", reason: "Core arithmetic logic changes." })),
+    reply(JSON.stringify({ neededContext: ["Impact of the loop bound change"], reason: "Impact analysis." })),
+    toolCallReply([call]),
+    reply(JSON.stringify({ notes: "The retrieval tools returned the requested context." })),
+    reply(JSON.stringify({ candidates: [HAPPY_PATH_FINDING] })),
+    reply(
+      JSON.stringify({
+        verdicts: [{ id: "F001", pass: true, reason: "Evidence is concrete." }],
+        complete,
+      }),
+    ),
+  ];
+  return [...round(round1Call, false), ...round(round2Call, true)];
+}
+
 describe("runReview — config E end-to-end (fake LLM, retrieval quartet at the main seam)", () => {
   it("completes a run with a scripted review.find_references call: call → result injection → continued run", async () => {
     const fake = FakeLlmClient.fromResponses(
@@ -328,10 +347,25 @@ describe("runReview — config E Context Ledger (T07: tool-result dedup at the m
     }
   });
 
-  it("keeps Zone A byte-stable and Zone C append-only while the ledger is deduplicating", async () => {
-    const fake = FakeLlmClient.fromResponses(configEScriptWithCalls([RANGE_READ, RANGE_READ_REPEAT]));
+  it("keeps the ledger live across rounds: a round-2 repeat still hits ctx#001 (run-private, not round-private)", async () => {
+    const fake = FakeLlmClient.fromResponses(twoRoundEScript(RANGE_READ, RANGE_READ_REPEAT));
     const result = await runReview(CONFIGS.E, SAMPLE_MR_CASE, fake, { auditDir });
 
+    expect(result.rounds).toBe(2);
+    expect(result.toolCalls).toBe(2);
+    expect(result.audit.toolCallLog[0]?.resultSummary).toContain("Lines 15-22 of 25");
+    // 第二轮的同一读取命中第一轮的登记（ctx#001），且重复不产生新登记
+    expect(result.audit.toolCallLog[1]?.resultSummary).toBe(RANGE_REFERENCE);
+    expect(result.audit.ledger).toEqual([
+      { id: "ctx#001", kind: "range", description: `review.get_file ${MATH_UTILS}:15-22` },
+    ]);
+  });
+
+  it("keeps Zone A byte-stable and Zone C append-only across rounds (every request is a strict prefix of the next)", async () => {
+    const fake = FakeLlmClient.fromResponses(twoRoundEScript(RANGE_READ, RANGE_READ_REPEAT));
+    const result = await runReview(CONFIGS.E, SAMPLE_MR_CASE, fake, { auditDir });
+
+    expect(result.audit.requests).toHaveLength(14);
     const firstTools = JSON.stringify(result.audit.requests[0]?.tools);
     const requests = result.audit.requests;
     for (const request of requests) {
