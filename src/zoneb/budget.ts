@@ -53,6 +53,6 @@ export function applyBlockBudget(
   };
 }
 
-export function joinBlocks(blocks: readonly (readonly string[])[]): string {
+function joinBlocks(blocks: readonly (readonly string[])[]): string {
   return blocks.map((block) => block.join("\n")).join("\n\n");
 }

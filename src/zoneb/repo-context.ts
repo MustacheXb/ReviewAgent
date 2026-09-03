@@ -81,7 +81,7 @@ export async function loadRepoContext(repoPath: string): Promise<RepoContext> {
 }
 
 /** 文件头部词法包名（无 package 声明 → 默认包 ""） */
-export async function extractPackageLexically(repoPath: string, file: string): Promise<string> {
+async function extractPackageLexically(repoPath: string, file: string): Promise<string> {
   const absPath = absoluteFile(repoPath, file);
   let handle: FileHandle;
   try {

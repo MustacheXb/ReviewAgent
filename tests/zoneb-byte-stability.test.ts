@@ -1,7 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildZoneB } from "../src/zoneb/zone-b-builder.js";
-import { SAMPLE_MR_CASE } from "./fixtures/sample-mr-case.js";
 
 const SAMPLE_REPO_PATH = fileURLToPath(new URL("./fixtures/sample-java-repo", import.meta.url));
 

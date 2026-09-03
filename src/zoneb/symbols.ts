@@ -285,7 +285,7 @@ export interface LineSpan {
   readonly endLine: number;
 }
 
-export function intersects(symbol: JavaSymbol, span: LineSpan): boolean {
+function intersects(symbol: JavaSymbol, span: LineSpan): boolean {
   return symbol.line <= span.endLine && span.startLine <= symbol.endLine;
 }
 
