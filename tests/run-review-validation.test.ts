@@ -76,6 +76,50 @@ describe("runReview input validation (system boundary)", () => {
       /options\.auditDir must be a non-empty string/,
     );
   });
+
+  it("rejects a non-object knowledge corpus", async () => {
+    const fake = FakeLlmClient.fromResponses(HAPPY_PATH_RESPONSES);
+    await expect(
+      runReview(CONFIGS.E, SAMPLE_MR_CASE, fake, { auditDir, knowledge: "rules.md" as unknown as never }),
+    ).rejects.toThrow(/options\.knowledge must be a KnowledgeCorpus object/);
+  });
+
+  it("rejects knowledge entries with empty fields or malformed shapes", async () => {
+    const fake = FakeLlmClient.fromResponses(HAPPY_PATH_RESPONSES);
+    await expect(
+      runReview(CONFIGS.E, SAMPLE_MR_CASE, fake, {
+        auditDir,
+        knowledge: { rules: [{ id: "", title: "t", text: "x" }] },
+      }),
+    ).rejects.toThrow(/options\.knowledge\.rules entry\.id must be a non-empty string/);
+    await expect(
+      runReview(CONFIGS.E, SAMPLE_MR_CASE, fake, {
+        auditDir,
+        knowledge: { history: [{ id: "H001", title: "t", text: "   " }] },
+      }),
+    ).rejects.toThrow(/options\.knowledge\.history entry\.text must be a non-empty string/);
+    await expect(
+      runReview(CONFIGS.E, SAMPLE_MR_CASE, fake, {
+        auditDir,
+        knowledge: { rules: ["no-null-collections"] as unknown as never },
+      }),
+    ).rejects.toThrow(/options\.knowledge\.rules entries must be KnowledgeEntry objects/);
+  });
+
+  it("rejects duplicate entry ids within one knowledge corpus (fail fast)", async () => {
+    const fake = FakeLlmClient.fromResponses(HAPPY_PATH_RESPONSES);
+    await expect(
+      runReview(CONFIGS.E, SAMPLE_MR_CASE, fake, {
+        auditDir,
+        knowledge: {
+          rules: [
+            { id: "R001", title: "first", text: "one" },
+            { id: "R001", title: "duplicate", text: "two" },
+          ],
+        },
+      }),
+    ).rejects.toThrow(/options\.knowledge\.rules contains duplicate entry id "R001"/);
+  });
 });
 
 describe("runReview LLM error propagation (explicit failure, no silent swallow)", () => {
