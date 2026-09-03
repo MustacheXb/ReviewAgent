@@ -1,0 +1,50 @@
+diff --git a/mockito-core/src/main/java/org/mockito/internal/creation/bytebuddy/InlineDelegateByteBuddyMockMaker.java b/mockito-core/src/main/java/org/mockito/internal/creation/bytebuddy/InlineDelegateByteBuddyMockMaker.java
+index ea537087fd..bf77c504fa 100644
+--- a/mockito-core/src/main/java/org/mockito/internal/creation/bytebuddy/InlineDelegateByteBuddyMockMaker.java
++++ b/mockito-core/src/main/java/org/mockito/internal/creation/bytebuddy/InlineDelegateByteBuddyMockMaker.java
+@@ -593,6 +593,7 @@ public void clearMock(Object mock) {
+     @Override
+     public void clearAllMocks() {
+         mockedStatics.getBackingMap().clear();
++        mockedSingletons.getBackingMap().clear();
+ 
+         for (Entry<Object, MockMethodInterceptor> entry : mocks) {
+             clearMock(entry.getKey());
+diff --git a/mockito-integration-tests/inline-mocks-tests/src/test/java/org/mockitoinline/SingletonMockTest.java b/mockito-integration-tests/inline-mocks-tests/src/test/java/org/mockitoinline/SingletonMockTest.java
+index d9b562fba9..1f867af740 100644
+--- a/mockito-integration-tests/inline-mocks-tests/src/test/java/org/mockitoinline/SingletonMockTest.java
++++ b/mockito-integration-tests/inline-mocks-tests/src/test/java/org/mockitoinline/SingletonMockTest.java
+@@ -6,7 +6,6 @@
+ 
+ import static junit.framework.TestCase.assertEquals;
+ import static junit.framework.TestCase.assertNull;
+-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+ import static org.mockito.Mockito.reset;
+ import static org.mockito.Mockito.when;
+ 
+@@ -84,6 +83,25 @@ public void testSingletonMockReset() {
+         }
+     }
+ 
++    @Test
++    public void testSingletonMockDeregisteredByClearInlineMocks() {
++        MyEnum singleton = MyEnum.A;
++
++        // Intentionally do not close the MockedSingleton to simulate a leak.
++        Mockito.mockSingleton(singleton);
++        when(singleton.foo()).thenReturn("bar");
++        assertEquals("bar", singleton.foo());
++
++        Mockito.framework().clearInlineMocks();
++
++        // After clearing, the singleton must no longer be mocked
++        assertEquals("foo", singleton.foo());
++        // and re-mocking the same instance must not throw "already registered".
++        try (MockedSingleton<MyEnum> ignored = Mockito.mockSingleton(singleton)) {
++            assertNull(singleton.foo());
++        }
++    }
++
+     enum MyEnum {
+         A {
+             @Override

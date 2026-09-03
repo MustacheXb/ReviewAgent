@@ -1,0 +1,59 @@
+diff --git a/src/test/java/tools/jackson/core/unittest/json/StreamWriteFeaturesTest.java b/src/test/java/tools/jackson/core/unittest/json/StreamWriteFeaturesTest.java
+index 79a584e747..57b63538e5 100644
+--- a/src/test/java/tools/jackson/core/unittest/json/StreamWriteFeaturesTest.java
++++ b/src/test/java/tools/jackson/core/unittest/json/StreamWriteFeaturesTest.java
+@@ -59,19 +59,19 @@ void fieldNameQuoting() throws IOException
+     @Test
+     void nonNumericQuoting() throws IOException
+     {
+-        JsonFactory f = new JsonFactory();
+-        // by default, quoting should be enabled
+-        assertTrue(f.isEnabled(JsonWriteFeature.WRITE_NAN_AS_STRINGS));
+-        _testNonNumericQuoting(f, true);
+-        // can disable it
+-        f = f.rebuild().disable(JsonWriteFeature.WRITE_NAN_AS_STRINGS)
++        JsonFactory f = JsonFactory.builder()
++                .disable(StreamWriteFeature.USE_FAST_DOUBLE_WRITER)
+                 .build();
+-        _testNonNumericQuoting(f, false);
+-        // and (re)enable:
+-        f = f.rebuild()
+-                .enable(JsonWriteFeature.WRITE_NAN_AS_STRINGS)
++        _testNonNumericQuoting(f);
++    }
++
++    @Test
++    void nonNumericQuotingFastWriter() throws IOException
++    {
++        JsonFactory f = JsonFactory.builder()
++                .enable(StreamWriteFeature.USE_FAST_DOUBLE_WRITER)
+                 .build();
+-        _testNonNumericQuoting(f, true);
++        _testNonNumericQuoting(f);
+     }
+ 
+     /**
+@@ -297,6 +297,23 @@ private void _testFieldNameQuoting(JsonFactory f, boolean quoted)
+             assertEquals("{foo:1}", result);
+         }
+     }
++
++    private void _testNonNumericQuoting(JsonFactory f)
++    {
++        // by default, quoting should be enabled
++        assertTrue(f.isEnabled(JsonWriteFeature.WRITE_NAN_AS_STRINGS));
++        _testNonNumericQuoting(f, true);
++        // can disable it
++        f = f.rebuild().disable(JsonWriteFeature.WRITE_NAN_AS_STRINGS)
++                .build();
++        _testNonNumericQuoting(f, false);
++        // and (re)enable:
++        f = f.rebuild()
++                .enable(JsonWriteFeature.WRITE_NAN_AS_STRINGS)
++                .build();
++        _testNonNumericQuoting(f, true);
++    }
++
+     private void _testNonNumericQuoting(JsonFactory f, boolean quoted)
+     {
+         StringWriter sw = new StringWriter();

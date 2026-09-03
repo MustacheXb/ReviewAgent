@@ -1,0 +1,231 @@
+diff --git a/mockito-core/build.gradle.kts b/mockito-core/build.gradle.kts
+index eb1cba6158..0099f6fc34 100644
+--- a/mockito-core/build.gradle.kts
++++ b/mockito-core/build.gradle.kts
+@@ -53,6 +53,7 @@ dependencies {
+     testFixturesImplementation(libs.assertj)
+     testFixturesImplementation(libs.objenesis)
+     testFixturesCompileOnly(libs.junit4)
++    testFixturesCompileOnly(libs.junit.jupiter.api)
+ }
+ 
+ mockitoJavadoc {
+diff --git a/mockito-core/src/testFixtures/java/org/mockitoutil/TestBase5.java b/mockito-core/src/testFixtures/java/org/mockitoutil/TestBase5.java
+new file mode 100644
+index 0000000000..7419de642f
+--- /dev/null
++++ b/mockito-core/src/testFixtures/java/org/mockitoutil/TestBase5.java
+@@ -0,0 +1,83 @@
++/*
++ * Copyright (c) 2026 Mockito contributors
++ * This program is made available under the terms of the MIT License.
++ */
++package org.mockitoutil;
++
++import java.io.ByteArrayOutputStream;
++import java.io.IOException;
++import java.io.PrintStream;
++
++import org.assertj.core.api.Condition;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.BeforeEach;
++import org.mockito.MockitoAnnotations;
++import org.mockito.StateMaster;
++import org.mockito.internal.configuration.ConfigurationAccess;
++
++/**
++ * JUnit 5 (Jupiter) counterpart of {@link TestBase}.
++ */
++public class TestBase5 {
++
++    /**
++     * Condition to be used with AssertJ
++     */
++    public static Condition<Throwable> hasMessageContaining(final String substring) {
++        return new Condition<Throwable>() {
++            @Override
++            public boolean matches(Throwable e) {
++                return e.getMessage().contains(substring);
++            }
++        };
++    }
++
++    @AfterEach
++    public void cleanUpConfigInAnyCase() {
++        ConfigurationAccess.getConfig().overrideCleansStackTrace(false);
++        ConfigurationAccess.getConfig().overrideDefaultAnswer(null);
++        StateMaster state = new StateMaster();
++        // catch any invalid state left over after test case run
++        // this way we can catch early if some Mockito operations leave weird state afterwards
++        state.validate();
++        // reset the state, especially, reset any ongoing stubbing for correct error messages of
++        // tests that assert unhappy paths
++        state.reset();
++    }
++
++    @BeforeEach
++    public void init() {
++        MockitoAnnotations.openMocks(this);
++    }
++
++    public static void makeStackTracesClean() {
++        ConfigurationAccess.getConfig().overrideCleansStackTrace(true);
++    }
++
++    public void resetState() {
++        new StateMaster().reset();
++    }
++
++    protected String getStackTrace(Throwable e) {
++        ByteArrayOutputStream out = new ByteArrayOutputStream();
++        e.printStackTrace(new PrintStream(out));
++        try {
++            out.close();
++        } catch (IOException ignored) {
++        }
++        return out.toString();
++    }
++
++    /**
++     * Filters out unwanted line numbers from provided stack trace String.
++     * This is useful for writing assertions for exception messages that contain line numbers.
++     *
++     * For example it turns:
++     * blah blah (UnusedStubsExceptionMessageTest.java:27)
++     * into:
++     * blah blah (UnusedStubsExceptionMessageTest.java:0)
++     */
++    public static String filterLineNo(String stackTrace) {
++        return stackTrace.replaceAll("(\\((\\w+\\.java):(\\d)+\\))", "($2:0)");
++    }
++}
+diff --git a/mockito-integration-tests/extensions-tests/build.gradle.kts b/mockito-integration-tests/extensions-tests/build.gradle.kts
+index 6c88678016..0f7b8b0ee2 100644
+--- a/mockito-integration-tests/extensions-tests/build.gradle.kts
++++ b/mockito-integration-tests/extensions-tests/build.gradle.kts
+@@ -9,11 +9,9 @@ dependencies {
+     testImplementation(project(":mockito-core"))
+     testImplementation(project(":mockito-extensions:mockito-junit-jupiter"))
+     testImplementation(testFixtures(project(":mockito-core")))
+-    testImplementation(libs.junit4)
+     testImplementation(libs.assertj)
+     testImplementation(libs.junit.jupiter.api)
+     testRuntimeOnly(libs.junit.jupiter.engine)
+-    testRuntimeOnly(libs.junit.vintage.engine)
+     testRuntimeOnly(libs.junit.platform.launcher)
+ }
+ 
+@@ -22,9 +20,3 @@ tasks {
+         useJUnitPlatform()
+     }
+ }
+-
+-configurations.configureEach {
+-    //TODO SF enable when #154 is implemented
+-    //let's make those tests not use hamcrest
+-    //exclude group: 'org.hamcrest', module: 'hamcrest-core'
+-}
+diff --git a/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/donotmockenforcer/DoNotmockEnforcerTest.java b/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/donotmockenforcer/DoNotmockEnforcerTest.java
+index 5649610c87..bf1e319f30 100644
+--- a/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/donotmockenforcer/DoNotmockEnforcerTest.java
++++ b/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/donotmockenforcer/DoNotmockEnforcerTest.java
+@@ -8,7 +8,7 @@
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.mockStatic;
+ 
+-import org.junit.Test;
++import org.junit.jupiter.api.Test;
+ import org.mockito.DoNotMock;
+ import org.mockito.MockedStatic;
+ import org.mockito.exceptions.base.MockitoException;
+diff --git a/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/instantiator/InstantiatorProviderTest.java b/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/instantiator/InstantiatorProviderTest.java
+index 20e8f2fd72..0df8f29c59 100644
+--- a/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/instantiator/InstantiatorProviderTest.java
++++ b/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/instantiator/InstantiatorProviderTest.java
+@@ -4,12 +4,12 @@
+  */
+ package org.mockitousage.plugins.instantiator;
+ 
+-import org.junit.Test;
++import org.junit.jupiter.api.Test;
+ 
+ import java.util.List;
+ 
+-import static org.junit.Assert.assertEquals;
+-import static org.junit.Assert.fail;
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.fail;
+ import static org.mockito.Mockito.mock;
+ 
+ public class InstantiatorProviderTest {
+diff --git a/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/stacktrace/PluginStackTraceFilteringTest.java b/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/stacktrace/PluginStackTraceFilteringTest.java
+index fcd6b76eff..d628634151 100644
+--- a/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/stacktrace/PluginStackTraceFilteringTest.java
++++ b/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/stacktrace/PluginStackTraceFilteringTest.java
+@@ -4,30 +4,30 @@
+  */
+ package org.mockitousage.plugins.stacktrace;
+ 
+-import org.junit.After;
+-import org.junit.Before;
+-import org.junit.Test;
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.junit.jupiter.api.Assertions.fail;
++import static org.mockito.Mockito.verify;
++
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
+ import org.mockito.Mock;
+ import org.mockito.exceptions.verification.WantedButNotInvoked;
+ import org.mockitousage.IMethods;
+-import org.mockitoutil.TestBase;
+-
+-import static org.junit.Assert.fail;
+-import static org.assertj.core.api.Assertions.assertThat;
+-import static org.mockito.Mockito.verify;
++import org.mockitoutil.TestBase5;
+ 
+-public class PluginStackTraceFilteringTest extends TestBase {
++public class PluginStackTraceFilteringTest extends TestBase5 {
+ 
+     @Mock private IMethods mock;
+ 
+-    @After
++    @AfterEach
+     public void resetState() {
+         super.resetState();
+     }
+ 
+-    @Before
++    @BeforeEach
+     public void setup() {
+-        super.makeStackTracesClean();
++        makeStackTracesClean();
+     }
+ 
+     @Test
+diff --git a/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/switcher/PluginSwitchTest.java b/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/switcher/PluginSwitchTest.java
+index 7737b569e8..fd3bb6e19a 100644
+--- a/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/switcher/PluginSwitchTest.java
++++ b/mockito-integration-tests/extensions-tests/src/test/java/org/mockitousage/plugins/switcher/PluginSwitchTest.java
+@@ -4,7 +4,7 @@
+  */
+ package org.mockitousage.plugins.switcher;
+ 
+-import org.junit.Test;
++import org.junit.jupiter.api.Test;
+ import org.mockitousage.plugins.donotmockenforcer.MyDoNotMockEnforcer;
+ import org.mockitousage.plugins.instantiator.MyInstantiatorProvider2;
+ import org.mockitousage.plugins.logger.MyMockitoLogger;
+@@ -15,8 +15,8 @@
+ 
+ import static org.assertj.core.api.Assertions.assertThat;
+ import static java.util.Arrays.asList;
+-import static org.junit.Assert.assertEquals;
+-import static org.junit.Assert.fail;
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.fail;
+ import static org.mockito.Mockito.mock;
+ 
+ public class PluginSwitchTest {

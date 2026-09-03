@@ -1,0 +1,32 @@
+diff --git a/core/src/main/java/com/alibaba/fastjson2/writer/ObjectWriterBaseModule.java b/core/src/main/java/com/alibaba/fastjson2/writer/ObjectWriterBaseModule.java
+index 193c600c6b..5dfa298149 100644
+--- a/core/src/main/java/com/alibaba/fastjson2/writer/ObjectWriterBaseModule.java
++++ b/core/src/main/java/com/alibaba/fastjson2/writer/ObjectWriterBaseModule.java
+@@ -319,16 +319,18 @@ public void getFieldInfo(BeanInfo beanInfo, FieldInfo fieldInfo, Class objectCla
+                 Constructor kotlinConstructor = KotlinUtils.getKotlinConstructor(getConstructor(objectClass));
+                 if (kotlinConstructor != null) {
+                     String[] paramNames = KotlinUtils.getKoltinConstructorParameters(objectClass);
+-                    for (int i = 0; i < paramNames.length; i++) {
+-                        if (paramNames[i].equals(field.getName())) {
+-                            annotations = kotlinConstructor.getParameterAnnotations()[i];
+-                            break;
++                    if (paramNames != null) {
++                        for (int i = 0; i < paramNames.length; i++) {
++                            if (paramNames[i].equals(field.getName())) {
++                                annotations = kotlinConstructor.getParameterAnnotations()[i];
++                                break;
++                            }
+                         }
+-                    }
+-                    if (fieldInfo.ignore) {
+-                        for (Annotation annotation : annotations) {
+-                            if (annotation.annotationType() == JSONField.class) {
+-                                fieldInfo.ignore = !((JSONField) annotation).serialize();
++                        if (fieldInfo.ignore) {
++                            for (Annotation annotation : annotations) {
++                                if (annotation.annotationType() == JSONField.class) {
++                                    fieldInfo.ignore = !((JSONField) annotation).serialize();
++                                }
+                             }
+                         }
+                     }

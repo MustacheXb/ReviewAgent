@@ -1,0 +1,13 @@
+diff --git a/jib-cli/src/test/java/com/google/cloud/tools/jib/cli/JarTest.java b/jib-cli/src/test/java/com/google/cloud/tools/jib/cli/JarTest.java
+index 3ba2512490..528bdd6f9a 100644
+--- a/jib-cli/src/test/java/com/google/cloud/tools/jib/cli/JarTest.java
++++ b/jib-cli/src/test/java/com/google/cloud/tools/jib/cli/JarTest.java
+@@ -434,7 +434,7 @@ public void testParse_incompatibleCredentialOptions(String[] authArgs) {
+                     new Jar(), ArrayUtils.addAll(authArgs, "--target=ignored", "my-app.jar")));
+     assertThat(meae)
+         .hasMessageThat()
+-        .containsMatch("^Error: (--(from-|to-)?credential-helper|\\[--username)");
++        .containsMatch("^Error: (\\[)*(--(from-|to-)?credential-helper|\\[--(username|password))");
+   }
+ 
+   @Test

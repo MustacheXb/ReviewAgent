@@ -17,5 +17,11 @@ coverage/
 # 检视运行审计痕迹（runReview 默认落盘目录）
 runs/
 
+# clean MR 采集 API 快照缓存（断点续采用；清单与 diff 为交付物，正常入库）
+data/clean-mr/.cache/
+
+# 脚本编译临时目录（T02/T09 采集脚本的 tsc outDir）
+.tmp-gen/
+
 # /implement-spec 子代理 worktree 临时目录
 .claude/worktrees/

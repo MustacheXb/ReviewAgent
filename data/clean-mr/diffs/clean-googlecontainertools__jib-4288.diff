@@ -1,0 +1,18 @@
+diff --git a/jib-core/src/main/java/com/google/cloud/tools/jib/docker/CliDockerClient.java b/jib-core/src/main/java/com/google/cloud/tools/jib/docker/CliDockerClient.java
+index 1842a79de3..d3dcecd883 100644
+--- a/jib-core/src/main/java/com/google/cloud/tools/jib/docker/CliDockerClient.java
++++ b/jib-core/src/main/java/com/google/cloud/tools/jib/docker/CliDockerClient.java
+@@ -189,11 +189,12 @@ public boolean supported(Map<String, String> parameters) {
+   public DockerInfoDetails info() throws IOException, InterruptedException {
+     // Runs 'docker info'.
+     Process infoProcess = docker("info", "-f", "{{json .}}");
++    InputStream inputStream = infoProcess.getInputStream();
+     if (infoProcess.waitFor() != 0) {
+       throw new IOException(
+           "'docker info' command failed with error: " + getStderrOutput(infoProcess));
+     }
+-    return JsonTemplateMapper.readJson(infoProcess.getInputStream(), DockerInfoDetails.class);
++    return JsonTemplateMapper.readJson(inputStream, DockerInfoDetails.class);
+   }
+ 
+   @Override
