@@ -1,0 +1,46 @@
+diff --git a/src/test/java/tools/jackson/core/unittest/json/JsonFactoryTest.java b/src/test/java/tools/jackson/core/unittest/json/JsonFactoryTest.java
+index d385f3c573..09672f6c96 100644
+--- a/src/test/java/tools/jackson/core/unittest/json/JsonFactoryTest.java
++++ b/src/test/java/tools/jackson/core/unittest/json/JsonFactoryTest.java
+@@ -135,8 +135,8 @@ public void testCopy() throws Exception
+ 
+         JsonFactory jf2 = f.copy();
+         assertTrue(jf2.isEnabled(JsonFactory.Feature.INTERN_PROPERTY_NAMES));
+-        assertTrue(f.isEnabled(JsonReadFeature.ALLOW_JAVA_COMMENTS));
+-        assertTrue(f.isEnabled(JsonWriteFeature.ESCAPE_NON_ASCII));
++        assertTrue(jf2.isEnabled(JsonReadFeature.ALLOW_JAVA_COMMENTS));
++        assertTrue(jf2.isEnabled(JsonWriteFeature.ESCAPE_NON_ASCII));
+     }
+ 
+     @Test
+@@ -157,6 +157,21 @@ public void testRootValues() throws Exception
+         g.writeNumber(3);
+         g.close();
+         assertEquals("1/2/3", w.toString());
++
++        b = JsonFactory.builder()
++                .rootValueSeparator((String)null);
++        assertNull(b.rootValueSeparator());
++
++        f = b.build();
++        assertNull(f.getRootValueSeparator());
++
++        w = new StringWriter();
++        g = f.createGenerator(ObjectWriteContext.empty(), w);
++        g.writeNumber(1);
++        g.writeNumber(2);
++        g.writeNumber(3);
++        g.close();
++        assertEquals("123",w.toString());
+     }
+ 
+     @Test
+@@ -319,7 +334,7 @@ public void test_createParser_DataInput() throws Exception
+ 
+     @Test
+     public void testCanonicalizationEnabled() throws Exception {
+-        doCanonicalizationTest(false);
++        doCanonicalizationTest(true);
+     }
+ 
+     @Test
