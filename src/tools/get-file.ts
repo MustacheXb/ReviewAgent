@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readThroughLedger } from "./ledger.js";
 import { applyLineBudget } from "./result-budget.js";
 import type { ReviewToolDefinition } from "./registry.js";
 import { optionalPositiveIntArg, requireStringArg } from "./registry.js";
@@ -11,7 +12,10 @@ import type { RepoContext } from "../zoneb/repo-context.js";
  * - 读取经 RepoContext（CRLF→LF 归一化、确定性）；文件缺失/不可读为显式有界错误，
  *   错误信息不泄漏仓库绝对路径（请求字节可跨环境复现）；
  * - 行区间：start 超出文件尾为显式错误；end 超出文件尾截断到文件尾并留痕；
- * - 输出行带行号（证据引用需要行号）；超预算在行边界截断并留痕。
+ * - 输出行带行号（证据引用需要行号）；超预算在行边界截断并留痕；
+ * - T07 Context Ledger：整读登记为 file、区间读取登记为 range（规范化请求标识 =
+ *   路径 + 请求区间，未给的边界显式化为 start=1 / end=end）；重复的同一规范化
+ *   请求返回 "Already loaded: ctx#NNN" 引用；读取失败不登记（重试仍走真实读取）。
  */
 
 export const GET_FILE_TOOL: ReviewToolDefinition = {
@@ -48,12 +52,41 @@ export const GET_FILE_TOOL: ReviewToolDefinition = {
     }
 
     const posixPath = normalizeRepoPath("review.get_file", rawPath);
-    const repo = await context.repo();
-    const source = await readSourceSafe(repo, posixPath);
-    const lines = splitFileLines(source);
-    return renderFileSlice(posixPath, lines, { startLine, endLine }, context.resultBudgetChars);
+    return readThroughLedger(
+      context.ledger,
+      fileReadLedgerKind(startLine, endLine),
+      fileReadLedgerDescription(posixPath, startLine, endLine),
+      async () => {
+        const repo = await context.repo();
+        const source = await readSourceSafe(repo, posixPath);
+        const lines = splitFileLines(source);
+        return renderFileSlice(posixPath, lines, { startLine, endLine }, context.resultBudgetChars);
+      },
+    );
   },
 };
+
+/** Ledger 登记种类：指定任一边界即区间读取（range），否则整读（file） */
+function fileReadLedgerKind(
+  startLine: number | undefined,
+  endLine: number | undefined,
+): "range" | "file" {
+  return startLine !== undefined || endLine !== undefined ? "range" : "file";
+}
+
+/** 规范化请求标识：路径 + 请求区间（缺省边界显式化；键取请求而非实际返回内容） */
+function fileReadLedgerDescription(
+  posixPath: string,
+  startLine: number | undefined,
+  endLine: number | undefined,
+): string {
+  if (startLine === undefined && endLine === undefined) {
+    return `review.get_file ${posixPath}`;
+  }
+  const start = startLine ?? 1;
+  const end = endLine ?? "end";
+  return `review.get_file ${posixPath}:${start}-${end}`;
+}
 
 /** 仓库相对 POSIX 路径归一化与校验（拒绝绝对路径与 ".." 越界段） */
 export function normalizeRepoPath(toolName: string, rawPath: string): string {

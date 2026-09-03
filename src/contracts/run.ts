@@ -1,5 +1,6 @@
 import type { ConfigId } from "./config.js";
 import type { Finding } from "./finding.js";
+import type { LedgerEntry } from "./ledger.js";
 import type { LlmRequest, LlmUsage } from "./llm-client.js";
 import type { PrefetchLayerRecord } from "./prefetch.js";
 
@@ -48,6 +49,8 @@ export interface RunAudit {
   readonly prefetch?: readonly PrefetchLayerRecord[];
   /** config C 全仓注入的记账：预算守卫、截断、文件数（工单 #6 扩展字段） */
   readonly fullRepo?: FullRepoRecord;
+  /** config E Context Ledger 的登记快照（工单 #8 扩展字段；非 ledger 配置与显式工具覆盖缺省） */
+  readonly ledger?: readonly LedgerEntry[];
 }
 
 /** config C 全仓注入的留痕（超限截断必须显式，不静默丢弃） */

@@ -9,6 +9,7 @@ import {
   toToolSchema,
 } from "../src/tools/registry.js";
 import { buildReviewReadTools, buildReviewToolkit } from "../src/tools/toolkit.js";
+import { createInertContextLedger } from "../src/tools/ledger.js";
 import type { ToolCall } from "../src/contracts/llm-client.js";
 import { SAMPLE_MR_CASE } from "./fixtures/sample-mr-case.js";
 
@@ -175,6 +176,7 @@ describe("createToolExecutor with a scriptable context", () => {
       resultBudgetChars: 8_000,
       rules: [],
       history: [],
+      ledger: createInertContextLedger(),
     });
     const result = await executor.execute(toolCall("review.get_diff", "{}"));
     expect(result).toContain("MR unified diff:");
@@ -188,6 +190,7 @@ describe("createToolExecutor with a scriptable context", () => {
       resultBudgetChars: 8_000,
       rules: [{ id: "R001", title: "No null collections", text: "Return empty collections instead of null." }],
       history: [{ id: "H001", title: "Past off-by-one defect", text: "Loop bound defect fixed in 2023." }],
+      ledger: createInertContextLedger(),
     });
     const ruleResult = await executor.execute(toolCall("review.search_rule", '{"query":"null"}'));
     expect(ruleResult).toContain('Rule search "null" (case-insensitive substring): 1 of 1 rule(s) matched');
