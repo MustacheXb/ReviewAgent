@@ -57,11 +57,15 @@ describe("review tool registry (fixed count, order and schema)", () => {
     ]);
   });
 
-  it("returns the read-tool trio in canonical order (T05 subset of the fixed set)", () => {
+  it("returns the full 7-tool set in canonical order (T05 read trio + T06 search quartet)", () => {
     expect(buildReviewReadTools().map((tool) => tool.name)).toEqual([
       "review.get_diff",
       "review.get_symbol",
       "review.get_file",
+      "review.find_references",
+      "review.get_call_chain",
+      "review.search_rule",
+      "review.search_history",
     ]);
   });
 
@@ -115,7 +119,7 @@ describe("tool executor dispatch and input validation (bounded failures)", () =>
 
   it("fails with a bounded, explicit error for an unknown tool name", async () => {
     await expect(toolkit.executor.execute(toolCall("review.nope", "{}"))).rejects.toThrow(
-      /unknown tool "review.nope" \(available: review.get_diff, review.get_symbol, review.get_file\)/,
+      /unknown tool "review.nope" \(available: review.get_diff, review.get_symbol, review.get_file, review.find_references, review.get_call_chain, review.search_rule, review.search_history\)/,
     );
   });
 
@@ -141,13 +145,23 @@ describe("tool executor dispatch and input validation (bounded failures)", () =>
     await expect(
       toolkit.executor.execute(toolCall("review.get_file", '{"path":"a.java","startLine":5,"endLine":2}')),
     ).rejects.toThrow(/"startLine" \(5\) must not exceed "endLine" \(2\)/);
+    await expect(toolkit.executor.execute(toolCall("review.find_references", "{}"))).rejects.toThrow(
+      /review.find_references: argument "symbol" must be a non-empty string/,
+    );
+    await expect(toolkit.executor.execute(toolCall("review.get_call_chain", "{}"))).rejects.toThrow(
+      /review.get_call_chain: argument "symbol" must be a non-empty string/,
+    );
+    await expect(toolkit.executor.execute(toolCall("review.search_rule", "{}"))).rejects.toThrow(
+      /review.search_rule: argument "query" must be a non-empty string/,
+    );
+    await expect(toolkit.executor.execute(toolCall("review.search_history", "{}"))).rejects.toThrow(
+      /review.search_history: argument "query" must be a non-empty string/,
+    );
   });
 
   it("exposes exactly the registry schemas on the toolkit (mountable tools)", () => {
     expect(toolkit.tools.map((tool) => tool.name)).toEqual([
-      "review.get_diff",
-      "review.get_symbol",
-      "review.get_file",
+      ...REVIEW_TOOL_ORDER,
     ]);
     expect(JSON.stringify(toolkit.tools)).toBe(JSON.stringify(buildReviewReadTools().map(toToolSchema)));
   });
@@ -159,9 +173,29 @@ describe("createToolExecutor with a scriptable context", () => {
       diff: SAMPLE_MR_CASE.diff,
       repo: (): Promise<never> => Promise.reject(new Error("repository must not be loaded")),
       resultBudgetChars: 8_000,
+      rules: [],
+      history: [],
     });
     const result = await executor.execute(toolCall("review.get_diff", "{}"));
     expect(result).toContain("MR unified diff:");
     expect(result).toContain("-        for (int i = 0; i < count; i++) {");
+  });
+
+  it("answers search_rule and search_history from the corpus carried by the run context", async () => {
+    const executor = createToolExecutor(buildReviewReadTools(), {
+      diff: SAMPLE_MR_CASE.diff,
+      repo: (): Promise<never> => Promise.reject(new Error("repository must not be loaded")),
+      resultBudgetChars: 8_000,
+      rules: [{ id: "R001", title: "No null collections", text: "Return empty collections instead of null." }],
+      history: [{ id: "H001", title: "Past off-by-one defect", text: "Loop bound defect fixed in 2023." }],
+    });
+    const ruleResult = await executor.execute(toolCall("review.search_rule", '{"query":"null"}'));
+    expect(ruleResult).toContain('Rule search "null" (case-insensitive substring): 1 of 1 rule(s) matched');
+    expect(ruleResult).toContain("[R001] No null collections");
+    const historyResult = await executor.execute(toolCall("review.search_history", '{"query":"off-by-one"}'));
+    expect(historyResult).toContain(
+      'History search "off-by-one" (case-insensitive substring): 1 of 1 history record(s) matched',
+    );
+    expect(historyResult).toContain("[H001] Past off-by-one defect");
   });
 });

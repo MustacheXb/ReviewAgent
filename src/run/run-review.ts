@@ -1,4 +1,5 @@
 import type { ReviewConfig } from "../contracts/config.js";
+import type { KnowledgeCorpus } from "../contracts/knowledge.js";
 import type { LlmClient, ToolSchema } from "../contracts/llm-client.js";
 import type { MRCase } from "../contracts/mr-case.js";
 import type { PrefetchLayerRecord, PrefetchOptions } from "../contracts/prefetch.js";
@@ -37,6 +38,8 @@ export interface RunReviewOptions {
   readonly fullRepoBudgetChars?: number;
   /** 工单 #6：单次工具结果字符预算（缺省 DEFAULT_TOOL_RESULT_BUDGET_CHARS） */
   readonly toolResultBudgetChars?: number;
+  /** 工单 #7：C3 Knowledge 检索语料（search_rule / search_history 数据源；缺省空语料） */
+  readonly knowledge?: KnowledgeCorpus;
   /** T10 挂载点：模型名（默认 deepseek-v4-flash） */
   readonly model?: string;
   /** effort 档位（默认 default） */
@@ -145,6 +148,7 @@ function buildAutoMountedToolkit(
     ...(options.toolResultBudgetChars !== undefined
       ? { resultBudgetChars: options.toolResultBudgetChars }
       : {}),
+    ...(options.knowledge !== undefined ? { knowledge: options.knowledge } : {}),
     ...(sharedRepo !== undefined ? { repo: sharedRepo } : {}),
   });
 }

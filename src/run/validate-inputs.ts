@@ -106,8 +106,49 @@ function validateOptions(options: RunReviewOptions): void {
   if (options.toolResultBudgetChars !== undefined) {
     requirePositiveInt(options.toolResultBudgetChars, "options.toolResultBudgetChars");
   }
+  if (options.knowledge !== undefined) {
+    validateKnowledgeCorpus(options.knowledge);
+  }
   if (options.now !== undefined && typeof options.now !== "function") {
     throw new Error("options.now must be a function returning a Date");
+  }
+}
+
+/** C3 Knowledge 语料校验（工单 #7）：条目字段非空、语料内 id 唯一（fail fast） */
+function validateKnowledgeCorpus(corpus: unknown): void {
+  if (typeof corpus !== "object" || corpus === null) {
+    throw new Error("options.knowledge must be a KnowledgeCorpus object");
+  }
+  validateKnowledgeEntries("options.knowledge.rules", (corpus as KnowledgeCorpusLike).rules);
+  validateKnowledgeEntries("options.knowledge.history", (corpus as KnowledgeCorpusLike).history);
+}
+
+interface KnowledgeCorpusLike {
+  readonly rules?: unknown;
+  readonly history?: unknown;
+}
+
+function validateKnowledgeEntries(field: string, entries: unknown): void {
+  if (entries === undefined) {
+    return;
+  }
+  if (!Array.isArray(entries)) {
+    throw new Error(`${field} must be an array of KnowledgeEntry objects`);
+  }
+  const seenIds = new Set<string>();
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null) {
+      throw new Error(`${field} entries must be KnowledgeEntry objects`);
+    }
+    const candidate = entry as Record<string, unknown>;
+    requireNonEmptyString(candidate.id, `${field} entry.id`);
+    requireNonEmptyString(candidate.title, `${field} entry.title`);
+    requireNonEmptyString(candidate.text, `${field} entry.text`);
+    const id = candidate.id as string;
+    if (seenIds.has(id)) {
+      throw new Error(`${field} contains duplicate entry id "${id}"`);
+    }
+    seenIds.add(id);
   }
 }
 
