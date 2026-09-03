@@ -1,5 +1,6 @@
 import type { ReviewConfig } from "../contracts/config.js";
 import type { KnowledgeCorpus } from "../contracts/knowledge.js";
+import type { LedgerEntry } from "../contracts/ledger.js";
 import type { LlmClient, ToolSchema } from "../contracts/llm-client.js";
 import type { MRCase } from "../contracts/mr-case.js";
 import type { PrefetchLayerRecord, PrefetchOptions } from "../contracts/prefetch.js";
@@ -53,7 +54,9 @@ export interface RunReviewOptions {
  * 六阶段骨架循环 + Evidence Gate + usage 记账 + 审计落盘。
  * - config B（prefetch=true）注入 Zone B 与固定管线预取（零工具，纯消息注入）；
  * - config C（fullRepo=true）注入全仓上下文（预算守卫，超限截断留痕）；
- * - toolsEnabled 配置（C/D/E）在未显式覆盖时自动挂载注册表工具箱（schema 字节稳定，Zone A）。
+ * - toolsEnabled 配置（C/D/E）在未显式覆盖时自动挂载注册表工具箱（schema 字节稳定，Zone A）；
+ * - config E（ledger=true）为工具箱注入功能态 Context Ledger（重复读取返回
+ *   "Already loaded: ctx#NNN" 引用；run 私有，登记快照进审计留痕）。
  */
 export async function runReview(
   config: ReviewConfig,
@@ -88,6 +91,7 @@ export async function runReview(
     auditDir: options.auditDir ?? DEFAULT_AUDIT_DIR,
     ...(injection.prefetchRecords !== undefined ? { prefetchRecords: injection.prefetchRecords } : {}),
     ...(injection.fullRepoRecord !== undefined ? { fullRepoRecord: injection.fullRepoRecord } : {}),
+    ...(config.ledger && toolkit !== undefined ? { ledgerEntries: toolkit.ledger.snapshot() } : {}),
   });
 }
 
@@ -145,6 +149,7 @@ function buildAutoMountedToolkit(
   return buildReviewToolkit({
     repoPath: mrCase.repoPath,
     diff: mrCase.diff,
+    ...(config.ledger ? { ledger: true } : {}),
     ...(options.toolResultBudgetChars !== undefined
       ? { resultBudgetChars: options.toolResultBudgetChars }
       : {}),
@@ -182,6 +187,7 @@ async function finalizeRun(args: {
   readonly auditDir: string;
   readonly prefetchRecords?: readonly PrefetchLayerRecord[];
   readonly fullRepoRecord?: FullRepoRecord;
+  readonly ledgerEntries?: readonly LedgerEntry[];
 }): Promise<RunResult> {
   const { config, mrCase, outcome } = args;
   const audit: RunAudit = {
@@ -193,6 +199,7 @@ async function finalizeRun(args: {
     truncationReasons: outcome.truncationReasons,
     ...(args.prefetchRecords !== undefined ? { prefetch: args.prefetchRecords } : {}),
     ...(args.fullRepoRecord !== undefined ? { fullRepo: args.fullRepoRecord } : {}),
+    ...(args.ledgerEntries !== undefined ? { ledger: args.ledgerEntries } : {}),
   };
   const runId = buildRunId(args.startedAt, config.configId, mrCase.caseId);
   const auditContent = buildAuditFileContent({
@@ -210,6 +217,7 @@ async function finalizeRun(args: {
     audit,
     ...(args.prefetchRecords !== undefined ? { prefetch: args.prefetchRecords } : {}),
     ...(args.fullRepoRecord !== undefined ? { fullRepo: args.fullRepoRecord } : {}),
+    ...(args.ledgerEntries !== undefined ? { ledger: args.ledgerEntries } : {}),
   });
   const auditPath = await writeAuditFile(args.auditDir, auditContent);
   return {

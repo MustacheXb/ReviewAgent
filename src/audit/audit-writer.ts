@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ConfigId } from "../contracts/config.js";
 import type { Finding } from "../contracts/finding.js";
+import type { LedgerEntry } from "../contracts/ledger.js";
 import type { LlmRequest, LlmUsage } from "../contracts/llm-client.js";
 import type { PrefetchLayerRecord } from "../contracts/prefetch.js";
 import type { CandidateRejection, FullRepoRecord, PhaseRecord, RunAudit, ToolCallRecord } from "../contracts/run.js";
@@ -37,6 +38,8 @@ export interface AuditFileContent {
   readonly prefetch?: readonly PrefetchLayerRecord[];
   /** config C 全仓注入记账（非全仓配置缺省；工单 #6 扩展字段） */
   readonly fullRepo?: FullRepoRecord;
+  /** config E Context Ledger 登记快照（非 ledger 配置缺省；工单 #8 扩展字段） */
+  readonly ledger?: readonly LedgerEntry[];
 }
 
 /** runId：毫秒时间戳 + 配置 + 用例，文件名安全 */
@@ -61,6 +64,7 @@ export function buildAuditFileContent(args: {
   readonly audit: RunAudit;
   readonly prefetch?: readonly PrefetchLayerRecord[];
   readonly fullRepo?: FullRepoRecord;
+  readonly ledger?: readonly LedgerEntry[];
 }): AuditFileContent {
   return {
     runId: args.runId,
@@ -83,6 +87,7 @@ export function buildAuditFileContent(args: {
     toolCallLog: args.audit.toolCallLog,
     ...(args.prefetch !== undefined ? { prefetch: args.prefetch } : {}),
     ...(args.fullRepo !== undefined ? { fullRepo: args.fullRepo } : {}),
+    ...(args.ledger !== undefined ? { ledger: args.ledger } : {}),
   };
 }
 
