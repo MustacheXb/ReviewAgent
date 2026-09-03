@@ -46,7 +46,13 @@ export async function findReferenceSites(repo: RepoContext, name: string): Promi
     if (COMMENT_LINE_PATTERN.test(match.text)) {
       continue;
     }
-    const index = await repo.symbolIndex(match.file);
+    const index = await repo.symbolIndex(match.file).catch((error: unknown) => {
+      // 归一为仓库相对路径消息（不泄漏绝对路径，与 get_file 的错误纪律一致）
+      throw new Error(
+        `symbol index unavailable for file "${match.file}" (file cannot be read from the repository snapshot)`,
+        { cause: error },
+      );
+    });
     const path = index.parseError ? [] : symbolPathAt(index.symbols, match.line);
     const innermost = path.at(-1);
     sites.push({

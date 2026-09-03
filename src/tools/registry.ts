@@ -1,4 +1,5 @@
 import type { ToolCall, ToolSchema } from "../contracts/llm-client.js";
+import type { KnowledgeEntry } from "../contracts/knowledge.js";
 import type { ToolExecutor } from "../loop/tools.js";
 import type { RepoContext } from "../zoneb/repo-context.js";
 import { toCanonicalJson } from "./json-canonical.js";
@@ -12,9 +13,12 @@ import { toCanonicalJson } from "./json-canonical.js";
  *   同一 schema 结构永远产出同一字节串——C/D/E 挂载零漂移（Zone A 稳定前缀的一部分）；
  * - 工具 schema 属 Zone A（字节稳定），工具结果属 Zone C（append-only）。
  *
- * T06（检索工具四件套）扩展方式：新增 buildReviewSearchTools() 产出
- * ReviewToolDefinition[]，并在 toolkit.ts 的装配处并入——注册表按
- * REVIEW_TOOL_ORDER 自动排序与查重，schema 序列化无需任何额外处理。
+ * T06（检索工具四件套，工单 #7）扩展方式：search-tools.ts 导出
+ * buildReviewSearchTools() 产出 ReviewToolDefinition[]，在 toolkit.ts 的
+ * 装配处并入——注册表按 REVIEW_TOOL_ORDER 自动排序与查重，schema
+ * 序列化无需任何额外处理。
+ * T07（Ledger + config E）扩展方式：ToolRunContext 增补 ledger 字段
+ * （工具上下文按值注入，注册表与 schema 层零改动）。
  */
 
 /**
@@ -39,6 +43,10 @@ export interface ToolRunContext {
   readonly repo: () => Promise<RepoContext>;
   /** 单次工具结果字符预算 */
   readonly resultBudgetChars: number;
+  /** C3 Knowledge 规则语料（review.search_rule 数据源；POC1 静态注入，默认空） */
+  readonly rules: readonly KnowledgeEntry[];
+  /** C3 Knowledge 历史记语料（review.search_history 数据源；POC1 静态注入，默认空） */
+  readonly history: readonly KnowledgeEntry[];
 }
 
 /** 工具定义：参数 schema 以结构化对象声明，序列化由注册表统一保证字节稳定 */

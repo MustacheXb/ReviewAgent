@@ -11,7 +11,8 @@ import { toRepoRelativePath } from "./fs-utils.js";
  * - 退出码语义：0 = 有匹配，1 = 无匹配（不是错误），2 = 错误；
  * - 不使用 rg 的 --max-count 等静默截断开关——截断一律由上层预算层显式留痕。
  *
- * 本模块同时是 T05（review.find_references / search_rule / search_history）的检索底座。
+ * 本模块同时是 T06（review.find_references / get_call_chain）的检索底座；
+ * search_rule / search_history 检索的是内存静态语料，不走本模块。
  */
 
 export interface RgMatch {
@@ -158,7 +159,8 @@ function runRg(args: readonly string[], timeoutMs: number): Promise<string> {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
-        reject(new Error(`failed to spawn ripgrep at "${rgPath}": ${error.message}`, { cause: error }));
+        // 不回显 rgPath（宿主机内部绝对路径；错误字节需跨环境可复现）
+        reject(new Error(`failed to spawn ripgrep binary: ${error.message}`, { cause: error }));
       }
     });
     child.on("close", (code) => {
