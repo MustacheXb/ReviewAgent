@@ -107,7 +107,7 @@ describe("runReview — config D end-to-end (fake LLM, minimal context + stable 
       expect(request.messages[0]?.content).toBe(firstSystem);
       expect(JSON.stringify(request.tools)).toBe(firstTools);
     }
-    expect(result.audit.requests[0]?.tools.length).toBe(3);
+    expect(result.audit.requests[0]?.tools.length).toBe(7);
   });
 
   it("mounts tool schemas byte-identical to config C (registry as the single source)", async () => {
