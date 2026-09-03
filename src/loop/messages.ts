@@ -68,9 +68,11 @@ export interface ContextMessages {
   readonly zoneB?: readonly LlmMessage[];
   /** 预取层：按固定管线顺序（Symbol → Reference → Call Chain）追加在初始 user 消息之后 */
   readonly prefetch?: readonly LlmMessage[];
+  /** config C 全仓注入：追加在初始 user 消息（及预取层，若有）之后（工单 #6 扩展字段） */
+  readonly fullRepo?: readonly LlmMessage[];
 }
 
-/** 初始消息序列：[system(Zone A), Zone B?, 初始 user(Zone C 起点 / Diff 层), 预取层...] */
+/** 初始消息序列：[system(Zone A), Zone B?, 初始 user(Zone C 起点 / Diff 层), 预取层?, 全仓注入?] */
 export function buildInitialMessages(
   mrCase: MRCase,
   contextMessages: ContextMessages = {},
@@ -80,6 +82,7 @@ export function buildInitialMessages(
     ...(contextMessages.zoneB ?? []),
     buildInitialUserMessage(mrCase),
     ...(contextMessages.prefetch ?? []),
+    ...(contextMessages.fullRepo ?? []),
   ];
 }
 

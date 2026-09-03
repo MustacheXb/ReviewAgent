@@ -46,6 +46,20 @@ export interface RunAudit {
   readonly truncationReasons: readonly string[];
   /** config B（及未来复用预取的配置）的注入层记账：预算、截断、条目数（工单 #4 扩展字段） */
   readonly prefetch?: readonly PrefetchLayerRecord[];
+  /** config C 全仓注入的记账：预算守卫、截断、文件数（工单 #6 扩展字段） */
+  readonly fullRepo?: FullRepoRecord;
+}
+
+/** config C 全仓注入的留痕（超限截断必须显式，不静默丢弃） */
+export interface FullRepoRecord {
+  readonly budgetChars: number;
+  /** 最终注入内容的字符数（含截断提示） */
+  readonly contentChars: number;
+  readonly truncated: boolean;
+  /** 快照内 Java 文件总数 */
+  readonly totalFiles: number;
+  /** 实际注入文件数（含被行级截断的尾文件） */
+  readonly shownFiles: number;
 }
 
 export interface ToolCallRecord {
