@@ -14,5 +14,8 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# 检视运行审计痕迹（runReview 默认落盘目录）
+runs/
+
 # /implement-spec 子代理 worktree 临时目录
 .claude/worktrees/
