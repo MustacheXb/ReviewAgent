@@ -1,5 +1,6 @@
 import type { ToolCall, ToolSchema } from "../contracts/llm-client.js";
 import type { KnowledgeEntry } from "../contracts/knowledge.js";
+import type { ContextLedger } from "../contracts/ledger.js";
 import type { ToolExecutor } from "../loop/tools.js";
 import type { RepoContext } from "../zoneb/repo-context.js";
 import { toCanonicalJson } from "./json-canonical.js";
@@ -18,7 +19,9 @@ import { toCanonicalJson } from "./json-canonical.js";
  * 装配处并入——注册表按 REVIEW_TOOL_ORDER 自动排序与查重，schema
  * 序列化无需任何额外处理。
  * T07（Ledger + config E）扩展方式：ToolRunContext 增补 ledger 字段
- * （工具上下文按值注入，注册表与 schema 层零改动）。
+ * （工具上下文按值注入，注册表与 schema 层零改动）。各工具在 execute
+ * 入口处接入：命中返回 "Already loaded: ctx#NNN" 引用，未命中读取成功
+ * 后登记——去重只发生在工具结果层（Zone C），schema 层（Zone A）零改动。
  */
 
 /**
@@ -47,6 +50,8 @@ export interface ToolRunContext {
   readonly rules: readonly KnowledgeEntry[];
   /** C3 Knowledge 历史记语料（review.search_history 数据源；POC1 静态注入，默认空） */
   readonly history: readonly KnowledgeEntry[];
+  /** T07 Context Ledger（run 私有；config E 为功能态，其余配置惰性态——缺省注入见 toolkit.ts） */
+  readonly ledger: ContextLedger;
 }
 
 /** 工具定义：参数 schema 以结构化对象声明，序列化由注册表统一保证字节稳定 */

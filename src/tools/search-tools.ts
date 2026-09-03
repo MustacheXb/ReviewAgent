@@ -6,6 +6,7 @@ import { buildCallChainBlocks } from "../zoneb/call-chain.js";
 import type { ReferenceSite } from "../zoneb/reference-sites.js";
 import { enclosingLabel, findReferenceSites } from "../zoneb/reference-sites.js";
 import type { JavaSymbol } from "../zoneb/symbols.js";
+import { readThroughLedger } from "./ledger.js";
 import { applyLineBudget } from "./result-budget.js";
 import type { ReviewToolDefinition } from "./registry.js";
 import { boundedEcho, requireStringArg } from "./registry.js";
@@ -22,6 +23,9 @@ import { boundedEcho, requireStringArg } from "./registry.js";
  *
  * 共同纪律：入参显式校验；输出确定性（同输入永远同字节）；超预算在行边界
  * 截断并留痕；错误有界且不泄漏仓库绝对路径。
+ * T07 Context Ledger：find_references / get_call_chain 登记为 symbol
+ * （标识 = 工具名 + 符号名），search_rule / search_history 登记为 evidence
+ * （标识 = 工具名 + query）；重复的同一规范化请求返回 "Already loaded: ctx#NNN" 引用。
  */
 
 /** 检索四件套的固定定义（顺序由注册表 REVIEW_TOOL_ORDER 保证） */
@@ -46,24 +50,16 @@ export const FIND_REFERENCES_TOOL: ReviewToolDefinition = {
   },
   execute: async (args, context): Promise<string> => {
     const name = requireStringArg("review.find_references", args, "symbol");
-    const repo = await context.repo();
-    const sites = await searchReferenceSites("review.find_references", repo, name);
-    const filesWithMatches = new Set(sites.map((site) => site.file)).size;
-    const header = `References to "${name}" (name-level whole-word match, no type resolution): ${sites.length} match(es) across ${filesWithMatches} file(s)`;
-    if (sites.length === 0) {
-      return header;
-    }
-    const lines = sites.flatMap((site) => [
-      `  ${site.file}:${site.line} [${site.isDeclaration ? "declaration" : "usage"}] ${enclosingLabel(site.enclosing)}`,
-      `      ${site.text.trim()}`,
-    ]);
-    const budget = applyLineBudget(
-      [header, ...lines],
-      context.resultBudgetChars,
-      (shown, total) =>
-        `Tool result truncated: showing ${shown} of ${total} result lines (tool result budget ${context.resultBudgetChars} chars exceeded).`,
+    return readThroughLedger(
+      context.ledger,
+      "symbol",
+      `review.find_references "${name}"`,
+      async () => {
+        const repo = await context.repo();
+        const sites = await searchReferenceSites("review.find_references", repo, name);
+        return renderReferenceSites(sites, name, context.resultBudgetChars);
+      },
     );
-    return budget.lines.join("\n");
   },
 };
 
@@ -84,22 +80,15 @@ export const GET_CALL_CHAIN_TOOL: ReviewToolDefinition = {
   },
   execute: async (args, context): Promise<string> => {
     const name = requireStringArg("review.get_call_chain", args, "symbol");
-    const repo = await context.repo();
-    const refs = await findMethodRefs(repo, name);
-    const header = `Call chain for "${name}" (name-level, up to 2 hops, no type resolution): ${refs.length} method declaration(s) matched`;
-    if (refs.length === 0) {
-      return `Call chain for "${name}" (name-level, up to 2 hops, no type resolution): no method or constructor named "${name}" found across ${repo.javaFiles.length} Java file(s)`;
-    }
-    const blocks = await buildCallChainBlocks(repo, refs).catch((error: unknown) => {
-      throw new Error(`review.get_call_chain: ${errorMessage(error)}`, { cause: error });
-    });
-    const budget = applyLineBudget(
-      [header, "", ...blocks.flatMap((block) => [...block, ""])],
-      context.resultBudgetChars,
-      (shown, total) =>
-        `Tool result truncated: showing ${shown} of ${total} result lines (tool result budget ${context.resultBudgetChars} chars exceeded).`,
+    return readThroughLedger(
+      context.ledger,
+      "symbol",
+      `review.get_call_chain "${name}"`,
+      async () => {
+        const repo = await context.repo();
+        return renderCallChain(repo, name, context.resultBudgetChars);
+      },
     );
-    return budget.lines.join("\n").trimEnd();
   },
 };
 
@@ -120,14 +109,20 @@ export const SEARCH_RULE_TOOL: ReviewToolDefinition = {
   },
   execute: async (args, context): Promise<string> => {
     const query = requireStringArg("review.search_rule", args, "query");
-    return renderKnowledgeSearch({
-      label: "Rule",
-      corpusLabel: "rule",
-      unit: "rule(s)",
-      entries: context.rules,
-      query,
-      budgetChars: context.resultBudgetChars,
-    });
+    return readThroughLedger(
+      context.ledger,
+      "evidence",
+      `review.search_rule "${query}"`,
+      async () =>
+        renderKnowledgeSearch({
+          label: "Rule",
+          corpusLabel: "rule",
+          unit: "rule(s)",
+          entries: context.rules,
+          query,
+          budgetChars: context.resultBudgetChars,
+        }),
+    );
   },
 };
 
@@ -148,16 +143,69 @@ export const SEARCH_HISTORY_TOOL: ReviewToolDefinition = {
   },
   execute: async (args, context): Promise<string> => {
     const query = requireStringArg("review.search_history", args, "query");
-    return renderKnowledgeSearch({
-      label: "History",
-      corpusLabel: "history",
-      unit: "history record(s)",
-      entries: context.history,
-      query,
-      budgetChars: context.resultBudgetChars,
-    });
+    return readThroughLedger(
+      context.ledger,
+      "evidence",
+      `review.search_history "${query}"`,
+      async () =>
+        renderKnowledgeSearch({
+          label: "History",
+          corpusLabel: "history",
+          unit: "history record(s)",
+          entries: context.history,
+          query,
+          budgetChars: context.resultBudgetChars,
+        }),
+    );
   },
 };
+
+/** find_references 的结果渲染（真实读取路径，与 T06 输出字节一致） */
+function renderReferenceSites(
+  sites: readonly ReferenceSite[],
+  name: string,
+  budgetChars: number,
+): string {
+  const filesWithMatches = new Set(sites.map((site) => site.file)).size;
+  const header = `References to "${name}" (name-level whole-word match, no type resolution): ${sites.length} match(es) across ${filesWithMatches} file(s)`;
+  if (sites.length === 0) {
+    return header;
+  }
+  const lines = sites.flatMap((site) => [
+    `  ${site.file}:${site.line} [${site.isDeclaration ? "declaration" : "usage"}] ${enclosingLabel(site.enclosing)}`,
+    `      ${site.text.trim()}`,
+  ]);
+  const budget = applyLineBudget(
+    [header, ...lines],
+    budgetChars,
+    (shown, total) =>
+      `Tool result truncated: showing ${shown} of ${total} result lines (tool result budget ${budgetChars} chars exceeded).`,
+  );
+  return budget.lines.join("\n");
+}
+
+/** get_call_chain 的结果渲染（真实读取路径，与 T06 输出字节一致） */
+async function renderCallChain(
+  repo: RepoContext,
+  name: string,
+  budgetChars: number,
+): Promise<string> {
+  const refs = await findMethodRefs(repo, name);
+  const header = `Call chain for "${name}" (name-level, up to 2 hops, no type resolution): ${refs.length} method declaration(s) matched`;
+  if (refs.length === 0) {
+    return `Call chain for "${name}" (name-level, up to 2 hops, no type resolution): no method or constructor named "${name}" found across ${repo.javaFiles.length} Java file(s)`;
+  }
+  const blocks = await buildCallChainBlocks(repo, refs).catch((error: unknown) => {
+    throw new Error(`review.get_call_chain: ${errorMessage(error)}`, { cause: error });
+  });
+  const budget = applyLineBudget(
+    [header, "", ...blocks.flatMap((block) => [...block, ""])],
+    budgetChars,
+    (shown, total) =>
+      `Tool result truncated: showing ${shown} of ${total} result lines (tool result budget ${budgetChars} chars exceeded).`,
+  );
+  return budget.lines.join("\n").trimEnd();
+}
 
 /** findReferenceSites 的工具边界包装：错误带工具名前缀（有界失败，可归因到工具） */
 async function searchReferenceSites(
