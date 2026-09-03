@@ -141,6 +141,49 @@ describe("buildMsbSamplingManifest（确定性分层抽样）", () => {
       expect(inconsistent.error.message).toContain("指标与结论不一致");
     }
   });
+
+  it("池条目自检（eligible 侧）：标记 eligible 但指标超界 → 显式报错", () => {
+    const overBoundary = buildMsbSamplingManifest([
+      poolEntry("a__r-1", "a", "r", { files: 11, changedLines: 40 }),
+    ]);
+    expect(overBoundary.ok).toBe(false);
+    if (!overBoundary.ok) {
+      expect(overBoundary.error.message).toContain("指标超界");
+    }
+  });
+
+  it("自定义 boundary 参与一致性检查：边界变化后池结论须同步重生成", () => {
+    // 更紧的边界：原合格条目（2 文件 / 40 行）超出新 maxDiffLines=20 → 报错
+    const tighter = buildMsbSamplingManifest(
+      [poolEntry("a__r-1", "a", "r", { files: 2, changedLines: 40 })],
+      { boundary: { maxFiles: 10, maxDiffLines: 20 } },
+    );
+    expect(tighter.ok).toBe(false);
+    if (!tighter.ok) {
+      expect(tighter.error.message).toContain("指标超界");
+    }
+
+    // 更松的边界：原拒绝条目（files=48 超 10，在新 maxFiles=50 界内）→ 报错（池按旧边界生成）
+    const looser = buildMsbSamplingManifest(
+      [poolEntry("a__r-1", "a", "r", { status: "rejected", rejectReason: "too-many-files", files: 48, changedLines: 300 })],
+      { boundary: { maxFiles: 50, maxDiffLines: 2000 } },
+    );
+    expect(looser.ok).toBe(false);
+    if (!looser.ok) {
+      expect(looser.error.message).toContain("指标在边界内但 status 为 rejected");
+    }
+
+    // 池结论与新边界一致（40 行在新界 20 之外 → rejected 留痕）→ 构建成功，boundary 入清单
+    const consistent = buildMsbSamplingManifest(
+      [poolEntry("a__r-1", "a", "r", { status: "rejected", rejectReason: "diff-too-large", files: 2, changedLines: 40 })],
+      { boundary: { maxFiles: 10, maxDiffLines: 20 } },
+    );
+    expect(consistent.ok).toBe(true);
+    if (consistent.ok) {
+      expect(consistent.value.boundary).toEqual({ maxFiles: 10, maxDiffLines: 20 });
+      expect(consistent.value.rejectedByReason).toEqual({ "diff-too-large": 1 });
+    }
+  });
 });
 
 describe("已提交的抽样清单（golden + 实测核验结论）", () => {

@@ -63,14 +63,14 @@ export function buildMsbSamplingManifest(
   pool: readonly MsbPoolEntry[],
   options: MsbManifestOptions = {},
 ): Result<MsbSamplingManifest> {
-  const poolError = validatePool(pool);
-  if (poolError !== undefined) {
-    return err(poolError);
-  }
   const seed = options.seed ?? MSB_JAVA_DEFAULT_SEED;
   const targetTotal = options.targetTotal ?? MSB_JAVA_DEFAULT_TARGET;
   const minPerStratum = options.minPerStratum ?? MSB_JAVA_DEFAULT_MIN_PER_STRATUM;
   const boundary = options.boundary ?? DEFAULT_MR_BOUNDARY;
+  const poolError = validatePool(pool, boundary);
+  if (poolError !== undefined) {
+    return err(poolError);
+  }
 
   const sortedPool = [...pool].sort((a, b) => a.instanceId.localeCompare(b.instanceId));
   const eligible = sortedPool.filter((entry) => entry.status === "eligible");
@@ -111,8 +111,8 @@ export function buildMsbSamplingManifest(
   });
 }
 
-/** 池条目自检：标识合法、无重复、状态与指标一致、指标与边界结论一致 */
-function validatePool(pool: readonly MsbPoolEntry[]): DatasetError | undefined {
+/** 池条目自检：标识合法、无重复、状态与指标一致、指标与边界结论一致（按解析后的 boundary） */
+function validatePool(pool: readonly MsbPoolEntry[], boundary: MrBoundary): DatasetError | undefined {
   const seen = new Set<string>();
   for (const entry of pool) {
     if (typeof entry.instanceId !== "string" || entry.instanceId.trim() === "") {
@@ -134,16 +134,21 @@ function validatePool(pool: readonly MsbPoolEntry[]): DatasetError | undefined {
     if (entry.status === "rejected" && (entry.rejectReason === null || entry.rejectReason.trim() === "")) {
       return new DatasetError("INVALID_POOL_ENTRY", `${entry.instanceId} 标记 rejected 但缺 rejectReason`);
     }
-    if (
-      entry.files !== null &&
-      entry.changedLines !== null &&
-      entry.files <= DEFAULT_MR_BOUNDARY.maxFiles &&
-      entry.changedLines <= DEFAULT_MR_BOUNDARY.maxDiffLines &&
-      entry.status !== "eligible"
-    ) {
+    if (entry.files === null || entry.changedLines === null) {
+      continue;
+    }
+    const withinBoundary =
+      entry.files <= boundary.maxFiles && entry.changedLines <= boundary.maxDiffLines;
+    if (withinBoundary && entry.status !== "eligible") {
       return new DatasetError(
         "INVALID_POOL_ENTRY",
         `${entry.instanceId} 指标在边界内但 status 为 ${entry.status}（指标与结论不一致）`,
+      );
+    }
+    if (!withinBoundary && entry.status === "eligible") {
+      return new DatasetError(
+        "INVALID_POOL_ENTRY",
+        `${entry.instanceId} 标记 eligible 但指标超界（files=${entry.files}, changedLines=${entry.changedLines}）`,
       );
     }
   }
