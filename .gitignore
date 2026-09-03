@@ -25,3 +25,6 @@ data/clean-mr/.cache/
 
 # /implement-spec 子代理 worktree 临时目录
 .claude/worktrees/
+
+# 数据集清单生成脚本下载缓存（scripts/generate-*-manifest.ts）
+.cache/
