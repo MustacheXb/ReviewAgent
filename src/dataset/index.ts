@@ -8,6 +8,8 @@
  * - 真值构造：truth.ts + defect-nature.ts（词表）
  * - MR 边界过滤：mr-boundary-filter.ts
  * - Defects4J 适配层与分层抽样：defects4j/
+ * - clean MR 阴性对照（T09）：clean-mr/（GitHub PR 模型 / 挖掘规则 / MRCase 构造 /
+ *   确定性选取 / 清单；采集脚本见 scripts/collect-clean-mrs.ts，测试零网络）
  */
 export * from "./defect-record.js";
 export * from "./defect-nature.js";
@@ -24,3 +26,9 @@ export * from "./diff/types.js";
 export * from "./defects4j/adapter.js";
 export * from "./defects4j/projects.js";
 export * from "./defects4j/sampling.js";
+export * from "./clean-mr/repos.js";
+export * from "./clean-mr/pr-records.js";
+export * from "./clean-mr/mining-rules.js";
+export * from "./clean-mr/builder.js";
+export * from "./clean-mr/selection.js";
+export * from "./clean-mr/manifest.js";
