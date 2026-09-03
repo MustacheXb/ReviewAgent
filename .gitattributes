@@ -1,0 +1,3 @@
+# 数据集交付物按字节入库：manifest 的 diffSha256 完整性校验依赖原始字节，
+# 必须禁用 core.autocrlf 的换行转换（否则 Windows 检出 LF→CRLF 导致 sha256 校验失败）
+data/clean-mr/diffs/** -text
