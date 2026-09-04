@@ -13,8 +13,12 @@ import type {
  * temperature/top_p/penalties/max_tokens 一律不传（thinking 模式下无效或无必要，保持字节最小）。
  */
 
-/** 客户端支持的 model id 白名单（ADR-0002 主力模型；deepseek-chat / deepseek-reasoner 已于 2026-07-24 退役，禁止出现） */
-export const SUPPORTED_MODELS: readonly string[] = ["deepseek-v4-flash"];
+/**
+ * 客户端支持的 model id 白名单（ADR-0002 主力 deepseek-v4-flash；deepseek-v4-pro 仅用于
+ * 高险子集升级消融，spec #1 user story 15，实验计划层强制搭配 highRiskOnly）。
+ * deepseek-chat / deepseek-reasoner 已于 2026-07-24 退役，禁止出现。
+ */
+export const SUPPORTED_MODELS: readonly string[] = ["deepseek-v4-flash", "deepseek-v4-pro"];
 
 /** harness 侧唯一合法的 effort 标签（runReview 默认档） */
 export const LOCKED_EFFORT_LABEL = "default";
@@ -45,7 +49,7 @@ export function buildChatCompletionsBody(request: LlmRequest): WireChatCompletio
 function validateModel(model: unknown): void {
   if (typeof model !== "string" || !SUPPORTED_MODELS.includes(model)) {
     throw new DeepSeekClientError(
-      `unsupported model ${JSON.stringify(model)}: the DeepSeek client is pinned to ${SUPPORTED_MODELS.map((m) => JSON.stringify(m)).join(", ")} (ADR-0002; deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and must not be used)`,
+      `unsupported model ${JSON.stringify(model)}: the DeepSeek client supports ${SUPPORTED_MODELS.map((m) => JSON.stringify(m)).join(", ")} (ADR-0002; deepseek-v4-pro is restricted to the high-risk-subset ablation at the experiment plan layer; deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and must not be used)`,
     );
   }
 }

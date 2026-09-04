@@ -19,7 +19,8 @@ import type { WireChatCompletionsRequest } from "./wire-types.js";
  * POC1 需要精确控制请求字节，自拼 JSON 是唯一干净做法）。
  *
  * 锁定纪律（ADR-0002）：
- * - model 白名单 = deepseek-v4-flash（request-mapper 校验，退役 id 直接拒绝）；
+ * - model 白名单 = deepseek-v4-flash（主力）+ deepseek-v4-pro（仅高险子集消融，
+ *   spec #1 user story 15；request-mapper 校验，退役 id 直接拒绝）；
  * - effort 单档锁定：harness effort 标签仅接受 "default"，线上恒为 thinking {type:"enabled"} + reasoning_effort "high"；
  * - API key 仅经 DEEPSEEK_API_KEY 环境变量或显式参数注入，绝不硬编码、绝不出现在错误信息中。
  */

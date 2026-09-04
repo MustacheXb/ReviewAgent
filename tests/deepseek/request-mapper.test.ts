@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { LlmRequest } from "../../src/contracts/llm-client.js";
+import { DeepSeekClient } from "../../src/deepseek/deepseek-client.js";
 import {
   buildChatCompletionsBody,
   LOCKED_EFFORT_LABEL,
 } from "../../src/deepseek/request-mapper.js";
+import { validateExperimentPlan } from "../../src/experiment/plan.js";
+import type { ExperimentPlan } from "../../src/experiment/plan.js";
 
 function baseRequest(overrides: Partial<LlmRequest> = {}): LlmRequest {
   return {
@@ -187,5 +190,52 @@ describe("buildChatCompletionsBody — tools serialization", () => {
     expect(() => buildChatCompletionsBody(baseRequest({ tools: [{ ...tool, parametersJson: "{oops" }] }))).toThrowError(
       /parametersJson must serialize to a JSON object/,
     );
+  });
+});
+
+describe("v4-pro 高险子集消融（spec #1 user story 15）", () => {
+  /** 与 tests/experiment/helpers.ts 同构的最小合法 v4-pro 计划（高险子集消融形态） */
+  function v4ProAblationPlan(): ExperimentPlan {
+    return {
+      experimentId: "v4-pro-ablation",
+      sources: ["defects4j", "vul4j", "msb-java", "clean-mr"],
+      configs: ["A"],
+      reps: 1,
+      verifier: "off",
+      model: "deepseek-v4-pro",
+      highRiskOnly: true,
+      perSourceLimit: 5,
+      caseFilter: [],
+      judge: false,
+      humanReviewRate: 0.1,
+      humanReviewSeed: "v4-pro-ablation-seed",
+    };
+  }
+
+  it("v4-pro 消融计划合法，且其 model 能经真实 mapper 构造出锁定字节", () => {
+    const plan = v4ProAblationPlan();
+    expect(() => validateExperimentPlan(plan)).not.toThrow();
+    const body = buildChatCompletionsBody(baseRequest({ model: plan.model }));
+    expect(body.model).toBe("deepseek-v4-pro");
+    // 与主力档共用同一锁定字节纪律（ADR-0002 单 effort 档）
+    expect(body.thinking).toEqual({ type: "enabled" });
+    expect(body.reasoning_effort).toBe("high");
+    expect(body.stream).toBe(false);
+  });
+
+  it("真实客户端构造路径接受 v4-pro 计划：请求可构造，不因 unsupported model 中断（零网络）", async () => {
+    const plan = v4ProAblationPlan();
+    // 真实 DeepSeekClient（非 Fake）：complete() 先构造/校验请求体再发网络；
+    // fetch 注入哨兵错误——若白名单拒绝 v4-pro 会先抛 unsupported model，而非哨兵。
+    const client = new DeepSeekClient({
+      apiKey: "test-key-not-real",
+      maxRetries: 0,
+      fetchFn: async () => {
+        throw new Error("network sentinel");
+      },
+    });
+    await expect(
+      client.complete(baseRequest({ model: plan.model })),
+    ).rejects.toThrowError(/network sentinel/);
   });
 });
