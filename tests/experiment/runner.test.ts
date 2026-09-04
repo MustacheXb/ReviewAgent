@@ -63,7 +63,7 @@ describe("runExperiment（矩阵执行）", () => {
     });
     expect(record?.baseline.findings).toHaveLength(1);
     expect(record?.baseline.usage).toEqual(HAPPY_PATH_TOTAL_USAGE);
-    expect(record?.baseline.audit.requests).toBeUndefined();
+    expect(record?.baseline.audit).not.toHaveProperty("requests");
     expect(record?.effective).toBeNull();
     expect(record?.verifierPass).toBeNull();
     // plan.json / cases.json 留痕（外部可复现实验配置与数据集选择）

@@ -12,6 +12,7 @@ import {
   toRunSnapshot,
 } from "../../src/experiment/run-store.js";
 import type { RunRecord } from "../../src/experiment/run-store.js";
+import type { RunUnit } from "../../src/experiment/plan.js";
 import { experimentMainCase } from "./helpers.js";
 
 /**
@@ -78,7 +79,7 @@ function record(overrides: Partial<RunRecord> = {}): RunRecord {
 describe("toRunSnapshot / toAuditLight（轻量投影）", () => {
   it("去除 requests（重放字节以 auditPath 为准），保留其余审计面", () => {
     const snapshot = toRunSnapshot(runResult());
-    expect(snapshot.audit.requests).toBeUndefined();
+    expect(snapshot.audit).not.toHaveProperty("requests");
     expect(snapshot.audit.toolCallLog).toEqual(AUDIT.toolCallLog);
     expect(snapshot.audit.phaseLog).toEqual(AUDIT.phaseLog);
     expect(snapshot.findings).toEqual([]);
@@ -128,7 +129,8 @@ describe("recordToRunResult（重建形状）", () => {
   });
 
   it("auditPath 仅在非空时回填（可选字段纪律）", () => {
-    const withoutPath = toRunSnapshot(runResult({ auditPath: undefined }));
+    const { auditPath: _omitted, ...withoutAuditPath } = runResult();
+    const withoutPath = toRunSnapshot(withoutAuditPath);
     expect(recordToRunResult(record({ baseline: withoutPath })).auditPath).toBeUndefined();
   });
 });
@@ -159,7 +161,7 @@ describe("RunStore（断点续跑读写）", () => {
       rep: 1,
     });
     expect(missing).toBeNull();
-    const unit = { source: "defects4j", caseId: "bad", configId: "A", rep: 1 };
+    const unit: RunUnit = { source: "defects4j", caseId: "bad", configId: "A", rep: 1 };
     await mkdir(path.dirname(store.pathOf(unit)), { recursive: true });
     await writeFile(store.pathOf(unit), "{ not json", "utf8");
     expect(await store.read(unit)).toBeNull();
@@ -180,7 +182,7 @@ describe("RunStore（断点续跑读写）", () => {
         rep: 2,
       }),
     );
-    const unit = { source: "defects4j", caseId: "case-1", configId: "A", rep: 3 };
+    const unit: RunUnit = { source: "defects4j", caseId: "case-1", configId: "A", rep: 3 };
     await mkdir(path.dirname(store.pathOf(unit)), { recursive: true });
     await writeFile(store.pathOf(unit), JSON.stringify({ stray: true }), "utf8"); // 形状不符 → 不计入
     await mkdir(path.join(store.root, "defects4j", "case-1", "A", "notes.txt"), {
@@ -195,7 +197,7 @@ describe("RunStore（断点续跑读写）", () => {
 
   it("caseId 含路径分隔符时按 sanitize 落盘（防目录逃逸）", async () => {
     const store = new RunStore(path.join(storeDir, "sanitize"));
-    const unit = { source: "defects4j", caseId: "../escape", configId: "A", rep: 1 };
+    const unit: RunUnit = { source: "defects4j", caseId: "../escape", configId: "A", rep: 1 };
     const segments = store.pathOf(unit).split(/[\\/]/);
     expect(segments).not.toContain(".."); // 无父目录引用（不逃逸）
     expect(segments).toContain(".._escape"); // 分隔符替换为下划线
