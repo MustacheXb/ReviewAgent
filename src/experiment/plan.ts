@@ -226,10 +226,12 @@ function skipReasonOf(
   return null;
 }
 
-/** case 实际入样配置 = 计划配置 ∩ labels.allowedConfigs（按 A–E 序） */
+/** case 实际入样配置 = 计划配置 ∩ labels.allowedConfigs（恒按 A–E 规范序，与传入顺序无关） */
 export function configsForCase(plan: ExperimentPlan, mrCase: MRCase): readonly ConfigId[] {
   const allowed = new Set<string>(mrCase.labels.allowedConfigs);
-  return plan.configs.filter((configId) => allowed.has(configId));
+  return CONFIG_ORDER.filter(
+    (configId) => plan.configs.includes(configId) && allowed.has(configId),
+  );
 }
 
 function validateSources(sources: readonly ExperimentSource[]): void {
