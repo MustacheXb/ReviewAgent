@@ -1,6 +1,7 @@
 import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
 import type { MRCase } from "../contracts/mr-case.js";
+import { runUnitKeyString } from "../contracts/run-unit.js";
 import type { CacheBreakReason } from "../contracts/run.js";
 import type { RunResult } from "../contracts/run.js";
 import { CACHE_BREAK_REASONS, tallyCacheBreakReasons } from "../loop/cache-break.js";
@@ -22,11 +23,18 @@ import type {
 } from "../metrics/types.js";
 import { buildHumanReviewForms, buildReviewUnits, buildSamplingPlan } from "../sampling/index.js";
 import type { HumanReviewForm } from "../sampling/index.js";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  groupAndSortByRep,
+  meanOf,
+  readJsonArrayFile,
+  readJsonFile,
+  writeJsonFile,
+} from "../shared/report-io.js";
 import path from "node:path";
-import type { ExperimentPlan, RunUnit } from "./plan.js";
+import type { ExperimentPlan } from "./plan.js";
 import { expandPlan } from "./plan.js";
 import type { RunFailure, RunnerPaths } from "./runner.js";
+import { FAILURES_FILE } from "./runner.js";
 import type { RunRecord } from "./run-store.js";
 import { recordToBaselineRunResult, recordToRunResult, RunStore } from "./run-store.js";
 
@@ -210,26 +218,14 @@ export async function buildExperimentReport(
   };
 }
 
-/** 记录 → (caseId → (configId → rep 升序记录)) 分组 */
+/** 记录 → (caseId → (configId → rep 升序记录)) 分组（分组/排序原语共享自 shared/report-io） */
 function groupRecordsByCase(
   records: readonly RunRecord[],
 ): ReadonlyMap<string, ReadonlyMap<ConfigId, readonly RunRecord[]>> {
-  const byCase = new Map<string, Map<ConfigId, RunRecord[]>>();
-  for (const record of records) {
-    let byConfig = byCase.get(record.caseId);
-    if (byConfig === undefined) {
-      byConfig = new Map();
-      byCase.set(record.caseId, byConfig);
-    }
-    byConfig.set(record.configId, [...(byConfig.get(record.configId) ?? []), record]);
-  }
-  for (const byConfig of byCase.values()) {
-    for (const [configId, runs] of byConfig) {
-      byConfig.set(
-        configId,
-        [...runs].sort((a, b) => a.rep - b.rep),
-      );
-    }
+  const byCaseId = groupAndSortByRep(records, (record) => record.caseId);
+  const byCase = new Map<string, ReadonlyMap<ConfigId, readonly RunRecord[]>>();
+  for (const [caseId, caseRecords] of byCaseId) {
+    byCase.set(caseId, groupAndSortByRep(caseRecords, (record) => record.configId));
   }
   return byCase;
 }
@@ -299,10 +295,6 @@ function buildNegativeControlReport(
 /** 单次运行的 FP 计数（阴性对照口径：truth = null 时每条 Finding 计 1 FP，CLEAN_MR 归因） */
 function evaluateFpCount(record: RunRecord, mrCase: MRCase): number {
   return evaluateRun(recordToRunResult(record), mrCase).lineCounts.fp;
-}
-
-function meanOf(values: readonly number[]): number {
-  return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
 const NULL_FLAT: FlatMetrics = {
@@ -468,7 +460,7 @@ async function runJudgeStage(
       result = { ...judged, repIndex: record.rep - 1 };
       await store.save(record, result);
     }
-    deps.onJudgeUnit?.({ unit: judgeUnitKey(record), status: result.status });
+    deps.onJudgeUnit?.({ unit: runUnitKeyString(record), status: result.status });
     results.push(result);
   }
   return {
@@ -552,8 +544,8 @@ export class JudgeStore {
 
   async read(record: JudgeUnitKey): Promise<JudgeRunResult | null> {
     try {
-      const parsed = JSON.parse(await readFile(this.pathOf(record), "utf8")) as JudgeRunResult;
-      return isJudgeResultShape(parsed) ? parsed : null;
+      const parsed = await readJsonFile(this.pathOf(record));
+      return parsed !== null && isJudgeResultShape(parsed) ? parsed : null;
     } catch {
       return null;
     }
@@ -561,9 +553,7 @@ export class JudgeStore {
 
   /** 结果按运行单元落盘（result 内含 repIndex；单元键由 record 显式提供） */
   async save(record: JudgeUnitKey, result: JudgeRunResult): Promise<void> {
-    const filePath = this.pathOf(record);
-    await mkdir(path.dirname(filePath), { recursive: true });
-    await writeFile(filePath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    await writeJsonFile(this.pathOf(record), result);
   }
 }
 
@@ -580,24 +570,15 @@ function isJudgeResultShape(value: unknown): value is JudgeRunResult {
   );
 }
 
-function judgeUnitKey(record: { readonly source: string; readonly caseId: string; readonly configId: string; readonly rep: number }): string {
-  return `${record.source}/${record.caseId}/${record.configId}/rep-${record.rep}`;
-}
-
 /** 报告落盘：report.json（全量）+ human-review/forms.json */
 export async function persistExperimentReport(
   experimentRoot: string,
   report: ExperimentReport,
 ): Promise<void> {
-  await writeJson(path.join(experimentRoot, "report.json"), report);
+  await writeJsonFile(path.join(experimentRoot, "report.json"), report);
   if (report.humanReview !== null) {
-    await writeJson(path.join(experimentRoot, "human-review", "forms.json"), report.humanReview);
+    await writeJsonFile(path.join(experimentRoot, "human-review", "forms.json"), report.humanReview);
   }
-}
-
-async function writeJson(filePath: string, content: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(content, null, 2)}\n`, "utf8");
 }
 
 /** 报告重建（--report-only）：从落盘 plan/cases/记录重建 outcome（judge/表单一并续跑） */
@@ -618,12 +599,12 @@ export async function rebuildExperimentOutcome(
   const expanded = expandPlan(plan, cases);
   const store = new RunStore(path.join(experimentRoot, "runs"));
   const all = await store.readAll();
-  const plannedKeys = new Set(expanded.units.map(unitKeyOf));
+  const plannedKeys = new Set(expanded.units.map(runUnitKeyString));
   const records = expanded.units.flatMap((unit) => {
     const record = all.find(
       (candidate) =>
-        plannedKeys.has(recordKeyOf(candidate)) &&
-        recordKeyOf(candidate) === unitKeyOf(unit) &&
+        plannedKeys.has(runUnitKeyString(candidate)) &&
+        runUnitKeyString(candidate) === runUnitKeyString(unit) &&
         candidate.model === plan.model &&
         candidate.verifier === plan.verifier,
     );
@@ -640,20 +621,5 @@ export async function rebuildExperimentOutcome(
 }
 
 async function readFailures(experimentRoot: string): Promise<readonly RunFailure[]> {
-  try {
-    const parsed = JSON.parse(
-      await readFile(path.join(experimentRoot, "failures.json"), "utf8"),
-    ) as unknown;
-    return Array.isArray(parsed) ? (parsed as RunFailure[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function unitKeyOf(unit: RunUnit): string {
-  return `${unit.source}/${unit.caseId}/${unit.configId}/rep-${unit.rep}`;
-}
-
-function recordKeyOf(record: RunRecord): string {
-  return `${record.source}/${record.caseId}/${record.configId}/rep-${record.rep}`;
+  return readJsonArrayFile<RunFailure>(path.join(experimentRoot, FAILURES_FILE));
 }

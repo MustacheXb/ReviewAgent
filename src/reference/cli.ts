@@ -1,5 +1,16 @@
 import path from "node:path";
 import { loadExperimentCases } from "../experiment/datasets.js";
+import {
+  applyListFlag,
+  type CliArgSpec,
+  type CliParseResult,
+  errorMessage,
+  flagFail,
+  flagOk,
+  parseCliArgs,
+  type ValueFlagParser,
+  type FlagApplyResult,
+} from "../shared/cli-args.js";
 import type { ClaudeCodeClient } from "./contracts.js";
 import { ClaudeCodeCliClient, DEFAULT_CLAUDE_CODE_TIMEOUT_MS } from "./client.js";
 import {
@@ -57,9 +68,7 @@ export interface ReferenceCliOptions {
   readonly runsRoot: string;
 }
 
-export type ParseReferenceArgsResult =
-  | { readonly ok: true; readonly options: ReferenceCliOptions }
-  | { readonly ok: false; readonly message: string; readonly usage: string };
+export type ParseReferenceArgsResult = CliParseResult<ReferenceCliOptions>;
 
 const ALL_REFERENCE_SOURCES: readonly ReferenceSource[] = [
   "defects4j",
@@ -93,168 +102,94 @@ export function referenceCliUsage(): string {
   ].join("\n");
 }
 
-/** 纯函数解析 argv（支持 --flag value 与 --flag=value；--case 可重复） */
-export function parseReferenceArgs(argv: readonly string[]): ParseReferenceArgsResult {
-  const values = {
+/** 解析过程中的累加器（每轮以不可变合并推进；最终装配为只读 options） */
+type ReferenceCliValues = {
+  referenceId: string;
+  sources: ReferenceSource[];
+  reps: number;
+  model: string;
+  maxTurns: number;
+  timeoutMs: number;
+  perSourceLimit: number | null;
+  caseFilter: string[];
+  casesFile: string | undefined;
+  cleanMr: boolean;
+  cleanMrRepoPath: string | undefined;
+  reportOnly: boolean;
+  runsRoot: string;
+};
+
+/** 布尔 flag 表：命中即合并补丁（内联 =value 忽略不校验） */
+const BOOLEAN_FLAGS: Readonly<Record<string, Partial<ReferenceCliValues>>> = {
+  "--clean-mr": { cleanMr: true },
+  "--report-only": { reportOnly: true },
+};
+
+/** 整数参数 → 补丁（Number + isInteger 严格口径：parseInt 会把 "1.5" 静默截成 1，放过非法输入） */
+function applyStrictIntFlag(
+  value: string,
+  flag: string,
+  min: number,
+  assign: (parsed: number) => Partial<ReferenceCliValues>,
+): FlagApplyResult<ReferenceCliValues> {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min) {
+    return flagFail(`${flag} must be an integer >= ${min} (got ${JSON.stringify(value)})`);
+  }
+  return flagOk(assign(parsed));
+}
+
+/** 值参数表：参数名 → 解析器（错误消息与重构前逐字一致） */
+const VALUE_FLAGS: Readonly<Record<string, ValueFlagParser<ReferenceCliValues>>> = {
+  "--id": (value) => flagOk({ referenceId: value }),
+  "--cases-file": (value) => flagOk({ casesFile: value }),
+  "--clean-mr-repo": (value) => flagOk({ cleanMrRepoPath: value }),
+  "--runs-root": (value) => flagOk({ runsRoot: value }),
+  "--sources": (value) =>
+    applyListFlag(value, ALL_REFERENCE_SOURCES, "source", (list) => ({ sources: list })),
+  "--reps": (value) => applyStrictIntFlag(value, "--reps", 1, (parsed) => ({ reps: parsed })),
+  "--model": (value) => {
+    const trimmed = value.trim();
+    return trimmed.length === 0
+      ? flagFail("--model must be a non-empty model id")
+      : flagOk({ model: trimmed });
+  },
+  "--max-turns": (value) =>
+    applyStrictIntFlag(value, "--max-turns", 1, (parsed) => ({ maxTurns: parsed })),
+  "--timeout-ms": (value) =>
+    applyStrictIntFlag(value, "--timeout-ms", 1000, (parsed) => ({ timeoutMs: parsed })),
+  "--limit": (value) =>
+    applyStrictIntFlag(value, "--limit", 1, (parsed) => ({ perSourceLimit: parsed })),
+  "--case": (value, current) =>
+    value.length === 0
+      ? flagFail("--case requires a non-empty caseId")
+      : flagOk({ caseFilter: [...current.caseFilter, value] }),
+};
+
+/** 解析起点：全部字段取缺省值 */
+function defaultReferenceCliValues(): ReferenceCliValues {
+  return {
     referenceId: "",
-    sources: [...ALL_REFERENCE_SOURCES] as ReferenceSource[],
+    sources: [...ALL_REFERENCE_SOURCES],
     reps: DEFAULT_REFERENCE_REPS,
     model: DEFAULT_CLAUDE_CODE_MODEL,
     maxTurns: DEFAULT_CLAUDE_CODE_MAX_TURNS,
     timeoutMs: DEFAULT_CLAUDE_CODE_TIMEOUT_MS,
-    perSourceLimit: null as number | null,
-    caseFilter: [] as string[],
-    casesFile: undefined as string | undefined,
+    perSourceLimit: null,
+    caseFilter: [],
+    casesFile: undefined,
     cleanMr: false,
-    cleanMrRepoPath: undefined as string | undefined,
+    cleanMrRepoPath: undefined,
     reportOnly: false,
     runsRoot: "runs",
   };
-  const usage = referenceCliUsage();
-  const fail = (message: string): ParseReferenceArgsResult => ({ ok: false, message, usage });
-  let index = 0;
-  while (index < argv.length) {
-    const token = argv[index];
-    if (token === undefined) {
-      break;
-    }
-    if (token === "--help" || token === "-h") {
-      return fail("--help requested");
-    }
-    const [name, inlineValue] = splitFlag(token);
-    const next = (): string | { readonly error: string } => {
-      if (inlineValue !== undefined) {
-        return inlineValue;
-      }
-      index++;
-      const value = argv[index];
-      if (value === undefined || value.startsWith("--")) {
-        return { error: `flag ${name} requires a value` };
-      }
-      return value;
-    };
-    const intValue = (flag: string, min: number): number | { readonly error: string } => {
-      const value = next();
-      if (typeof value !== "string") {
-        return value;
-      }
-      // Number + isInteger（parseInt 会把 "1.5" 静默截成 1，放过非法输入）
-      const parsed = Number(value);
-      if (!Number.isInteger(parsed) || parsed < min) {
-        return { error: `${flag} must be an integer >= ${min} (got ${JSON.stringify(value)})` };
-      }
-      return parsed;
-    };
-    switch (name) {
-      case "--id": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        values.referenceId = value;
-        break;
-      }
-      case "--cases-file": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        values.casesFile = value;
-        break;
-      }
-      case "--clean-mr-repo": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        values.cleanMrRepoPath = value;
-        break;
-      }
-      case "--clean-mr":
-        values.cleanMr = true;
-        break;
-      case "--sources": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        const parsed = parseList(value, ALL_REFERENCE_SOURCES, "source");
-        if (!parsed.ok) {
-          return fail(parsed.message);
-        }
-        values.sources = parsed.value;
-        break;
-      }
-      case "--reps": {
-        const parsed = intValue("--reps", 1);
-        if (typeof parsed !== "number") {
-          return fail(parsed.error);
-        }
-        values.reps = parsed;
-        break;
-      }
-      case "--model": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        if (value.trim().length === 0) {
-          return fail("--model must be a non-empty model id");
-        }
-        values.model = value.trim();
-        break;
-      }
-      case "--max-turns": {
-        const parsed = intValue("--max-turns", 1);
-        if (typeof parsed !== "number") {
-          return fail(parsed.error);
-        }
-        values.maxTurns = parsed;
-        break;
-      }
-      case "--timeout-ms": {
-        const parsed = intValue("--timeout-ms", 1000);
-        if (typeof parsed !== "number") {
-          return fail(parsed.error);
-        }
-        values.timeoutMs = parsed;
-        break;
-      }
-      case "--limit": {
-        const parsed = intValue("--limit", 1);
-        if (typeof parsed !== "number") {
-          return fail(parsed.error);
-        }
-        values.perSourceLimit = parsed;
-        break;
-      }
-      case "--case": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        if (value.length === 0) {
-          return fail("--case requires a non-empty caseId");
-        }
-        values.caseFilter = [...values.caseFilter, value];
-        break;
-      }
-      case "--report-only":
-        values.reportOnly = true;
-        break;
-      case "--runs-root": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        values.runsRoot = value;
-        break;
-      }
-      default:
-        return fail(`unknown flag ${JSON.stringify(token)}\n${usage}`);
-    }
-    index++;
-  }
+}
+
+/** 收尾：--id 必填校验 + 只读 options 装配（undefined 键省略） */
+function finalizeReferenceCliValues(
+  values: ReferenceCliValues,
+  fail: (message: string) => ParseReferenceArgsResult,
+): ParseReferenceArgsResult {
   if (values.referenceId.trim().length === 0) {
     return fail("--id is required");
   }
@@ -278,6 +213,20 @@ export function parseReferenceArgs(argv: readonly string[]): ParseReferenceArgsR
       runsRoot: values.runsRoot,
     },
   };
+}
+
+/** 解析声明（骨架共享自 shared/cli-args：主循环 / 取值形式 / 错误消息语义一致） */
+const REFERENCE_ARG_SPEC: CliArgSpec<ReferenceCliValues, ReferenceCliOptions> = {
+  usage: referenceCliUsage(),
+  defaultValues: defaultReferenceCliValues,
+  booleanFlags: BOOLEAN_FLAGS,
+  valueFlags: VALUE_FLAGS,
+  finalize: finalizeReferenceCliValues,
+};
+
+/** 纯函数解析 argv（支持 --flag value 与 --flag=value；--case 可重复） */
+export function parseReferenceArgs(argv: readonly string[]): ParseReferenceArgsResult {
+  return parseCliArgs(argv, REFERENCE_ARG_SPEC);
 }
 
 /** CLI 选项 → ClaudeCodeReferencePlan（含校验；失败抛错由调用方转退出码） */
@@ -416,44 +365,6 @@ async function executeReferenceCli(
     return 1;
   }
   return 0;
-}
-
-function splitFlag(token: string): readonly [string, string | undefined] {
-  const eq = token.indexOf("=");
-  if (token.startsWith("--") && eq > 0) {
-    return [token.slice(0, eq), token.slice(eq + 1)];
-  }
-  return [token, undefined];
-}
-
-function parseList<T extends string>(
-  value: string,
-  universe: readonly T[],
-  kind: string,
-): { readonly ok: true; readonly value: T[] } | { readonly ok: false; readonly message: string } {
-  const items = value
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  if (items.length === 0) {
-    return { ok: false, message: `expected a comma list of ${kind} names (got ${JSON.stringify(value)})` };
-  }
-  const known = new Set<string>(universe);
-  const unknown = items.filter((item) => !known.has(item));
-  if (unknown.length > 0) {
-    return {
-      ok: false,
-      message: `unknown ${kind} name(s): ${unknown.join(", ")} (allowed: ${universe.join(", ")})`,
-    };
-  }
-  if (new Set(items).size !== items.length) {
-    return { ok: false, message: `${kind} list must not contain duplicates (got ${JSON.stringify(value)})` };
-  }
-  return { ok: true, value: items as T[] };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** 进程入口（scripts/run-claude-code-reference.ts 调用） */

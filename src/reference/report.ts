@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { REFERENCE_CONFIG_ID } from "../contracts/config.js";
 import type { MRCase } from "../contracts/mr-case.js";
@@ -14,6 +14,12 @@ import type {
   MetricsReport,
   MetricsStats,
 } from "../metrics/types.js";
+import {
+  groupAndSortByRep,
+  meanOf,
+  readJsonArrayFile,
+  writeJsonFile,
+} from "../shared/report-io.js";
 import type { ReferenceRejectionStage } from "./contracts.js";
 import type { ClaudeCodeReferencePlan, ReferenceRunUnit } from "./plan.js";
 import { expandReferencePlan } from "./plan.js";
@@ -251,29 +257,15 @@ function summarizeRuntime(
   };
 }
 
-/** 记录 → (caseId → rep 升序记录) 分组 */
+/** 记录 → (caseId → rep 升序记录) 分组（分组/排序原语共享自 shared/report-io） */
 function groupRecordsByCase(
   records: readonly ReferenceRunRecord[],
 ): ReadonlyMap<string, readonly ReferenceRunRecord[]> {
-  const byCase = new Map<string, ReferenceRunRecord[]>();
-  for (const record of records) {
-    byCase.set(record.caseId, [...(byCase.get(record.caseId) ?? []), record]);
-  }
-  for (const [caseId, runs] of byCase) {
-    byCase.set(
-      caseId,
-      [...runs].sort((a, b) => a.rep - b.rep),
-    );
-  }
-  return byCase;
+  return groupAndSortByRep(records, (record) => record.caseId);
 }
 
 function distinct(values: readonly string[]): readonly string[] {
   return [...new Set(values.filter((value) => value.length > 0))];
-}
-
-function meanOf(values: readonly number[]): number {
-  return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
 /** 报告落盘：reference-report.json（全量）+ reference-dashboard.md */
@@ -281,17 +273,12 @@ export async function persistReferenceReport(
   referenceRoot: string,
   report: ClaudeCodeReferenceReport,
 ): Promise<void> {
-  await writeJson(path.join(referenceRoot, "reference-report.json"), report);
+  await writeJsonFile(path.join(referenceRoot, "reference-report.json"), report);
   const markdown = renderReferenceDashboardMarkdown(report);
   await mkdir(path.dirname(path.join(referenceRoot, "reference-dashboard.md")), {
     recursive: true,
   });
   await writeFile(path.join(referenceRoot, "reference-dashboard.md"), markdown, "utf8");
-}
-
-async function writeJson(filePath: string, content: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(content, null, 2)}\n`, "utf8");
 }
 
 /** 报告重建（--report-only）：从落盘 plan/cases/记录重建 outcome（不再调用 claude） */
@@ -330,14 +317,7 @@ export async function rebuildReferenceOutcome(
 }
 
 async function readFailures(referenceRoot: string): Promise<readonly ReferenceFailure[]> {
-  try {
-    const parsed = JSON.parse(
-      await readFile(path.join(referenceRoot, REFERENCE_FAILURES_FILE), "utf8"),
-    ) as unknown;
-    return Array.isArray(parsed) ? (parsed as ReferenceFailure[]) : [];
-  } catch {
-    return [];
-  }
+  return readJsonArrayFile<ReferenceFailure>(path.join(referenceRoot, REFERENCE_FAILURES_FILE));
 }
 
 function unitKeyOf(unit: ReferenceRunUnit): string {

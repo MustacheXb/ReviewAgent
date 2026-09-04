@@ -1,9 +1,21 @@
 import path from "node:path";
 import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
+import { runUnitKeyString } from "../contracts/run-unit.js";
 import { DeepSeekClient } from "../deepseek/deepseek-client.js";
 import type { JudgeClient } from "../judge/index.js";
 import { GptJudgeClient } from "../judge/index.js";
+import {
+  applyListFlag,
+  type CliArgSpec,
+  type CliParseResult,
+  errorMessage,
+  flagFail,
+  flagOk,
+  parseCliArgs,
+  type ValueFlagParser,
+  type FlagApplyResult,
+} from "../shared/cli-args.js";
 import { renderDashboardMarkdown } from "./dashboard.js";
 import { loadExperimentCases } from "./datasets.js";
 import { checkExperimentEnv, envErrorMessage } from "./env.js";
@@ -59,9 +71,7 @@ export interface ExperimentCliOptions {
   readonly runsRoot: string;
 }
 
-export type ParseArgsResult =
-  | { readonly ok: true; readonly options: ExperimentCliOptions }
-  | { readonly ok: false; readonly message: string; readonly usage: string };
+export type ParseArgsResult = CliParseResult<ExperimentCliOptions>;
 
 const ALL_CONFIG_IDS = Object.keys(CONFIGS) as ConfigId[];
 const ALL_SOURCES: readonly ExperimentSource[] = ["defects4j", "vul4j", "msb-java", "clean-mr"];
@@ -118,14 +128,6 @@ type CliValues = {
   runsRoot: string;
 };
 
-/** 单个 flag 的应用结果：ok=true 给出待合并的值补丁，ok=false 给出错误消息 */
-type FlagApplyResult =
-  | { readonly ok: true; readonly patch: Partial<CliValues> }
-  | { readonly ok: false; readonly message: string };
-
-/** 值参数解析器：(取值, 当前累加值) → 补丁 | 错误 */
-type ValueFlagParser = (value: string, current: CliValues) => FlagApplyResult;
-
 /** 布尔 flag 表：命中即合并补丁（内联 =value 按原实现忽略不校验） */
 const BOOLEAN_FLAGS: Readonly<Record<string, Partial<CliValues>>> = {
   "--clean-mr": { cleanMr: true },
@@ -135,7 +137,7 @@ const BOOLEAN_FLAGS: Readonly<Record<string, Partial<CliValues>>> = {
 };
 
 /** 值参数表：参数名 → 解析器（错误消息与表驱动重构前逐字一致，特征测试锚定） */
-const VALUE_FLAGS: Readonly<Record<string, ValueFlagParser>> = {
+const VALUE_FLAGS: Readonly<Record<string, ValueFlagParser<CliValues>>> = {
   "--id": (value) => flagOk({ experimentId: value }),
   "--cases-file": (value) => flagOk({ casesFile: value }),
   "--clean-mr-repo": (value) => flagOk({ cleanMrRepoPath: value }),
@@ -174,8 +176,18 @@ const VALUE_FLAGS: Readonly<Record<string, ValueFlagParser>> = {
       : flagOk({ humanReviewSeed: value }),
 };
 
-const flagOk = (patch: Partial<CliValues>): FlagApplyResult => ({ ok: true, patch });
-const flagFail = (message: string): FlagApplyResult => ({ ok: false, message });
+/** 整数参数 → 补丁（保留 parseInt 截断语义：带数字前缀的脏值可截断通过） */
+function applyIntFlag(
+  value: string,
+  flag: string,
+  assign: (parsed: number) => Partial<CliValues>,
+): FlagApplyResult<CliValues> {
+  const parsed = parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return flagFail(`${flag} must be an integer >= 1 (got ${JSON.stringify(value)})`);
+  }
+  return flagOk(assign(parsed));
+}
 
 /** 解析起点：全部字段取缺省值（与 spec/usage 文档一致） */
 function defaultCliValues(): CliValues {
@@ -200,53 +212,13 @@ function defaultCliValues(): CliValues {
   };
 }
 
-/** 取 flag 的值：内联 --flag=value 原样返回；空格形式消费下一个 token（不得是 flag 或结尾） */
-function nextValue(
-  argv: readonly string[],
-  index: number,
-  name: string,
-  inlineValue: string | undefined,
-):
-  | { readonly ok: true; readonly value: string; readonly nextIndex: number }
-  | { readonly ok: false; readonly message: string } {
-  if (inlineValue !== undefined) {
-    return { ok: true, value: inlineValue, nextIndex: index + 1 };
-  }
-  const value = argv[index + 1];
-  if (value === undefined || value.startsWith("--")) {
-    return { ok: false, message: `flag ${name} requires a value` };
-  }
-  return { ok: true, value, nextIndex: index + 2 };
-}
-
-/** 逗号列表参数 → 补丁（parseList 的错误消息原样透传） */
-function applyListFlag<T extends string>(
-  value: string,
-  universe: readonly T[],
-  kind: string,
-  assign: (list: T[]) => Partial<CliValues>,
-): FlagApplyResult {
-  const parsed = parseList(value, universe, kind);
-  return parsed.ok ? flagOk(assign(parsed.value)) : flagFail(parsed.message);
-}
-
-/** 整数参数 → 补丁（保留 parseInt 截断语义：带数字前缀的脏值可截断通过） */
-function applyIntFlag(
-  value: string,
-  flag: string,
-  assign: (parsed: number) => Partial<CliValues>,
-): FlagApplyResult {
-  const parsed = parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    return flagFail(`${flag} must be an integer >= 1 (got ${JSON.stringify(value)})`);
-  }
-  return flagOk(assign(parsed));
-}
-
 /** 收尾：--id 必填校验 + clean-mr 占位路径 + 只读 options 装配（undefined 键省略） */
-function finalizeCliValues(values: CliValues, usage: string): ParseArgsResult {
+function finalizeCliValues(
+  values: CliValues,
+  fail: (message: string) => ParseArgsResult,
+): ParseArgsResult {
   if (values.experimentId.trim().length === 0) {
-    return { ok: false, message: "--id is required", usage };
+    return fail("--id is required");
   }
   // clean MR 的 repoPath 只有 C/D/E 读取；未提供时用占位路径（A/B 零工具不读取）
   const cleanMrRepoPath =
@@ -277,42 +249,18 @@ function finalizeCliValues(values: CliValues, usage: string): ParseArgsResult {
   };
 }
 
+/** 解析声明（骨架共享自 shared/cli-args：主循环 / 取值形式 / 错误消息语义一致） */
+const EXPERIMENT_ARG_SPEC: CliArgSpec<CliValues, ExperimentCliOptions> = {
+  usage: experimentCliUsage(),
+  defaultValues: defaultCliValues,
+  booleanFlags: BOOLEAN_FLAGS,
+  valueFlags: VALUE_FLAGS,
+  finalize: finalizeCliValues,
+};
+
 /** 纯函数解析 argv（支持 --flag value 与 --flag=value；--case 可重复） */
 export function parseExperimentArgs(argv: readonly string[]): ParseArgsResult {
-  const usage = experimentCliUsage();
-  let values = defaultCliValues();
-  let index = 0;
-  while (index < argv.length) {
-    const token = argv[index];
-    if (token === undefined) {
-      break;
-    }
-    if (token === "--help" || token === "-h") {
-      return { ok: false, message: "--help requested", usage };
-    }
-    const [name, inlineValue] = splitFlag(token);
-    const booleanPatch = BOOLEAN_FLAGS[name];
-    if (booleanPatch !== undefined) {
-      values = { ...values, ...booleanPatch };
-      index += 1;
-      continue;
-    }
-    const parser = VALUE_FLAGS[name];
-    if (parser === undefined) {
-      return { ok: false, message: `unknown flag ${JSON.stringify(token)}\n${usage}`, usage };
-    }
-    const fetched = nextValue(argv, index, name, inlineValue);
-    if (!fetched.ok) {
-      return { ok: false, message: fetched.message, usage };
-    }
-    const applied = parser(fetched.value, values);
-    if (!applied.ok) {
-      return { ok: false, message: applied.message, usage };
-    }
-    values = { ...values, ...applied.patch };
-    index = fetched.nextIndex;
-  }
-  return finalizeCliValues(values, usage);
+  return parseCliArgs(argv, EXPERIMENT_ARG_SPEC);
 }
 
 /** CLI 选项 → ExperimentPlan（含校验；校验失败抛错由调用方捕获转退出码） */
@@ -425,7 +373,7 @@ function buildJudgeDeps(plan: ExperimentPlan, deps: CliRunDeps): ReportDeps {
 /** 单元事件 → 单行进度日志（completed / resumed / failed） */
 function unitEventLogger(deps: CliRunDeps): (event: UnitEvent) => void {
   return (event) => {
-    const unit = `${event.unit.source}/${event.unit.caseId}/${event.unit.configId}/rep-${event.unit.rep}`;
+    const unit = runUnitKeyString(event.unit);
     if (event.kind === "completed") {
       deps.log(`  ${unit}: completed (${event.findings} finding(s))`);
     } else if (event.kind === "resumed") {
@@ -512,44 +460,6 @@ async function writeDashboard(experimentRoot: string, report: unknown): Promise<
   const dashboardPath = path.join(experimentRoot, "dashboard.md");
   await mkdir(path.dirname(dashboardPath), { recursive: true });
   await writeFile(dashboardPath, markdown, "utf8");
-}
-
-function splitFlag(token: string): readonly [string, string | undefined] {
-  const eq = token.indexOf("=");
-  if (token.startsWith("--") && eq > 0) {
-    return [token.slice(0, eq), token.slice(eq + 1)];
-  }
-  return [token, undefined];
-}
-
-function parseList<T extends string>(
-  value: string,
-  universe: readonly T[],
-  kind: string,
-): { readonly ok: true; readonly value: T[] } | { readonly ok: false; readonly message: string } {
-  const items = value
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  if (items.length === 0) {
-    return { ok: false, message: `expected a comma list of ${kind} names (got ${JSON.stringify(value)})` };
-  }
-  const known = new Set<string>(universe);
-  const unknown = items.filter((item) => !known.has(item));
-  if (unknown.length > 0) {
-    return {
-      ok: false,
-      message: `unknown ${kind} name(s): ${unknown.join(", ")} (allowed: ${universe.join(", ")})`,
-    };
-  }
-  if (new Set(items).size !== items.length) {
-    return { ok: false, message: `${kind} list must not contain duplicates (got ${JSON.stringify(value)})` };
-  }
-  return { ok: true, value: items as T[] };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** 进程入口（scripts/run-experiment.ts 调用） */
