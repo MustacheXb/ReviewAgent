@@ -22,6 +22,7 @@ import { buildExperimentReport, persistExperimentReport } from "./report.js";
 import type { ReportDeps } from "./report.js";
 import { rebuildExperimentOutcome } from "./report.js";
 import { loadPersistedCases, loadPersistedPlan, runExperiment } from "./runner.js";
+import type { UnitEvent } from "./runner.js";
 import { writeFile, mkdir } from "node:fs/promises";
 
 /**
@@ -96,212 +97,162 @@ export function experimentCliUsage(): string {
   ].join("\n");
 }
 
-/** 纯函数解析 argv（支持 --flag value 与 --flag=value；--case 可重复） */
-export function parseExperimentArgs(argv: readonly string[]): ParseArgsResult {
-  const values = {
+/** 解析过程中的累加器（每轮以不可变合并推进；最终装配为只读 options） */
+type CliValues = {
+  experimentId: string;
+  sources: ExperimentSource[];
+  configs: ConfigId[];
+  reps: number;
+  verifier: VerifierMode;
+  model: ExperimentModel;
+  highRiskOnly: boolean;
+  perSourceLimit: number | null;
+  caseFilter: string[];
+  judge: boolean;
+  humanReviewRate: number;
+  humanReviewSeed: string;
+  casesFile: string | undefined;
+  cleanMr: boolean;
+  cleanMrRepoPath: string | undefined;
+  reportOnly: boolean;
+  runsRoot: string;
+};
+
+/** 单个 flag 的应用结果：ok=true 给出待合并的值补丁，ok=false 给出错误消息 */
+type FlagApplyResult =
+  | { readonly ok: true; readonly patch: Partial<CliValues> }
+  | { readonly ok: false; readonly message: string };
+
+/** 值参数解析器：(取值, 当前累加值) → 补丁 | 错误 */
+type ValueFlagParser = (value: string, current: CliValues) => FlagApplyResult;
+
+/** 布尔 flag 表：命中即合并补丁（内联 =value 按原实现忽略不校验） */
+const BOOLEAN_FLAGS: Readonly<Record<string, Partial<CliValues>>> = {
+  "--clean-mr": { cleanMr: true },
+  "--high-risk-only": { highRiskOnly: true },
+  "--judge": { judge: true },
+  "--report-only": { reportOnly: true },
+};
+
+/** 值参数表：参数名 → 解析器（错误消息与表驱动重构前逐字一致，特征测试锚定） */
+const VALUE_FLAGS: Readonly<Record<string, ValueFlagParser>> = {
+  "--id": (value) => flagOk({ experimentId: value }),
+  "--cases-file": (value) => flagOk({ casesFile: value }),
+  "--clean-mr-repo": (value) => flagOk({ cleanMrRepoPath: value }),
+  "--runs-root": (value) => flagOk({ runsRoot: value }),
+  "--sources": (value) =>
+    applyListFlag(value, ALL_SOURCES, "source", (list) => ({ sources: list })),
+  "--configs": (value) =>
+    applyListFlag(value.toUpperCase(), ALL_CONFIG_IDS, "config", (list) => ({ configs: list })),
+  "--reps": (value) => applyIntFlag(value, "--reps", (parsed) => ({ reps: parsed })),
+  "--limit": (value) => applyIntFlag(value, "--limit", (parsed) => ({ perSourceLimit: parsed })),
+  "--verifier": (value) =>
+    value === "off" || value === "on"
+      ? flagOk({ verifier: value })
+      : flagFail(`--verifier must be "off" or "on" (got ${JSON.stringify(value)})`),
+  "--model": (value) => {
+    const model = MODELS[value];
+    return model !== undefined
+      ? flagOk({ model })
+      : flagFail(
+          `--model must be one of flash, deepseek-v4-flash, pro, deepseek-v4-pro (got ${JSON.stringify(value)})`,
+        );
+  },
+  "--case": (value, current) =>
+    value.length === 0
+      ? flagFail("--case requires a non-empty caseId")
+      : flagOk({ caseFilter: [...current.caseFilter, value] }),
+  "--human-review-rate": (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 && parsed <= 1
+      ? flagOk({ humanReviewRate: parsed })
+      : flagFail(`--human-review-rate must be a number in (0, 1] (got ${JSON.stringify(value)})`);
+  },
+  "--human-review-seed": (value) =>
+    value.trim().length === 0
+      ? flagFail("--human-review-seed must be a non-empty string")
+      : flagOk({ humanReviewSeed: value }),
+};
+
+const flagOk = (patch: Partial<CliValues>): FlagApplyResult => ({ ok: true, patch });
+const flagFail = (message: string): FlagApplyResult => ({ ok: false, message });
+
+/** 解析起点：全部字段取缺省值（与 spec/usage 文档一致） */
+function defaultCliValues(): CliValues {
+  return {
     experimentId: "",
-    sources: [...ALL_SOURCES] as ExperimentSource[],
-    configs: [...ALL_CONFIG_IDS] as ConfigId[],
+    sources: [...ALL_SOURCES],
+    configs: [...ALL_CONFIG_IDS],
     reps: DEFAULT_REPS,
-    verifier: "off" as VerifierMode,
-    model: DEFAULT_EXPERIMENT_MODEL as ExperimentModel,
+    verifier: "off",
+    model: DEFAULT_EXPERIMENT_MODEL,
     highRiskOnly: false,
-    perSourceLimit: null as number | null,
-    caseFilter: [] as string[],
+    perSourceLimit: null,
+    caseFilter: [],
     judge: false,
     humanReviewRate: DEFAULT_HUMAN_REVIEW_RATE,
     humanReviewSeed: DEFAULT_HUMAN_REVIEW_SEED,
-    casesFile: undefined as string | undefined,
+    casesFile: undefined,
     cleanMr: false,
-    cleanMrRepoPath: undefined as string | undefined,
+    cleanMrRepoPath: undefined,
     reportOnly: false,
     runsRoot: "runs",
   };
-  const usage = experimentCliUsage();
-  const fail = (message: string): ParseArgsResult => ({ ok: false, message, usage });
-  let index = 0;
-  while (index < argv.length) {
-    const token = argv[index];
-    if (token === undefined) {
-      break;
-    }
-    if (token === "--help" || token === "-h") {
-      return fail("--help requested");
-    }
-    const [name, inlineValue] = splitFlag(token);
-    const next = (): string | { readonly error: string } => {
-      if (inlineValue !== undefined) {
-        return inlineValue;
-      }
-      index++;
-      const value = argv[index];
-      if (value === undefined || value.startsWith("--")) {
-        return { error: `flag ${name} requires a value` };
-      }
-      return value;
-    };
-    switch (name) {
-      case "--id": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        values.experimentId = value;
-        break;
-      }
-      case "--cases-file": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        values.casesFile = value;
-        break;
-      }
-      case "--clean-mr-repo": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        values.cleanMrRepoPath = value;
-        break;
-      }
-      case "--clean-mr":
-        values.cleanMr = true;
-        break;
-      case "--sources": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        const parsed = parseList(value, ALL_SOURCES, "source");
-        if (!parsed.ok) {
-          return fail(parsed.message);
-        }
-        values.sources = parsed.value;
-        break;
-      }
-      case "--configs": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        const parsed = parseList(value.toUpperCase(), ALL_CONFIG_IDS, "config");
-        if (!parsed.ok) {
-          return fail(parsed.message);
-        }
-        values.configs = parsed.value;
-        break;
-      }
-      case "--reps": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        const parsed = parseInt(value, 10);
-        if (!Number.isInteger(parsed) || parsed < 1) {
-          return fail(`--reps must be an integer >= 1 (got ${JSON.stringify(value)})`);
-        }
-        values.reps = parsed;
-        break;
-      }
-      case "--verifier": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        if (value !== "off" && value !== "on") {
-          return fail(`--verifier must be "off" or "on" (got ${JSON.stringify(value)})`);
-        }
-        values.verifier = value;
-        break;
-      }
-      case "--model": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        const model = MODELS[value];
-        if (model === undefined) {
-          return fail(`--model must be one of flash, deepseek-v4-flash, pro, deepseek-v4-pro (got ${JSON.stringify(value)})`);
-        }
-        values.model = model;
-        break;
-      }
-      case "--high-risk-only":
-        values.highRiskOnly = true;
-        break;
-      case "--limit": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        const parsed = parseInt(value, 10);
-        if (!Number.isInteger(parsed) || parsed < 1) {
-          return fail(`--limit must be an integer >= 1 (got ${JSON.stringify(value)})`);
-        }
-        values.perSourceLimit = parsed;
-        break;
-      }
-      case "--case": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        if (value.length === 0) {
-          return fail("--case requires a non-empty caseId");
-        }
-        values.caseFilter = [...values.caseFilter, value];
-        break;
-      }
-      case "--judge":
-        values.judge = true;
-        break;
-      case "--human-review-rate": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        const parsed = Number(value);
-        if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
-          return fail(`--human-review-rate must be a number in (0, 1] (got ${JSON.stringify(value)})`);
-        }
-        values.humanReviewRate = parsed;
-        break;
-      }
-      case "--human-review-seed": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        if (value.trim().length === 0) {
-          return fail("--human-review-seed must be a non-empty string");
-        }
-        values.humanReviewSeed = value;
-        break;
-      }
-      case "--report-only":
-        values.reportOnly = true;
-        break;
-      case "--runs-root": {
-        const value = next();
-        if (typeof value !== "string") {
-          return fail(value.error);
-        }
-        values.runsRoot = value;
-        break;
-      }
-      default:
-        return fail(`unknown flag ${JSON.stringify(token)}\n${usage}`);
-    }
-    index++;
+}
+
+/** 取 flag 的值：内联 --flag=value 原样返回；空格形式消费下一个 token（不得是 flag 或结尾） */
+function nextValue(
+  argv: readonly string[],
+  index: number,
+  name: string,
+  inlineValue: string | undefined,
+):
+  | { readonly ok: true; readonly value: string; readonly nextIndex: number }
+  | { readonly ok: false; readonly message: string } {
+  if (inlineValue !== undefined) {
+    return { ok: true, value: inlineValue, nextIndex: index + 1 };
   }
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("--")) {
+    return { ok: false, message: `flag ${name} requires a value` };
+  }
+  return { ok: true, value, nextIndex: index + 2 };
+}
+
+/** 逗号列表参数 → 补丁（parseList 的错误消息原样透传） */
+function applyListFlag<T extends string>(
+  value: string,
+  universe: readonly T[],
+  kind: string,
+  assign: (list: T[]) => Partial<CliValues>,
+): FlagApplyResult {
+  const parsed = parseList(value, universe, kind);
+  return parsed.ok ? flagOk(assign(parsed.value)) : flagFail(parsed.message);
+}
+
+/** 整数参数 → 补丁（保留 parseInt 截断语义：带数字前缀的脏值可截断通过） */
+function applyIntFlag(
+  value: string,
+  flag: string,
+  assign: (parsed: number) => Partial<CliValues>,
+): FlagApplyResult {
+  const parsed = parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return flagFail(`${flag} must be an integer >= 1 (got ${JSON.stringify(value)})`);
+  }
+  return flagOk(assign(parsed));
+}
+
+/** 收尾：--id 必填校验 + clean-mr 占位路径 + 只读 options 装配（undefined 键省略） */
+function finalizeCliValues(values: CliValues, usage: string): ParseArgsResult {
   if (values.experimentId.trim().length === 0) {
-    return fail("--id is required");
+    return { ok: false, message: "--id is required", usage };
   }
-  if (values.cleanMr && values.cleanMrRepoPath === undefined) {
-    // clean MR 的 repoPath 只有 C/D/E 读取；未提供时用占位路径（A/B 零工具不读取）
-    values.cleanMrRepoPath = `./clean-mr-placeholder-repo`;
-  }
+  // clean MR 的 repoPath 只有 C/D/E 读取；未提供时用占位路径（A/B 零工具不读取）
+  const cleanMrRepoPath =
+    values.cleanMr && values.cleanMrRepoPath === undefined
+      ? `./clean-mr-placeholder-repo`
+      : values.cleanMrRepoPath;
   return {
     ok: true,
     options: {
@@ -319,13 +270,49 @@ export function parseExperimentArgs(argv: readonly string[]): ParseArgsResult {
       humanReviewSeed: values.humanReviewSeed,
       ...(values.casesFile !== undefined ? { casesFile: values.casesFile } : {}),
       cleanMr: values.cleanMr,
-      ...(values.cleanMrRepoPath !== undefined
-        ? { cleanMrRepoPath: values.cleanMrRepoPath }
-        : {}),
+      ...(cleanMrRepoPath !== undefined ? { cleanMrRepoPath } : {}),
       reportOnly: values.reportOnly,
       runsRoot: values.runsRoot,
     },
   };
+}
+
+/** 纯函数解析 argv（支持 --flag value 与 --flag=value；--case 可重复） */
+export function parseExperimentArgs(argv: readonly string[]): ParseArgsResult {
+  const usage = experimentCliUsage();
+  let values = defaultCliValues();
+  let index = 0;
+  while (index < argv.length) {
+    const token = argv[index];
+    if (token === undefined) {
+      break;
+    }
+    if (token === "--help" || token === "-h") {
+      return { ok: false, message: "--help requested", usage };
+    }
+    const [name, inlineValue] = splitFlag(token);
+    const booleanPatch = BOOLEAN_FLAGS[name];
+    if (booleanPatch !== undefined) {
+      values = { ...values, ...booleanPatch };
+      index += 1;
+      continue;
+    }
+    const parser = VALUE_FLAGS[name];
+    if (parser === undefined) {
+      return { ok: false, message: `unknown flag ${JSON.stringify(token)}\n${usage}`, usage };
+    }
+    const fetched = nextValue(argv, index, name, inlineValue);
+    if (!fetched.ok) {
+      return { ok: false, message: fetched.message, usage };
+    }
+    const applied = parser(fetched.value, values);
+    if (!applied.ok) {
+      return { ok: false, message: applied.message, usage };
+    }
+    values = { ...values, ...applied.patch };
+    index = fetched.nextIndex;
+  }
+  return finalizeCliValues(values, usage);
 }
 
 /** CLI 选项 → ExperimentPlan（含校验；校验失败抛错由调用方捕获转退出码） */
@@ -412,54 +399,98 @@ async function executeCli(
   experimentRoot: string,
   deps: CliRunDeps,
 ): Promise<number> {
-  const judgeDeps: ReportDeps = plan.judge
+  const judgeDeps = buildJudgeDeps(plan, deps);
+  const outcome = options.reportOnly
+    ? await rebuildOutcomeOnly(plan, experimentRoot, deps)
+    : await runReviewMatrix(plan, options, experimentRoot, deps);
+  if (outcome === null) {
+    return 2;
+  }
+  return await finalizeExperiment(plan, experimentRoot, outcome, judgeDeps, deps);
+}
+
+/** 报告阶段所需 outcome 形状（runExperiment 全量结果与 --report-only 重建结果的公共结构） */
+type ReportableOutcome = Parameters<typeof buildExperimentReport>[0];
+
+/** judge 链依赖（未开启 judge 时为空对象 = 报告阶段跳过判定） */
+function buildJudgeDeps(plan: ExperimentPlan, deps: CliRunDeps): ReportDeps {
+  return plan.judge
     ? {
         judgeClient: deps.createJudgeClient(),
         onJudgeUnit: (event) => deps.log(`  judge ${event.unit}: ${event.status}`),
       }
     : {};
-  let outcome;
-  if (options.reportOnly) {
-    deps.log(`[experiment ${plan.experimentId}] report-only rebuild from ${experimentRoot}`);
-    outcome = await rebuildExperimentOutcome(
-      experimentRoot,
-      () => loadPersistedPlan(experimentRoot),
-      () => loadPersistedCases(experimentRoot),
-    );
-  } else {
-    const dataset = await loadExperimentCases({
-      ...(options.casesFile !== undefined ? { casesFile: options.casesFile } : {}),
-      cleanMr: options.cleanMr,
-      ...(options.cleanMrRepoPath !== undefined
-        ? { cleanMrRepoPath: options.cleanMrRepoPath }
-        : {}),
-    });
-    for (const failure of dataset.failures) {
-      deps.log(`  dataset failure (${failure.source}): ${failure.message}`);
+}
+
+/** 单元事件 → 单行进度日志（completed / resumed / failed） */
+function unitEventLogger(deps: CliRunDeps): (event: UnitEvent) => void {
+  return (event) => {
+    const unit = `${event.unit.source}/${event.unit.caseId}/${event.unit.configId}/rep-${event.unit.rep}`;
+    if (event.kind === "completed") {
+      deps.log(`  ${unit}: completed (${event.findings} finding(s))`);
+    } else if (event.kind === "resumed") {
+      deps.log(`  ${unit}: resumed (cached)`);
+    } else {
+      deps.log(`  ${unit}: FAILED — ${event.message}`);
     }
-    if (dataset.cases.length === 0) {
-      deps.log(
-        "no cases loaded (check --cases-file / --clean-mr and the dataset failures above)",
-      );
-      return 2;
-    }
-    deps.log(
-      `[experiment ${plan.experimentId}] ${dataset.cases.length} case(s) loaded; ` +
-        `model=${plan.model} verifier=${plan.verifier} reps=${plan.reps} configs=${plan.configs.join("")}`,
-    );
-    outcome = await runExperiment(plan, dataset.cases, {
-      llmClient: deps.createLlmClient(),
-      onUnit: (event) => {
-        if (event.kind === "completed") {
-          deps.log(`  ${event.unit.source}/${event.unit.caseId}/${event.unit.configId}/rep-${event.unit.rep}: completed (${event.findings} finding(s))`);
-        } else if (event.kind === "resumed") {
-          deps.log(`  ${event.unit.source}/${event.unit.caseId}/${event.unit.configId}/rep-${event.unit.rep}: resumed (cached)`);
-        } else {
-          deps.log(`  ${event.unit.source}/${event.unit.caseId}/${event.unit.configId}/rep-${event.unit.rep}: FAILED — ${event.message}`);
-        }
-      },
-    }, { experimentRoot });
+  };
+}
+
+/** --report-only：不跑检视，从持久化产物（plan + cases + records）重建 outcome */
+async function rebuildOutcomeOnly(
+  plan: ExperimentPlan,
+  experimentRoot: string,
+  deps: CliRunDeps,
+): Promise<ReportableOutcome> {
+  deps.log(`[experiment ${plan.experimentId}] report-only rebuild from ${experimentRoot}`);
+  return await rebuildExperimentOutcome(
+    experimentRoot,
+    () => loadPersistedPlan(experimentRoot),
+    () => loadPersistedCases(experimentRoot),
+  );
+}
+
+/** 装载数据集并跑全量矩阵；数据集为空时返回 null（调用方以退出码 2 收场） */
+async function runReviewMatrix(
+  plan: ExperimentPlan,
+  options: ExperimentCliOptions,
+  experimentRoot: string,
+  deps: CliRunDeps,
+): Promise<ReportableOutcome | null> {
+  const dataset = await loadExperimentCases({
+    ...(options.casesFile !== undefined ? { casesFile: options.casesFile } : {}),
+    cleanMr: options.cleanMr,
+    ...(options.cleanMrRepoPath !== undefined
+      ? { cleanMrRepoPath: options.cleanMrRepoPath }
+      : {}),
+  });
+  for (const failure of dataset.failures) {
+    deps.log(`  dataset failure (${failure.source}): ${failure.message}`);
   }
+  if (dataset.cases.length === 0) {
+    deps.log(
+      "no cases loaded (check --cases-file / --clean-mr and the dataset failures above)",
+    );
+    return null;
+  }
+  deps.log(
+    `[experiment ${plan.experimentId}] ${dataset.cases.length} case(s) loaded; ` +
+      `model=${plan.model} verifier=${plan.verifier} reps=${plan.reps} configs=${plan.configs.join("")}`,
+  );
+  return await runExperiment(plan, dataset.cases, {
+    llmClient: deps.createLlmClient(),
+    onUnit: unitEventLogger(deps),
+  }, { experimentRoot });
+}
+
+/** 报告/dashboard 落盘 + 收尾日志 → 退出码（0 = 完成；1 = 零记录全量失败） */
+async function finalizeExperiment(
+  plan: ExperimentPlan,
+  experimentRoot: string,
+  outcome: ReportableOutcome,
+  judgeDeps: ReportDeps,
+  deps: CliRunDeps,
+): Promise<number> {
   const report = await buildExperimentReport(outcome, judgeDeps, { experimentRoot });
   await persistExperimentReport(experimentRoot, report);
   await writeDashboard(experimentRoot, report);
