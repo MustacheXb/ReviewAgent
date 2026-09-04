@@ -1,4 +1,4 @@
-import type { ConfigId } from "../../src/contracts/config.js";
+import type { MetricsConfigId } from "../../src/contracts/config.js";
 import type { Finding } from "../../src/contracts/finding.js";
 import type { LlmUsage } from "../../src/contracts/llm-client.js";
 import type { MRCase, MRTruth, TruthLocation } from "../../src/contracts/mr-case.js";
@@ -58,7 +58,7 @@ export function makeMrCase(overrides: {
 
 export function makeRunResult(overrides: {
   readonly caseId?: string;
-  readonly configId?: ConfigId;
+  readonly configId?: MetricsConfigId;
   readonly findings?: readonly Finding[];
   readonly usage?: LlmUsage;
   readonly rounds?: number;

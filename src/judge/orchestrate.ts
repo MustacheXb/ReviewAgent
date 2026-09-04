@@ -141,6 +141,7 @@ export async function judgeRun(
 ): Promise<JudgeRunResult> {
   const resolved = resolveChainOptions(options);
   validateJudgeRunInputs(run, mrCase);
+  const configId = narrowMainConfigId(run);
   const ruleScreening = screenFindings(run.findings, mrCase.truth, resolved.screening);
   const tokens = computeTokenMetrics(run.usage);
   const toolCostTokens = computeToolCostTokens(run, resolved.toolCost);
@@ -148,7 +149,7 @@ export async function judgeRun(
   const ruleEfficiency = computeEfficiencyMetrics({ lineLevel: rulePrf, tokens, toolCostTokens });
   const base = {
     caseId: run.caseId,
-    configId: run.configId,
+    configId,
     repIndex: null,
     tokens,
     toolCostTokens,
@@ -445,6 +446,15 @@ function validateJudgeRunInputs(run: RunResult, mrCase: MRCase): void {
   if (typeof run.configId !== "string" || !configIds.has(run.configId)) {
     throw new Error(`run.configId must be one of "A"-"E" (got ${JSON.stringify(run.configId)})`);
   }
+}
+
+/**
+ * 窄化辅助：RunResult.configId 自 T13 起放宽为 MetricsConfigId（外部参照列
+ * 走同一 metrics 管线），但 judge 链只消费 A–E 主矩阵——validateJudgeRunInputs
+ * 已拒绝 A–E 之外的取值，此处仅做类型窄化（无运行时语义）。
+ */
+function narrowMainConfigId(run: RunResult): ConfigId {
+  return run.configId as ConfigId;
 }
 
 function errorMessage(error: unknown): string {

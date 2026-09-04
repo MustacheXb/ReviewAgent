@@ -1,4 +1,4 @@
-import type { ConfigId } from "./config.js";
+import type { MetricsConfigId } from "./config.js";
 import type { Finding } from "./finding.js";
 import type { LedgerEntry } from "./ledger.js";
 import type { LlmRequest, LlmUsage } from "./llm-client.js";
@@ -7,6 +7,8 @@ import type { PrefetchLayerRecord } from "./prefetch.js";
 /**
  * runReview(config, mrCase, llmClient) → RunResult 的输出契约（spec #1）。
  * 硬上界：max_rounds = 5，max_tool_calls = 6。
+ * configId：主 harness 恒为 A–E；外部参照记录（T13）使用 REFERENCE_CONFIG_ID
+ * 走同一 metrics 管线，故此处放宽为 MetricsConfigId（A–E 判定链不受影响）。
  */
 
 /** 六阶段骨架的固定阶段名（顺序见 loop/phases.ts 的 PHASE_ORDER） */
@@ -20,7 +22,7 @@ export type ReviewPhase =
 
 export interface RunResult {
   readonly caseId: string;
-  readonly configId: ConfigId;
+  readonly configId: MetricsConfigId;
   readonly findings: readonly Finding[];
   /** 本次 Run 累计 */
   readonly usage: LlmUsage;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildMetricsReport, evaluateCase, meanFlatMetrics } from "../../src/metrics/aggregate.js";
+import { evaluateRun as evaluateRunForTest } from "../../src/metrics/aggregate.js";
 import { DEFAULT_METRICS_OPTIONS } from "../../src/metrics/types.js";
 import type { EvaluationInput, MetricsOptions } from "../../src/metrics/types.js";
 import { usage } from "../helpers/llm-script.js";
@@ -233,5 +234,49 @@ describe("meanFlatMetrics", () => {
     expect(means.totalTokens).toBe(50);
     expect(means.lineRecall).toBe(1);
     expect(means.cacheHitRate).toBe(0);
+  });
+});
+
+describe("external reference config key (T13: \"claude-code\" single column)", () => {
+  it("evaluateRun accepts the reference config id and scores it identically", () => {
+    const mrCase = caseWithTruth("case-001");
+    const referenceRun = makeRunResult({
+      caseId: "case-001",
+      configId: "claude-code",
+      findings: [makeFinding({ file: TRUTH_FILE, line: 10 })],
+      usage: usage(1000, 200, { cacheReadTokens: 3000 }),
+    });
+    const metrics = evaluateRunForTest(referenceRun, mrCase);
+    expect(metrics.configId).toBe("claude-code");
+    expect(metrics.lineCounts).toEqual({ tp: 1, fp: 0, fn: 0 });
+    expect(metrics.tokens.totalTokens).toBe(4200);
+    expect(metrics.tokens.cacheHitRate).toBeCloseTo(3000 / 4000, 12);
+  });
+
+  it("buildMetricsReport emits the reference column and keeps A-E absent", () => {
+    const mrCase = caseWithTruth("case-001");
+    const report = buildMetricsReport([
+      {
+        mrCase,
+        runsByConfig: {
+          "claude-code": [
+            makeRunResult({
+              caseId: "case-001",
+              configId: "claude-code",
+              findings: [makeFinding({ file: TRUTH_FILE, line: 10 })],
+              usage: usage(100, 10),
+            }),
+          ],
+        },
+      },
+    ]);
+    expect(report.caseCount).toBe(1);
+    expect(report.perConfig["claude-code"]).toBeDefined();
+    expect(report.perConfig["claude-code"]?.configId).toBe("claude-code");
+    expect(report.perConfig["claude-code"]?.cold?.values.lineTp?.mean).toBe(1);
+    expect(report.perConfig["claude-code"]?.perCase[0]?.cold?.lineTp).toBe(1);
+    for (const configId of ["A", "B", "C", "D", "E"] as const) {
+      expect(report.perConfig[configId]).toBeUndefined();
+    }
   });
 });

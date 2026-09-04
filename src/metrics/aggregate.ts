@@ -1,5 +1,5 @@
-import type { ConfigId } from "../contracts/config.js";
-import { CONFIGS } from "../contracts/config.js";
+import type { ConfigId, MetricsConfigId } from "../contracts/config.js";
+import { CONFIGS, REFERENCE_CONFIG_ID } from "../contracts/config.js";
 import type { MRCase } from "../contracts/mr-case.js";
 import type { RunResult } from "../contracts/run.js";
 import { computeEfficiencyMetrics } from "./efficiency.js";
@@ -28,10 +28,19 @@ import { DEFAULT_METRICS_OPTIONS, METRICS_FIELDS } from "./types.js";
  * 分层缓存报告协议：每 config 的运行按输入顺序排列，首个为 rep1（冷启动）单列，
  * 其余 rep2+（热稳定）为主口径；≥3 次重复时由调用方保证（本模块不强制，rep 数如实上报）。
  * 跨 case 聚合为每 case 等权（先 case 内热均值、再跨 case 均值 ± 标准差）。
+ *
+ * 配置键口径（T13）：分组与校验接受 MetricsConfigId（A–E + "claude-code"
+ * 外部参照单列）。主实验报告只含 A–E 键；参照列由 src/reference 装配，
+ * 与 A–E 走同一 evaluateRun / buildMetricsReport 路径但不进 S/A/B 判定。
  */
 
-const CONFIG_IDS: readonly ConfigId[] = Object.keys(CONFIGS) as ConfigId[];
+const CONFIG_IDS: readonly MetricsConfigId[] = [
+  ...(Object.keys(CONFIGS) as ConfigId[]),
+  REFERENCE_CONFIG_ID,
+];
 const VALID_CONFIG_IDS = new Set<string>(CONFIG_IDS);
+/** 配置键的校验错误说明（列出全部合法键） */
+const VALID_CONFIG_IDS_NOTE = `${[...VALID_CONFIG_IDS].map((id) => JSON.stringify(id)).join(", ")}`;
 
 /** 单次 Run（一个 config 的一次重复运行）的完整指标 */
 export function evaluateRun(
@@ -73,7 +82,7 @@ export function evaluateCase(
   options: MetricsOptions = DEFAULT_METRICS_OPTIONS,
 ): CaseMetricsReport {
   validateEvaluationInput(input);
-  const perConfig = {} as Partial<Record<ConfigId, ConfigCaseReport>>;
+  const perConfig = {} as Partial<Record<MetricsConfigId, ConfigCaseReport>>;
   for (const configId of CONFIG_IDS) {
     const runs = input.runsByConfig[configId];
     if (runs === undefined) {
@@ -86,7 +95,7 @@ export function evaluateCase(
 
 function evaluateConfigCase(
   mrCase: MRCase,
-  configId: ConfigId,
+  configId: MetricsConfigId,
   runs: readonly RunResult[],
   options: MetricsOptions,
 ): ConfigCaseReport {
@@ -111,7 +120,7 @@ export function buildMetricsReport(
     throw new Error("evaluations must be a non-empty array of EvaluationInput");
   }
   const caseReports = evaluations.map((evaluation) => evaluateCase(evaluation, options));
-  const perConfig = {} as Partial<Record<ConfigId, ConfigSummary>>;
+  const perConfig = {} as Partial<Record<MetricsConfigId, ConfigSummary>>;
   for (const configId of CONFIG_IDS) {
     const summary = summarizeConfigCases(configId, caseReports);
     if (summary !== null) {
@@ -174,7 +183,7 @@ export function meanFlatMetrics(stats: MetricsStats): FlatMetrics {
 }
 
 function summarizeConfigCases(
-  configId: ConfigId,
+  configId: MetricsConfigId,
   caseReports: readonly CaseMetricsReport[],
 ): ConfigSummary | null {
   const entries = caseReports.flatMap((report) => {
@@ -220,7 +229,7 @@ function validateEvaluationInput(input: EvaluationInput): void {
   }
   requireNonEmptyString(input.mrCase.caseId, "input.mrCase.caseId");
   if (typeof input.runsByConfig !== "object" || input.runsByConfig === null) {
-    throw new Error("input.runsByConfig must be a Partial record of ConfigId to RunResult[]");
+    throw new Error("input.runsByConfig must be a Partial record of MetricsConfigId to RunResult[]");
   }
   const keys = Object.keys(input.runsByConfig);
   if (keys.length === 0) {
@@ -228,14 +237,16 @@ function validateEvaluationInput(input: EvaluationInput): void {
   }
   for (const key of keys) {
     if (!VALID_CONFIG_IDS.has(key)) {
-      throw new Error(`input.runsByConfig has unknown config key "${key}" (must be "A"-"E")`);
+      throw new Error(
+        `input.runsByConfig has unknown config key "${key}" (must be one of ${VALID_CONFIG_IDS_NOTE})`,
+      );
     }
-    validateConfigRuns(key as ConfigId, input.runsByConfig[key as ConfigId], input.mrCase.caseId);
+    validateConfigRuns(key as MetricsConfigId, input.runsByConfig[key as MetricsConfigId], input.mrCase.caseId);
   }
 }
 
 function validateConfigRuns(
-  configId: ConfigId,
+  configId: MetricsConfigId,
   runs: unknown,
   caseId: string,
 ): void {
@@ -266,7 +277,9 @@ function validateRunResult(run: RunResult): void {
   }
   requireNonEmptyString(run.caseId, "run.caseId");
   if (!VALID_CONFIG_IDS.has(run.configId)) {
-    throw new Error(`run.configId must be one of "A"-"E" (got ${JSON.stringify(run.configId)})`);
+    throw new Error(
+      `run.configId must be one of ${VALID_CONFIG_IDS_NOTE} (got ${JSON.stringify(run.configId)})`,
+    );
   }
   if (!Number.isInteger(run.rounds) || run.rounds < 0) {
     throw new Error(`run.rounds must be a non-negative integer (got ${JSON.stringify(run.rounds)})`);

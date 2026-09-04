@@ -1,4 +1,4 @@
-import type { ConfigId } from "../contracts/config.js";
+import type { MetricsConfigId } from "../contracts/config.js";
 import type { MRCase } from "../contracts/mr-case.js";
 import type { RunResult } from "../contracts/run.js";
 
@@ -8,6 +8,10 @@ import type { RunResult } from "../contracts/run.js";
  *
  * 判定链位置：原生真值 → 【本模块：规则粗筛】→ GPT 系 LLM-as-judge（Ticket 11）→ 人工抽检。
  * 本模块是判定链第一级，其输出（FindingVerdict / TruthMiss）供 judge 校准复用。
+ *
+ * 配置键口径（T13 起）：分组键为 MetricsConfigId（A–E 主矩阵 + "claude-code"
+ * 外部参照单列）。S/A/B 判定（verdict.ts）与 judge 链仍只消费 A–E；
+ * 参照列仅经 evaluateRun / buildMetricsReport 进入同一指标计算路径。
  */
 
 // ===== 规则粗筛（判定链第一级） =====
@@ -163,7 +167,7 @@ export interface EfficiencyMetrics {
 /** 单次 Run（一个 config 的一次重复运行）的全部指标 */
 export interface RunMetrics {
   readonly caseId: string;
-  readonly configId: ConfigId;
+  readonly configId: MetricsConfigId;
   /** 规则粗筛明细（供 Ticket 11 judge 校准与人工抽检复用） */
   readonly screening: ScreeningResult;
   readonly lineCounts: ScreeningCounts;
@@ -236,14 +240,14 @@ export interface MetricsStats {
 export interface EvaluationInput {
   readonly mrCase: MRCase;
   /** 仅列出实际运行过的 config；每个数组非空 */
-  readonly runsByConfig: Readonly<Partial<Record<ConfigId, readonly RunResult[]>>>;
+  readonly runsByConfig: Readonly<Partial<Record<MetricsConfigId, readonly RunResult[]>>>;
 }
 
 // ===== 分层缓存报告 =====
 
 /** 一个 MR × 一个 config 的分层缓存报告（rep1 冷单列、rep2+ 热主口径） */
 export interface ConfigCaseReport {
-  readonly configId: ConfigId;
+  readonly configId: MetricsConfigId;
   /** 重复运行次数（rep1 在内） */
   readonly repCount: number;
   /** rep1（冷启动）单列：单次运行指标，不做统计 */
@@ -257,7 +261,7 @@ export interface ConfigCaseReport {
 /** 一个 MR 的评估报告（覆盖所有实际运行过的 config） */
 export interface CaseMetricsReport {
   readonly caseId: string;
-  readonly perConfig: Readonly<Partial<Record<ConfigId, ConfigCaseReport>>>;
+  readonly perConfig: Readonly<Partial<Record<MetricsConfigId, ConfigCaseReport>>>;
 }
 
 /** MetricsReport 中每 case 的摘要条目 */
@@ -272,7 +276,7 @@ export interface CaseSummaryEntry {
 
 /** 跨 case 的 config 级汇总（每 case 等权） */
 export interface ConfigSummary {
-  readonly configId: ConfigId;
+  readonly configId: MetricsConfigId;
   /** 有 ≥ 1 次运行的 case 数 */
   readonly caseCount: number;
   /** 有 rep2+ 热口径的 case 数 */
@@ -289,7 +293,7 @@ export interface MetricsReport {
   /** 参与 case 数 */
   readonly caseCount: number;
   /** 各 config 汇总（仅含实际运行过的 config） */
-  readonly perConfig: Readonly<Partial<Record<ConfigId, ConfigSummary>>>;
+  readonly perConfig: Readonly<Partial<Record<MetricsConfigId, ConfigSummary>>>;
 }
 
 // ===== S/A/B 判定（质量主锚 = 配置 C，spec #1 user story 29） =====
@@ -347,7 +351,7 @@ export interface CriterionResult {
 
 /** 单个 config 的 S/A/B 判定报告 */
 export interface VerdictReport {
-  readonly configId: ConfigId;
+  readonly configId: MetricsConfigId;
   readonly outcome: VerdictOutcome;
   /** outcome ∈ {S, A, B} 时为档位，否则 null */
   readonly grade: VerdictGrade | null;

@@ -7,6 +7,18 @@
 
 export type ConfigId = "A" | "B" | "C" | "D" | "E";
 
+/**
+ * 外部参照配置键（Ticket 13 / issue #14）：Claude Code 跨模型外部参照在指标层的
+ * 单列伪配置位。永不进入 ExperimentPlan.configs / labels.allowedConfigs / S-A-B
+ * 判定（CONFIGS 仍是 A–E 主矩阵宇宙）——仅作为 RunResult.configId 与指标
+ * 分组键，让归一化后的参照 Finding 走同一 evaluateRun / buildMetricsReport 管线。
+ */
+export const REFERENCE_CONFIG_ID = "claude-code" as const;
+export type ReferenceConfigId = typeof REFERENCE_CONFIG_ID;
+
+/** 指标层配置键全集 = A–E 主矩阵 + 外部参照单列（T13） */
+export type MetricsConfigId = ConfigId | ReferenceConfigId;
+
 export interface ReviewConfig {
   readonly configId: ConfigId;
   /** A/B = false（零工具）；C/D/E = true（同一套 7 个 review.* 工具，schema 字节一致） */
