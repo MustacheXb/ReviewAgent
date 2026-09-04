@@ -1,0 +1,136 @@
+diff --git a/release-notes/CREDITS b/release-notes/CREDITS
+index c5ac4e61..8badde02 100644
+--- a/release-notes/CREDITS
++++ b/release-notes/CREDITS
+@@ -177,3 +177,6 @@ Christian Beikov (@beikov)
+   (3.3.0)
+  * Fixed #890: Count 19-digit `long` coercion in `isExpectedNumberIntToken()`
+   (3.3.0)
++ * Fixed #893: Decode element name before matching virtual wrapper in
++   `_initStartElement`
++  (3.3.0)
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index a928c9cc..9f03ef6c 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -26,6 +26,8 @@ Version: 3.x (for earlier see VERSION-2.x)
+  (fix by @Sahana2524)
+ #890: Count 19-digit `long` coercion in `isExpectedNumberIntToken()`
+  (fix by @Sahana2524)
++#893: Decode element name before matching virtual wrapper in `_initStartElement`
++ (fix by @Sahana2524)
+ 
+ 3.2.2 (not yet released)
+ 
+diff --git a/src/main/java/tools/jackson/dataformat/xml/deser/XmlTokenStream.java b/src/main/java/tools/jackson/dataformat/xml/deser/XmlTokenStream.java
+index cbabade7..0d9205ae 100644
+--- a/src/main/java/tools/jackson/dataformat/xml/deser/XmlTokenStream.java
++++ b/src/main/java/tools/jackson/dataformat/xml/deser/XmlTokenStream.java
+@@ -732,28 +732,36 @@ private final int _initStartElement() throws XMLStreamException
+ 
+         _checkXsiAttributes();
+ 
++        // Decode the name up front: virtual wrappers store the decoded name
++        // (repeatStartElement uses _localName/_namespaceURI), so with a
++        // configured XmlNameProcessor the match below has to compare the
++        // decoded name too. Otherwise every unwrapped list item fails to match
++        // its own wrapper and each element closes the virtual array, silently
++        // dropping all but the last. The delayed-replay path keeps the raw
++        // name since _handleRepeatElement decodes it again later.
++        _decodeElementName(ns, localName);
++
+         // Support for virtual wrapping: in wrapping, may either create a new
+         // wrapper scope (if in sub-tree, or matches wrapper element itself),
+         // or implicitly close existing scope.
+ 
+         if (_currentWrapper != null) {
+-            if (_currentWrapper.matchesWrapper(localName, ns)) {
++            if (_currentWrapper.matchesWrapper(_localName, _namespaceURI)) {
+                 _currentWrapper = _currentWrapper.intermediateWrapper();
+ //System.out.println(" _initStartElement(): START_ELEMENT ("+localName+") DOES match ["+_currentWrapper+"]: leave/add intermediate");
+             } else {
+                 // implicit end is more interesting:
+ //System.out.println(" _initStartElement(): START_ELEMENT ("+localName+") not matching '"+_localName+"'; add extra XML-END-ELEMENT!");
++                // Restore the (raw) START_ELEMENT to replay after the synthetic END:
++                _nextLocalName = localName;
++                _nextNamespaceURI = ns;
+                 _localName = _currentWrapper.getWrapperLocalName();
+                 _namespaceURI = _currentWrapper.getWrapperNamespace();
+                 _currentWrapper = _currentWrapper.getParent();
+-                // Important! We also need to restore the START_ELEMENT, so:
+-                _nextLocalName = localName;
+-                _nextNamespaceURI = ns;
+                 _repeatElement = REPLAY_START_DELAYED;
+                 return (_currentState = XML_END_ELEMENT);
+             }
+         }
+-        _decodeElementName(ns, localName);
+         return (_currentState = XML_START_ELEMENT);
+     }
+ 
+diff --git a/src/test/java/tools/jackson/dataformat/xml/misc/XmlNameProcessorUnwrappedListTest.java b/src/test/java/tools/jackson/dataformat/xml/misc/XmlNameProcessorUnwrappedListTest.java
+new file mode 100644
+index 00000000..77d2233d
+--- /dev/null
++++ b/src/test/java/tools/jackson/dataformat/xml/misc/XmlNameProcessorUnwrappedListTest.java
+@@ -0,0 +1,60 @@
++package tools.jackson.dataformat.xml.misc;
++
++import java.util.List;
++
++import org.junit.jupiter.api.Test;
++
++import tools.jackson.dataformat.xml.XmlFactory;
++import tools.jackson.dataformat.xml.XmlMapper;
++import tools.jackson.dataformat.xml.XmlNameProcessor;
++import tools.jackson.dataformat.xml.XmlNameProcessors;
++import tools.jackson.dataformat.xml.XmlTestUtil;
++import tools.jackson.dataformat.xml.annotation.JacksonXmlElementWrapper;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++
++// Virtual wrapping of unwrapped (repeated) elements matches the incoming
++// element name against a name stored after the XmlNameProcessor has decoded
++// it; the match itself must therefore use the decoded name too.
++public class XmlNameProcessorUnwrappedListTest extends XmlTestUtil
++{
++    static class Bean {
++        @JacksonXmlElementWrapper(useWrapping = false)
++        public List<String> lists;
++    }
++
++    private XmlMapper mapperWith(XmlNameProcessor proc) {
++        return XmlMapper.builder(
++                XmlFactory.builder().xmlNameProcessor(proc).build()
++        ).build();
++    }
++
++    @Test
++    public void testAlwaysOnBase64RoundTrip() throws Exception {
++        XmlMapper mapper = mapperWith(XmlNameProcessors.newAlwaysOnBase64Processor());
++        Bean bean = new Bean();
++        bean.lists = List.of("a", "b", "c");
++
++        String xml = mapper.writeValueAsString(bean);
++        Bean back = mapper.readValue(xml, Bean.class);
++
++        assertNotNull(back.lists);
++        assertEquals(List.of("a", "b", "c"), back.lists);
++    }
++
++    @Test
++    public void testBase64EncodedNameRoundTrip() throws Exception {
++        // "lists" is a valid XML name, so it only gets base64-escaped once it
++        // collides with the prefix; use a custom prefix that forces escaping.
++        XmlMapper mapper = mapperWith(XmlNameProcessors.newBase64Processor("lists"));
++        Bean bean = new Bean();
++        bean.lists = List.of("x", "y", "z");
++
++        String xml = mapper.writeValueAsString(bean);
++        Bean back = mapper.readValue(xml, Bean.class);
++
++        assertNotNull(back.lists);
++        assertEquals(List.of("x", "y", "z"), back.lists);
++    }
++}

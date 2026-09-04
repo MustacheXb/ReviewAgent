@@ -1,0 +1,42 @@
+diff --git a/src/main/java/tools/jackson/core/json/UTF8JsonGenerator.java b/src/main/java/tools/jackson/core/json/UTF8JsonGenerator.java
+index 627bc01556..38d6a30833 100644
+--- a/src/main/java/tools/jackson/core/json/UTF8JsonGenerator.java
++++ b/src/main/java/tools/jackson/core/json/UTF8JsonGenerator.java
+@@ -2180,12 +2180,12 @@ private final int _readMore(InputStream in,
+             int maxRead) throws JacksonException
+     {
+         // anything to shift to front?
+-        int i = 0;
+-        while (inputPtr < inputEnd) {
+-            readBuffer[i++]  = readBuffer[inputPtr++];
++        int available = inputEnd - inputPtr;
++        if (inputPtr > 0 && available > 0) {
++            System.arraycopy(readBuffer, inputPtr, readBuffer, 0, available);
+         }
+         inputPtr = 0;
+-        inputEnd = i;
++        inputEnd = available;
+         maxRead = Math.min(maxRead, readBuffer.length);
+ 
+         do {
+diff --git a/src/main/java/tools/jackson/core/json/WriterBasedJsonGenerator.java b/src/main/java/tools/jackson/core/json/WriterBasedJsonGenerator.java
+index 5033bf2342..51e080676c 100644
+--- a/src/main/java/tools/jackson/core/json/WriterBasedJsonGenerator.java
++++ b/src/main/java/tools/jackson/core/json/WriterBasedJsonGenerator.java
+@@ -1840,12 +1840,12 @@ private int _readMore(InputStream in,
+             int maxRead) throws JacksonException
+     {
+         // anything to shift to front?
+-        int i = 0;
+-        while (inputPtr < inputEnd) {
+-            readBuffer[i++]  = readBuffer[inputPtr++];
++        int available = inputEnd - inputPtr;
++        if (inputPtr > 0 && available > 0) {
++            System.arraycopy(readBuffer, inputPtr, readBuffer, 0, available);
+         }
+         inputPtr = 0;
+-        inputEnd = i;
++        inputEnd = available;
+         maxRead = Math.min(maxRead, readBuffer.length);
+ 
+         do {

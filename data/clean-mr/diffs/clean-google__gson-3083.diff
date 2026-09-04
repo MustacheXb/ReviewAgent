@@ -1,0 +1,12 @@
+diff --git a/proto/src/test/java/com/google/gson/protobuf/functional/LegacyProtoTypeAdapterFactoryTest.java b/proto/src/test/java/com/google/gson/protobuf/functional/LegacyProtoTypeAdapterFactoryTest.java
+index 9248736cbc..c706a2982c 100644
+--- a/proto/src/test/java/com/google/gson/protobuf/functional/LegacyProtoTypeAdapterFactoryTest.java
++++ b/proto/src/test/java/com/google/gson/protobuf/functional/LegacyProtoTypeAdapterFactoryTest.java
+@@ -199,6 +199,7 @@ private static void rewriteJsonObject(JsonObject json) {
+     Pattern pattern =
+         Pattern.compile(
+             "^(memoized.?(Hash.?Code|Is.?Initialized|Size))|unknown.?Fields"
++                + "|bit.?[fF]ield.*"
+                 + "|.*Memoized.?Serialized.?Size$",
+             Pattern.CASE_INSENSITIVE);
+     var keysToRemove =

@@ -1,0 +1,106 @@
+diff --git a/release-notes/CREDITS-2.x b/release-notes/CREDITS-2.x
+index 9c7087476e..31e803cd36 100644
+--- a/release-notes/CREDITS-2.x
++++ b/release-notes/CREDITS-2.x
+@@ -530,3 +530,7 @@ Mike Pedersen (@mpdncrwd)
+  * Reported #1581: `NonBlockingByteBufferParser`: Unexpected Illegal surrogate
+    character when parsing field names
+   (2.21.3)
++
++DongNyoung Lee (@Dongnyoung)
++ * Contributed #1651: Fix Object context handling for buffered `INCLUDE_NON_NULL` tokens
++  (2.21.6)
+diff --git a/release-notes/VERSION-2.x b/release-notes/VERSION-2.x
+index 26148cbf78..9eab09fdfc 100644
+--- a/release-notes/VERSION-2.x
++++ b/release-notes/VERSION-2.x
+@@ -21,6 +21,8 @@ a pure JSON library.
+  (fix by Revanth M)
+ #1643: Enforce maxNameLength incrementally in ReaderBasedJsonParser [CVE-2026-68498]
+  (fix by @tinyb0y)
++#1651: Fix Object context handling for buffered `INCLUDE_NON_NULL` tokens
++ (contributed by @Dongnyoung)
+ 
+ 2.21.5 (06-Jul-2026)
+ 
+diff --git a/src/main/java/com/fasterxml/jackson/core/filter/FilteringParserDelegate.java b/src/main/java/com/fasterxml/jackson/core/filter/FilteringParserDelegate.java
+index b54dc7f42b..cdf5dc90c8 100644
+--- a/src/main/java/com/fasterxml/jackson/core/filter/FilteringParserDelegate.java
++++ b/src/main/java/com/fasterxml/jackson/core/filter/FilteringParserDelegate.java
+@@ -793,8 +793,10 @@ protected final JsonToken _nextTokenWithBuffering(final TokenFilterContext buffR
+             case ID_START_OBJECT:
+                 f = _itemFilter;
+                 if (f == TokenFilter.INCLUDE_ALL) {
++                    // 14-Aug-2026, tatu: [core#1651] Must replay buffered tokens
++                    //    (like enclosing Field name), not just return START_OBJECT
+                     _headContext = _headContext.createChildObjectContext(f, true);
+-                    return t;
++                    return _nextBuffered(buffRoot);
+                 }
+                 if (f == null) { // does this occur?
+                     delegate.skipChildren();
+@@ -815,7 +817,7 @@ protected final JsonToken _nextTokenWithBuffering(final TokenFilterContext buffR
+                     return _nextBuffered(buffRoot);
+                 } else if (f != null && _inclusion == Inclusion.INCLUDE_NON_NULL) {
+                     // TODO don't count as match?
+-                    _headContext = _headContext.createChildArrayContext(f, true);
++                    _headContext = _headContext.createChildObjectContext(f, true);
+                     return _nextBuffered(buffRoot);
+                 }
+                 _headContext = _headContext.createChildObjectContext(f, false);
+diff --git a/src/test/java/com/fasterxml/jackson/core/filter/BasicParserFilteringTest.java b/src/test/java/com/fasterxml/jackson/core/filter/BasicParserFilteringTest.java
+index cb83f946f4..222adc7257 100644
+--- a/src/test/java/com/fasterxml/jackson/core/filter/BasicParserFilteringTest.java
++++ b/src/test/java/com/fasterxml/jackson/core/filter/BasicParserFilteringTest.java
+@@ -454,6 +454,51 @@ void multipleMatchFilteringWithPath3() throws Exception
+         assertEquals(2, p.getMatchCount());
+     }
+ 
++    // [core#1651]: buffered START_OBJECT must create Object (not Array) context
++    @Test
++    void includeNonNullWithNestedObjectContext() throws Exception
++    {
++        JsonParser p0 = JSON_F.createParser(a2q("{'a':{'b':1}}"));
++        JsonParser p = new FilteringParserDelegate(p0,
++                new TokenFilter() { },
++                Inclusion.INCLUDE_NON_NULL,
++                true // multipleMatches
++        );
++
++        assertToken(JsonToken.START_OBJECT, p.nextToken());
++        assertTrue(p.getParsingContext().inObject());
++
++        assertToken(JsonToken.FIELD_NAME, p.nextToken());
++        assertEquals("a", p.currentName());
++
++        assertToken(JsonToken.START_OBJECT, p.nextToken());
++        assertTrue(p.getParsingContext().inObject());
++        assertEquals("a", p.currentName());
++
++        assertToken(JsonToken.FIELD_NAME, p.nextToken());
++        assertEquals("b", p.currentName());
++
++        assertToken(JsonToken.VALUE_NUMBER_INT, p.nextToken());
++        assertEquals(1, p.getIntValue());
++
++        assertToken(JsonToken.END_OBJECT, p.nextToken());
++        assertToken(JsonToken.END_OBJECT, p.nextToken());
++        assertNull(p.nextToken());
++    }
++
++    // [core#1651]: buffered START_OBJECT with INCLUDE_ALL filter must replay
++    // the enclosing (buffered) Field name
++    @Test
++    void includeNonNullWithBufferedIncludeAllObject() throws Exception
++    {
++        JsonParser p0 = JSON_F.createParser(a2q("{'a':{'b':1}}"));
++        FilteringParserDelegate p = new FilteringParserDelegate(p0,
++                new StrictNameMatchFilter("a"),
++                Inclusion.INCLUDE_NON_NULL, true);
++        String result = readAndWrite(JSON_F, p);
++        assertEquals(a2q("{'a':{'b':1}}"), result);
++    }
++
+     @Test
+     void noMatchFiltering1() throws Exception
+     {

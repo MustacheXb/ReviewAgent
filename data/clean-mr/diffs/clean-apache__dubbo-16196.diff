@@ -1,0 +1,25 @@
+diff --git a/dubbo-dependencies-bom/pom.xml b/dubbo-dependencies-bom/pom.xml
+index c9ded00e6f3..bf0ba7d2baa 100644
+--- a/dubbo-dependencies-bom/pom.xml
++++ b/dubbo-dependencies-bom/pom.xml
+@@ -95,7 +95,7 @@
+     <javassist_version>3.30.2-GA</javassist_version>
+     <byte-buddy_version>1.18.7</byte-buddy_version>
+     <netty_version>3.2.10.Final</netty_version>
+-    <netty4_version>4.2.10.Final</netty4_version>
++    <netty4_version>4.2.12.Final</netty4_version>
+     <httpclient_version>4.5.14</httpclient_version>
+     <httpcore_version>4.4.16</httpcore_version>
+     <fastjson_version>1.2.83_noneautotype</fastjson_version>
+diff --git a/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/http3/Http3SslContexts.java b/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/http3/Http3SslContexts.java
+index 09e71d8ebe5..129e77868b6 100644
+--- a/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/http3/Http3SslContexts.java
++++ b/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/http3/Http3SslContexts.java
+@@ -123,6 +123,7 @@ public static QuicSslContext buildClientSslContext(URL url) {
+         } catch (Throwable t) {
+             throw new IllegalArgumentException("Could not find certificate file or the certificate is invalid.", t);
+         }
++        builder.endpointIdentificationAlgorithm(null);
+         try {
+             return builder.applicationProtocols(Http3.supportedApplicationProtocols())
+                     .build();

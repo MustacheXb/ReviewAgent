@@ -1,0 +1,35 @@
+diff --git a/core/src/main/java/com/alibaba/fastjson2/schema/ArraySchema.java b/core/src/main/java/com/alibaba/fastjson2/schema/ArraySchema.java
+index 89fedebc2a..8e04d261b6 100644
+--- a/core/src/main/java/com/alibaba/fastjson2/schema/ArraySchema.java
++++ b/core/src/main/java/com/alibaba/fastjson2/schema/ArraySchema.java
+@@ -206,7 +206,7 @@ private ValidateResult validateItems(final Object value, final int size, IntFunc
+                     return result;
+                 }
+                 prefixMatch = true;
+-            } else if (isCollection && itemSchema == null && additionalItem != null) { // 只有 Collection 才会执行这部分校验
++            } else if (itemSchema == null && additionalItem != null) {
+                 ValidateResult result = additionalItem.validate(item);
+                 if (!result.isSuccess()) {
+                     return result;
+diff --git a/core/src/test/java/com/alibaba/fastjson2/schema/JSONSchemaTest.java b/core/src/test/java/com/alibaba/fastjson2/schema/JSONSchemaTest.java
+index 5761d6ce06..6bbcfb722b 100644
+--- a/core/src/test/java/com/alibaba/fastjson2/schema/JSONSchemaTest.java
++++ b/core/src/test/java/com/alibaba/fastjson2/schema/JSONSchemaTest.java
+@@ -1899,6 +1899,17 @@ public void test_additionalItems_3() {
+         );
+     }
+ 
++    @Test
++    public void testAdditionalItemsSchemaWithObjectArray() {
++        JSONSchema jsonSchema = JSONSchema.parseSchema("{\n" +
++                "  \"items\": [{\"type\": \"integer\"}],\n" +
++                "  \"additionalItems\": {\"type\": \"boolean\"}\n" +
++                "}");
++
++        assertTrue(jsonSchema.isValid(new Object[]{1, true}));
++        assertFalse(jsonSchema.isValid(new Object[]{1, "invalid"}));
++    }
++
+     @Test
+     public void test_items_0() {
+         JSONSchema jsonSchema = JSONSchema.parseSchema("{\n" +

@@ -1,0 +1,134 @@
+diff --git a/release-notes/CREDITS b/release-notes/CREDITS
+index 06cd3a0b2f..5cab5585b5 100644
+--- a/release-notes/CREDITS
++++ b/release-notes/CREDITS
+@@ -602,3 +602,8 @@ Ivan (@pctF)
+ Bowang (@dong0713)
+  * Fixed #6113: `DOMSerializer` to support polymorphic serialization
+   [3.3.0]
++
++Aysha Afrah Ziya (@aysha-afrah26)
++ * Fixed #6126: `@JsonFilter` ignored for POJO serialized with
++   `@JsonFormat(shape=ARRAY)`
++  [3.3.0]
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index dd7749923b..7541f0cb98 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -27,6 +27,10 @@ Versions: 3.x (for earlier see VERSION-2.x)
+ #6120: Use per-node-type Type Ids for DOM values, reconstruct via DOM factory
+   instead of always parsing a `Document`
+  (fix by @cowtowncoder, w/ Claude code)
++#6126: `@JsonFilter` ignored for POJO serialized with `@JsonFormat(shape=ARRAY)`:
++  now declines the as-array shape (writing JSON Object instead), same as 2.x,
++  since positional output cannot express omission of a property
++ (fix by @aysha-afrah26)
+ 
+ 3.2.1 (10-Jul-2026)
+ 
+diff --git a/src/main/java/tools/jackson/databind/ser/bean/BeanSerializerBase.java b/src/main/java/tools/jackson/databind/ser/bean/BeanSerializerBase.java
+index 412ae9b447..3352405803 100644
+--- a/src/main/java/tools/jackson/databind/ser/bean/BeanSerializerBase.java
++++ b/src/main/java/tools/jackson/databind/ser/bean/BeanSerializerBase.java
+@@ -690,11 +690,14 @@ public Object getFilterId() {
+ 
+     /**
+      * Helper method for sub-classes to check if it should be possible to
+-     * construct an "as-array" serializer. Returns if all of following
+-     * hold true:
++     * construct an "as-array" serializer. Returns {@code false} -- that is,
++     * as-array serializer cannot be used -- if any of following holds true:
+      *<ul>
+-     * <li>have Object Id (may be allowed in future)</li>
+-     * <li>have "any getter"</li>
++     * <li>has Object Id (may be allowed in future)</li>
++     * <li>has per-property filter (from {@code @JsonFilter}): positions in
++     *   array output are implicit, so dropping a property would shift all
++     *   values that follow it
++     *  </li>
+      * </ul>
+      *
+      * @since 3.0
+@@ -703,6 +706,8 @@ public boolean canCreateArraySerializer() {
+         return (_objectIdWriter == null)
+                 // 08-Feb-2025, tatu: [databind#4775] any-getter is fine now
+                 //&& (_anyGetterWriter == null)
++                // 28-Jul-2026: as-array output cannot express per-property filtering
++                && (_propertyFilterId == null)
+                 ;
+     }
+ 
+diff --git a/src/test/java/tools/jackson/databind/ser/filter/POJOAsArrayFilterTest.java b/src/test/java/tools/jackson/databind/ser/filter/POJOAsArrayFilterTest.java
+new file mode 100644
+index 0000000000..c3c86c46e5
+--- /dev/null
++++ b/src/test/java/tools/jackson/databind/ser/filter/POJOAsArrayFilterTest.java
+@@ -0,0 +1,68 @@
++package tools.jackson.databind.ser.filter;
++
++import org.junit.jupiter.api.Test;
++
++import com.fasterxml.jackson.annotation.JsonFilter;
++import com.fasterxml.jackson.annotation.JsonFormat;
++import com.fasterxml.jackson.annotation.JsonPropertyOrder;
++
++import tools.jackson.databind.ObjectMapper;
++import tools.jackson.databind.ObjectWriter;
++import tools.jackson.databind.ser.std.SimpleBeanPropertyFilter;
++import tools.jackson.databind.ser.std.SimpleFilterProvider;
++import tools.jackson.databind.testutil.DatabindTestUtil;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++
++/**
++ * Tests for verifying that a {@code @JsonFilter} is still applied to a POJO that
++ * also asks for {@code @JsonFormat(shape=ARRAY)} output.
++ */
++public class POJOAsArrayFilterTest extends DatabindTestUtil
++{
++    @JsonFilter("beanFilter")
++    @JsonFormat(shape = JsonFormat.Shape.ARRAY)
++    @JsonPropertyOrder({ "name", "secret", "age" })
++    static class AsArrayBean {
++        public String name = "Bob";
++        public String secret = "s3cr3t";
++        public int age = 30;
++    }
++
++    @JsonFilter("beanFilter")
++    @JsonPropertyOrder({ "name", "secret", "age" })
++    static class AsObjectBean {
++        public String name = "Bob";
++        public String secret = "s3cr3t";
++        public int age = 30;
++    }
++
++    private final ObjectMapper MAPPER = newJsonMapper();
++
++    private ObjectWriter writerExcluding(String... toExclude) {
++        return MAPPER.writer(new SimpleFilterProvider()
++                .addFilter("beanFilter", SimpleBeanPropertyFilter.serializeAllExcept(toExclude)));
++    }
++
++    private ObjectWriter writerIncludingOnly(String... toInclude) {
++        return MAPPER.writer(new SimpleFilterProvider()
++                .addFilter("beanFilter", SimpleBeanPropertyFilter.filterOutAllExcept(toInclude)));
++    }
++
++    @Test
++    public void excludeFilterWithArrayShape() throws Exception {
++        assertEquals("{\"name\":\"Bob\",\"age\":30}",
++                writerExcluding("secret").writeValueAsString(new AsArrayBean()));
++        // ... and same as without the shape override:
++        assertEquals("{\"name\":\"Bob\",\"age\":30}",
++                writerExcluding("secret").writeValueAsString(new AsObjectBean()));
++    }
++
++    @Test
++    public void includeFilterWithArrayShape() throws Exception {
++        assertEquals("{\"name\":\"Bob\"}",
++                writerIncludingOnly("name").writeValueAsString(new AsArrayBean()));
++        assertEquals("{\"name\":\"Bob\"}",
++                writerIncludingOnly("name").writeValueAsString(new AsObjectBean()));
++    }
++}

@@ -1,0 +1,193 @@
+diff --git a/release-notes/CREDITS b/release-notes/CREDITS
+index 2df3f3d882..09776863bd 100644
+--- a/release-notes/CREDITS
++++ b/release-notes/CREDITS
+@@ -395,6 +395,8 @@ Aysha Afrah Ziya (@aysha-afrah26)
+   [3.1.6]
+  * Fixed #6116: Reject non-ASCII digits in `InetAddress` literal validation
+   [3.1.6]
++ * Fixed #6165: Apply number length limits to `BigDecimal`/`BigInteger`/`Double`/`Float` Map keys
++   [3.1.6]
+ 
+ @waydeshi
+  * Reported #6127: Add `StreamReadConstraints` number len constraint to
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index ec8fa4d3c0..ed61968dec 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -42,6 +42,8 @@ No changes since 3.1
+ #6156: Add `java.lang.Comparable` in set of "unsafe" polymorphic base types
+   [GHSA-gx83-3vf8-gh7j]
+  (reported by @prvazsahnazarov)
++#6165: Apply number length limits to `BigDecimal`/`BigInteger`/`Double`/`Float` Map keys
++ (fix by Aysha A-Z)
+ 
+ 3.1.5 (07-Jul-2026)
+ 
+diff --git a/src/main/java/tools/jackson/databind/deser/jdk/JDKKeyDeserializer.java b/src/main/java/tools/jackson/databind/deser/jdk/JDKKeyDeserializer.java
+index 9631267abe..607b965a9c 100644
+--- a/src/main/java/tools/jackson/databind/deser/jdk/JDKKeyDeserializer.java
++++ b/src/main/java/tools/jackson/databind/deser/jdk/JDKKeyDeserializer.java
+@@ -4,6 +4,8 @@
+ import java.io.Serializable;
+ import java.lang.reflect.Constructor;
+ import java.lang.reflect.Method;
++import java.math.BigDecimal;
++import java.math.BigInteger;
+ import java.net.MalformedURLException;
+ import java.net.URI;
+ import java.net.URL;
+@@ -49,6 +51,8 @@ public class JDKKeyDeserializer extends KeyDeserializer
+     public final static int TYPE_CLASS = 15;
+     public final static int TYPE_CURRENCY = 16;
+     public final static int TYPE_BYTE_ARRAY = 17; // since 2.9
++    public final static int TYPE_BIG_INTEGER = 18;
++    public final static int TYPE_BIG_DECIMAL = 19;
+ 
+     protected final int _kind;
+     protected final Class<?> _keyClass;
+@@ -102,6 +106,10 @@ public static JDKKeyDeserializer forType(Class<?> raw)
+             kind = TYPE_FLOAT;
+         } else if (raw == Double.class) {
+             kind = TYPE_DOUBLE;
++        } else if (raw == BigInteger.class) {
++            kind = TYPE_BIG_INTEGER;
++        } else if (raw == BigDecimal.class) {
++            kind = TYPE_BIG_DECIMAL;
+         } else if (raw == URI.class) {
+             kind = TYPE_URI;
+         } else if (raw == URL.class) {
+@@ -194,9 +202,17 @@ protected Object _parse(String key, DeserializationContext ctxt)
+ 
+         case TYPE_FLOAT:
+             // Bounds/range checks would be tricky here, so let's not bother even trying...
++            ctxt.streamReadConstraints().validateFPLength(key.length());
+             return Float.valueOf((float) _parseDouble(key));
+         case TYPE_DOUBLE:
++            ctxt.streamReadConstraints().validateFPLength(key.length());
+             return _parseDouble(key);
++        case TYPE_BIG_INTEGER:
++            ctxt.streamReadConstraints().validateIntegerLength(key.length());
++            return NumberInput.parseBigInteger(key, true);
++        case TYPE_BIG_DECIMAL:
++            ctxt.streamReadConstraints().validateFPLength(key.length());
++            return NumberInput.parseBigDecimal(key, true);
+         case TYPE_LOCALE:
+         case TYPE_CURRENCY:
+             try {
+diff --git a/src/test/java/tools/jackson/databind/deser/jdk/BigNumbersDeserTest.java b/src/test/java/tools/jackson/databind/deser/jdk/BigNumbersDeserTest.java
+index d490278e41..0d8514694e 100644
+--- a/src/test/java/tools/jackson/databind/deser/jdk/BigNumbersDeserTest.java
++++ b/src/test/java/tools/jackson/databind/deser/jdk/BigNumbersDeserTest.java
+@@ -2,13 +2,16 @@
+ 
+ import java.math.BigDecimal;
+ import java.math.BigInteger;
++import java.util.Map;
+ 
+ import org.junit.jupiter.api.Test;
+ 
+ import tools.jackson.core.StreamReadConstraints;
+ import tools.jackson.core.exc.StreamConstraintsException;
+ import tools.jackson.core.json.JsonFactory;
++import tools.jackson.core.type.TypeReference;
+ import tools.jackson.databind.ObjectMapper;
++import tools.jackson.databind.exc.InvalidFormatException;
+ import tools.jackson.databind.json.JsonMapper;
+ import tools.jackson.databind.testutil.DatabindTestUtil;
+ 
+@@ -101,6 +104,94 @@ public void testBigIntegerUnlimited() throws Exception
+         assertNotNull(bdw);
+     }
+ 
++    // [databind#6165]
++    // Number length limits must apply to `BigInteger`/`BigDecimal` used as Map keys,
++    // not just as values: the key path fed strings straight to the O(n^2)
++    // `BigInteger(String)`/`BigDecimal(String)` constructors, bounded only by the far
++    // larger max-name-length limit.
++    @Test
++    public void bigIntegerAsMapKey() throws Exception
++    {
++        _verifyKeyTooLong(MAPPER, "1".repeat(1200), new TypeReference<Map<BigInteger, String>>() { });
++    }
++
++    @Test
++    public void bigDecimalAsMapKey() throws Exception
++    {
++        _verifyKeyTooLong(MAPPER, "1".repeat(1200), new TypeReference<Map<BigDecimal, String>>() { });
++    }
++
++    // Same limit applies to `Float`/`Double` keys as well
++    @Test
++    public void floatingPointAsMapKey() throws Exception
++    {
++        _verifyKeyTooLong(MAPPER, "1".repeat(1200), new TypeReference<Map<Double, String>>() { });
++        _verifyKeyTooLong(MAPPER, "1".repeat(1200), new TypeReference<Map<Float, String>>() { });
++    }
++
++    @Test
++    public void bigNumberMapKeysWithinLimit() throws Exception
++    {
++        Map<BigInteger, String> mi = MAPPER.readValue("{\"12345678901234567890\":\"a\"}",
++                new TypeReference<Map<BigInteger, String>>() { });
++        assertEquals("a", mi.get(new BigInteger("12345678901234567890")));
++
++        Map<BigDecimal, String> md = MAPPER.readValue("{\"3.14159265358979\":\"b\"}",
++                new TypeReference<Map<BigDecimal, String>>() { });
++        assertEquals("b", md.get(new BigDecimal("3.14159265358979")));
++    }
++
++    // Limit is inclusive: key of exactly `maxNumberLength` digits still accepted,
++    // one digit more is not
++    @Test
++    public void mapKeyAtLengthLimit() throws Exception
++    {
++        final int maxLen = StreamReadConstraints.defaults().getMaxNumberLength();
++        final String key = "1".repeat(maxLen);
++
++        Map<BigInteger, String> m = MAPPER.readValue("{\"" + key + "\":\"a\"}",
++                new TypeReference<Map<BigInteger, String>>() { });
++        assertEquals("a", m.get(new BigInteger(key)));
++
++        _verifyKeyTooLong(MAPPER, "1".repeat(maxLen + 1),
++                new TypeReference<Map<BigInteger, String>>() { });
++    }
++
++    // Limit is configurable for keys just like it is for values
++    @Test
++    public void mapKeyWithLoweredLengthLimit() throws Exception
++    {
++        JsonFactory f = JsonFactory.builder()
++                .streamReadConstraints(StreamReadConstraints.builder().maxNumberLength(20).build())
++                .build();
++        // 25 digits: acceptable with defaults, too long here
++        _verifyKeyTooLong(JsonMapper.builder(f).build(), "1".repeat(25),
++                new TypeReference<Map<BigInteger, String>>() { });
++    }
++
++    // Malformed (but short enough) keys must still fail as regular "weird key" problems
++    @Test
++    public void malformedBigNumberMapKey() throws Exception
++    {
++        try {
++            MAPPER.readValue("{\"abc\":\"a\"}", new TypeReference<Map<BigInteger, String>>() { });
++            fail("expected InvalidFormatException");
++        } catch (InvalidFormatException e) {
++            verifyException(e, "Cannot deserialize Map key of type `java.math.BigInteger`");
++        }
++    }
++
++    private void _verifyKeyTooLong(ObjectMapper mapper, String key, TypeReference<?> targetType)
++        throws Exception
++    {
++        try {
++            mapper.readValue("{\"" + key + "\":\"x\"}", targetType);
++            fail("expected StreamConstraintsException");
++        } catch (StreamConstraintsException e) {
++            verifyException(e, "Number value length ("+key.length()+") exceeds the maximum allowed");
++        }
++    }
++
+     // [databind#4435]
+     @Test
+     public void testNumberStartingWithDot() throws Exception {

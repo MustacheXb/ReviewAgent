@@ -1,0 +1,260 @@
+diff --git a/gson/src/main/java/com/google/gson/internal/bind/MapTypeAdapterFactory.java b/gson/src/main/java/com/google/gson/internal/bind/MapTypeAdapterFactory.java
+index a72bb48cc1..642586e3d4 100644
+--- a/gson/src/main/java/com/google/gson/internal/bind/MapTypeAdapterFactory.java
++++ b/gson/src/main/java/com/google/gson/internal/bind/MapTypeAdapterFactory.java
+@@ -187,10 +187,11 @@ public Map<K, V> read(JsonReader in) throws IOException {
+         while (in.hasNext()) {
+           in.beginArray(); // entry array
+           K key = keyTypeAdapter.read(in);
+-          V value = valueTypeAdapter.read(in);
+           if (map.containsKey(key)) {
+-            throw new JsonSyntaxException("duplicate key: " + key);
++            throw new JsonSyntaxException(
++                "Duplicate key '" + key + "'; at path " + in.getPreviousPath());
+           }
++          V value = valueTypeAdapter.read(in);
+           map.put(key, value);
+           in.endArray();
+         }
+@@ -200,10 +201,11 @@ public Map<K, V> read(JsonReader in) throws IOException {
+         while (in.hasNext()) {
+           JsonReaderInternalAccess.INSTANCE.promoteNameToValue(in);
+           K key = keyTypeAdapter.read(in);
+-          V value = valueTypeAdapter.read(in);
+           if (map.containsKey(key)) {
+-            throw new JsonSyntaxException("duplicate key: " + key);
++            throw new JsonSyntaxException(
++                "Duplicate key '" + key + "'; at path " + in.getPreviousPath());
+           }
++          V value = valueTypeAdapter.read(in);
+           map.put(key, value);
+         }
+         in.endObject();
+diff --git a/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java b/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java
+index 54582e2a27..45f9536b54 100644
+--- a/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java
++++ b/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java
+@@ -20,7 +20,6 @@
+ 
+ import com.google.gson.Gson;
+ import com.google.gson.JsonElement;
+-import com.google.gson.JsonIOException;
+ import com.google.gson.JsonSyntaxException;
+ import com.google.gson.TypeAdapter;
+ import com.google.gson.TypeAdapterFactory;
+@@ -35,6 +34,7 @@
+ import java.math.BigDecimal;
+ import java.math.BigInteger;
+ import java.net.InetAddress;
++import java.net.MalformedURLException;
+ import java.net.URI;
+ import java.net.URISyntaxException;
+ import java.net.URL;
+@@ -383,7 +383,8 @@ public AtomicLongArray read(JsonReader in) throws IOException {
+         while (in.hasNext()) {
+           Number value = longAdapter.read(in);
+           if (value == null) {
+-            throw new JsonSyntaxException("null is not a valid AtomicLongArray element");
++            throw new JsonSyntaxException(
++                "null is not a valid AtomicLongArray element; at path " + in.getPreviousPath());
+           }
+           list.add(value.longValue());
+         }
+@@ -540,9 +541,15 @@ public Character read(JsonReader in) throws IOException {
+             return null;
+           }
+           String str = in.nextString();
+-          if (str.length() != 1) {
++          int length = str.length();
++          if (length != 1) {
+             throw new JsonSyntaxException(
+-                "Expecting character, got: " + str + "; at " + in.getPreviousPath());
++                "Expecting single character, got: '"
++                    + str
++                    + "' (length "
++                    + length
++                    + "); at path "
++                    + in.getPreviousPath());
+           }
+           return str.charAt(0);
+         }
+@@ -704,7 +711,15 @@ public URL read(JsonReader in) throws IOException {
+             return null;
+           }
+           String nextString = in.nextString();
+-          return nextString.equals("null") ? null : new URL(nextString);
++          if (nextString.equals("null")) {
++            return null;
++          }
++          try {
++            return new URL(nextString);
++          } catch (MalformedURLException e) {
++            throw new JsonSyntaxException(
++                "Failed parsing '" + nextString + "' as URL; at path " + in.getPreviousPath(), e);
++          }
+         }
+ 
+         @Override
+@@ -723,11 +738,15 @@ public URI read(JsonReader in) throws IOException {
+             in.nextNull();
+             return null;
+           }
++          String nextString = in.nextString();
++          if (nextString.equals("null")) {
++            return null;
++          }
+           try {
+-            String nextString = in.nextString();
+-            return nextString.equals("null") ? null : new URI(nextString);
++            return new URI(nextString);
+           } catch (URISyntaxException e) {
+-            throw new JsonIOException(e);
++            throw new JsonSyntaxException(
++                "Failed parsing '" + nextString + "' as URI; at path " + in.getPreviousPath(), e);
+           }
+         }
+ 
+diff --git a/gson/src/test/java/com/google/gson/functional/DefaultTypeAdaptersTest.java b/gson/src/test/java/com/google/gson/functional/DefaultTypeAdaptersTest.java
+index 4ea9629efa..ca8444f3af 100644
+--- a/gson/src/test/java/com/google/gson/functional/DefaultTypeAdaptersTest.java
++++ b/gson/src/test/java/com/google/gson/functional/DefaultTypeAdaptersTest.java
+@@ -42,7 +42,9 @@
+ import java.math.BigDecimal;
+ import java.math.BigInteger;
+ import java.net.InetAddress;
++import java.net.MalformedURLException;
+ import java.net.URI;
++import java.net.URISyntaxException;
+ import java.net.URL;
+ import java.text.DateFormat;
+ import java.time.Duration;
+@@ -155,6 +157,14 @@ public void testUrlDeserialization() {
+     assertThat(target2.toExternalForm()).isEqualTo(urlValue);
+   }
+ 
++  @Test
++  public void testUrlDeserializationError() {
++    var e =
++        assertThrows(JsonSyntaxException.class, () -> gson.fromJson("\"://invalid\"", URL.class));
++    assertThat(e.getMessage()).isEqualTo("Failed parsing '://invalid' as URL; at path $");
++    assertThat(e).hasCauseThat().isInstanceOf(MalformedURLException.class);
++  }
++
+   @Test
+   public void testUrlNullSerialization() {
+     ClassWithUrlField target = new ClassWithUrlField();
+@@ -187,6 +197,14 @@ public void testUriDeserialization() {
+     assertThat(target.toString()).isEqualTo(uriValue);
+   }
+ 
++  @Test
++  public void testUriDeserializationError() {
++    var e =
++        assertThrows(JsonSyntaxException.class, () -> gson.fromJson("\"://invalid\"", URI.class));
++    assertThat(e.getMessage()).isEqualTo("Failed parsing '://invalid' as URI; at path $");
++    assertThat(e).hasCauseThat().isInstanceOf(URISyntaxException.class);
++  }
++
+   @Test
+   public void testUriRoundTripWithNonAscii() throws Exception {
+     URI uri = new URI("s3://bucket/path/Kankyō.png");
+diff --git a/gson/src/test/java/com/google/gson/functional/JavaUtilConcurrentAtomicTest.java b/gson/src/test/java/com/google/gson/functional/JavaUtilConcurrentAtomicTest.java
+index 41f999ec82..a934d585b3 100644
+--- a/gson/src/test/java/com/google/gson/functional/JavaUtilConcurrentAtomicTest.java
++++ b/gson/src/test/java/com/google/gson/functional/JavaUtilConcurrentAtomicTest.java
+@@ -121,6 +121,8 @@ public void testAtomicLongArrayWithNullElement() {
+     JsonSyntaxException e =
+         assertThrows(
+             JsonSyntaxException.class, () -> gson.fromJson("[1,null,3]", AtomicLongArray.class));
+-    assertThat(e).hasMessageThat().isEqualTo("null is not a valid AtomicLongArray element");
++    assertThat(e)
++        .hasMessageThat()
++        .isEqualTo("null is not a valid AtomicLongArray element; at path $[1]");
+   }
+ }
+diff --git a/gson/src/test/java/com/google/gson/functional/MapAsArrayTypeAdapterTest.java b/gson/src/test/java/com/google/gson/functional/MapAsArrayTypeAdapterTest.java
+index c2f1f01e00..aa07d97b6d 100644
+--- a/gson/src/test/java/com/google/gson/functional/MapAsArrayTypeAdapterTest.java
++++ b/gson/src/test/java/com/google/gson/functional/MapAsArrayTypeAdapterTest.java
+@@ -79,7 +79,7 @@ public void testTwoTypesCollapseToOneDeserialize() {
+     String s = "[[\"1.00\",\"a\"],[\"1.0\",\"b\"]]";
+     Type type = new TypeToken<Map<Double, String>>() {}.getType();
+     var e = assertThrows(JsonSyntaxException.class, () -> gson.fromJson(s, type));
+-    assertThat(e).hasMessageThat().isEqualTo("duplicate key: 1.0");
++    assertThat(e).hasMessageThat().isEqualTo("Duplicate key '1.0'; at path $[1][0]");
+   }
+ 
+   @Test
+@@ -89,7 +89,7 @@ public void testDuplicateKeyWithNullFirstValueArrayForm() {
+     String s = "[[\"a\",null],[\"a\",\"x\"]]";
+     Type type = new TypeToken<Map<String, String>>() {}.getType();
+     var e = assertThrows(JsonSyntaxException.class, () -> gson.fromJson(s, type));
+-    assertThat(e).hasMessageThat().isEqualTo("duplicate key: a");
++    assertThat(e).hasMessageThat().isEqualTo("Duplicate key 'a'; at path $[1][0]");
+   }
+ 
+   @Test
+diff --git a/gson/src/test/java/com/google/gson/functional/MapTest.java b/gson/src/test/java/com/google/gson/functional/MapTest.java
+index 3e0b2893ed..15dc0b86c7 100644
+--- a/gson/src/test/java/com/google/gson/functional/MapTest.java
++++ b/gson/src/test/java/com/google/gson/functional/MapTest.java
+@@ -697,7 +697,7 @@ public void testBooleanKeyDeserialization() {
+   public void testMapDeserializationWithDuplicateKeys() {
+     Type type = new TypeToken<Map<String, Integer>>() {}.getType();
+     var e = assertThrows(JsonSyntaxException.class, () -> gson.fromJson("{'a':1,'a':2}", type));
+-    assertThat(e).hasMessageThat().isEqualTo("duplicate key: a");
++    assertThat(e).hasMessageThat().isEqualTo("Duplicate key 'a'; at path $.");
+   }
+ 
+   @Test
+@@ -707,7 +707,7 @@ public void testMapDeserializationWithDuplicateKeysNullFirstValue() {
+     // so the old `if (replaced != null)` check failed to detect the duplicate
+     var e =
+         assertThrows(JsonSyntaxException.class, () -> gson.fromJson("{\"a\":null,\"a\":1}", type));
+-    assertThat(e).hasMessageThat().isEqualTo("duplicate key: a");
++    assertThat(e).hasMessageThat().isEqualTo("Duplicate key 'a'; at path $.");
+   }
+ 
+   @Test
+@@ -716,7 +716,7 @@ public void testMapDeserializationWithDuplicateKeysBothNull() {
+     var e =
+         assertThrows(
+             JsonSyntaxException.class, () -> gson.fromJson("{\"a\":null,\"a\":null}", type));
+-    assertThat(e).hasMessageThat().isEqualTo("duplicate key: a");
++    assertThat(e).hasMessageThat().isEqualTo("Duplicate key 'a'; at path $.");
+   }
+ 
+   @Test
+diff --git a/gson/src/test/java/com/google/gson/functional/PrimitiveCharacterTest.java b/gson/src/test/java/com/google/gson/functional/PrimitiveCharacterTest.java
+index 6f6f894ffe..e4532a8db3 100644
+--- a/gson/src/test/java/com/google/gson/functional/PrimitiveCharacterTest.java
++++ b/gson/src/test/java/com/google/gson/functional/PrimitiveCharacterTest.java
+@@ -17,8 +17,10 @@
+ package com.google.gson.functional;
+ 
+ import static com.google.common.truth.Truth.assertThat;
++import static org.junit.Assert.assertThrows;
+ 
+ import com.google.gson.Gson;
++import com.google.gson.JsonSyntaxException;
+ import org.junit.Before;
+ import org.junit.Test;
+ 
+@@ -55,4 +57,17 @@ public void testPrimitiveCharacterAutoboxedDeserialization() {
+     actual = gson.fromJson("a", Character.class);
+     assertThat(actual).isEqualTo(expected);
+   }
++
++  @Test
++  public void testWrongLength() {
++    var e = assertThrows(JsonSyntaxException.class, () -> gson.fromJson("\"\"", char.class));
++    assertThat(e)
++        .hasMessageThat()
++        .isEqualTo("Expecting single character, got: '' (length 0); at path $");
++
++    e = assertThrows(JsonSyntaxException.class, () -> gson.fromJson("\"ab\"", char.class));
++    assertThat(e)
++        .hasMessageThat()
++        .isEqualTo("Expecting single character, got: 'ab' (length 2); at path $");
++  }
+ }

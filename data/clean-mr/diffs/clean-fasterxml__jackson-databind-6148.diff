@@ -1,0 +1,90 @@
+diff --git a/src/main/java/tools/jackson/databind/ext/javatime/deser/YearDeserializer.java b/src/main/java/tools/jackson/databind/ext/javatime/deser/YearDeserializer.java
+index a519dd0deb..4695e6b1e6 100644
+--- a/src/main/java/tools/jackson/databind/ext/javatime/deser/YearDeserializer.java
++++ b/src/main/java/tools/jackson/databind/ext/javatime/deser/YearDeserializer.java
+@@ -118,7 +118,16 @@ protected Year _fromString(JsonParser p, DeserializationContext ctxt,
+         // 30-Sep-2020: Should allow use of "Timestamp as String" for XML/CSV
+         if (ctxt.isEnabled(StreamReadCapability.UNTYPED_SCALARS)
+                 && _isValidTimestampString(string)) {
+-            return _fromNumber(ctxt, NumberInput.parseInt(string));
++            // 07-Aug-2026, tatu: `_isValidTimestampString()` only verifies value
++            //    fits in 64-bit `long` but `Year` needs 32-bit `int`: let values
++            //    out of `int` range fall through to regular textual parsing so
++            //    failure is reported as `DateTimeException` and not as
++            //    (unchecked, non-Jackson) `NumberFormatException`
++            try {
++                return _fromNumber(ctxt, NumberInput.parseInt(string));
++            } catch (NumberFormatException e) {
++                // fall through
++            }
+         }
+         try {
+             if (_formatter == null) {
+diff --git a/src/test/java/tools/jackson/databind/ext/javatime/deser/YearDeserTest.java b/src/test/java/tools/jackson/databind/ext/javatime/deser/YearDeserTest.java
+index 7c85432c24..2c4b7739d2 100644
+--- a/src/test/java/tools/jackson/databind/ext/javatime/deser/YearDeserTest.java
++++ b/src/test/java/tools/jackson/databind/ext/javatime/deser/YearDeserTest.java
+@@ -24,7 +24,11 @@
+ import org.junit.jupiter.api.Test;
+ 
+ import com.fasterxml.jackson.annotation.JsonFormat;
++import tools.jackson.core.JsonParser;
++import tools.jackson.core.StreamReadCapability;
+ import tools.jackson.core.type.TypeReference;
++import tools.jackson.core.util.JacksonFeatureSet;
++import tools.jackson.core.util.JsonParserDelegate;
+ import tools.jackson.databind.DeserializationFeature;
+ import tools.jackson.databind.ObjectMapper;
+ import tools.jackson.databind.ObjectReader;
+@@ -240,6 +244,51 @@ public void testDeserializeFromEmptyString() throws Exception
+         }
+     }
+ 
++    /*
++    /**********************************************************
++    /* Tests for "Timestamp as String" (for XML, CSV, Properties)
++    /**********************************************************
++     */
++
++    // Formats with "untyped" scalars (XML, CSV, Properties) may pass timestamps
++    // as Strings; those are decoded as numbers and not via textual parsing
++    @Test
++    public void untypedScalarTimestampAsString() throws Exception
++    {
++        // NOTE: "12345" would NOT pass textual parsing (needs '+' prefix for
++        // more than 4 digits), so this verifies the numeric path is taken
++        assertEquals(Year.of(12345), _readUntypedScalar(q("12345")));
++    }
++
++    // But value that does not fit in `int` must be reported as regular Jackson
++    // exception, not as `NumberFormatException`
++    @Test
++    public void untypedScalarTimestampTooBig() throws Exception
++    {
++        try {
++            _readUntypedScalar(q("12345678901"));
++            fail("Should not pass");
++        } catch (MismatchedInputException e) {
++            verifyException(e, "java.time.Year");
++            verifyException(e, "12345678901");
++        }
++    }
++
++    private Year _readUntypedScalar(String doc) throws Exception {
++        try (JsonParser p = new UntypedScalarParser(MAPPER.createParser(doc))) {
++            return MAPPER.readValue(p, Year.class);
++        }
++    }
++
++    static class UntypedScalarParser extends JsonParserDelegate {
++        public UntypedScalarParser(JsonParser d) { super(d); }
++
++        @Override
++        public JacksonFeatureSet<StreamReadCapability> streamReadCapabilities() {
++            return super.streamReadCapabilities().with(StreamReadCapability.UNTYPED_SCALARS);
++        }
++    }
++
+     /*
+     /**********************************************************
+     /* Helper methods
