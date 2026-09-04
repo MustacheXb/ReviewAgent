@@ -36,6 +36,17 @@ describe("buildClaudeCodeArgs", () => {
     ).toContain("claude-sonnet-4-5-20250929");
   });
 
+  it("模型族约束：非 Claude 系模型 id 拒绝（外部参照不得请求其他模型族）", () => {
+    for (const foreign of ["deepseek-v4-flash", "gpt-5.2-pro", "minimax-m3", "claude-", "claude"]) {
+      expect(() => buildClaudeCodeArgs({ ...BASE_INPUT, model: foreign })).toThrow(
+        ClaudeCodeClientError,
+      );
+    }
+    for (const alias of ["sonnet", "opus", "haiku"]) {
+      expect(buildClaudeCodeArgs({ ...BASE_INPUT, model: alias })).toContain(alias);
+    }
+  });
+
   it("注入防线：shell 元字符模型 id 拒绝", () => {
     for (const evil of ["sonnet; rm -rf /", "a&b", "x|y", "$(whoami)", "mo`del`", "a b"]) {
       expect(() => buildClaudeCodeArgs({ ...BASE_INPUT, model: evil })).toThrow(

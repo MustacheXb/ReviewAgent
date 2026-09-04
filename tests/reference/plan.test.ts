@@ -51,6 +51,24 @@ describe("validateReferencePlan", () => {
     expect(() => validateReferencePlan(referencePlan({ model: "" }))).toThrow(/model/);
   });
 
+  it("model 模型族校验：Claude 系（claude-* 或 sonnet/opus/haiku 别名）之外拒绝", () => {
+    for (const foreign of [
+      "deepseek-v4-flash",
+      "gpt-5.2-pro",
+      "minimax-m3",
+      "claude-",
+      "claude",
+      "SONNET",
+    ]) {
+      expect(() => validateReferencePlan(referencePlan({ model: foreign }))).toThrow(
+        /Claude-family/,
+      );
+    }
+    for (const allowed of ["sonnet", "opus", "haiku", "claude-sonnet-4-5-20250929"]) {
+      expect(() => validateReferencePlan(referencePlan({ model: allowed }))).not.toThrow();
+    }
+  });
+
   it("promptTemplateVersion 非空", () => {
     expect(() =>
       validateReferencePlan(referencePlan({ promptTemplateVersion: "  " })),

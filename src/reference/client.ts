@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isClaudeCodeModelId } from "./plan.js";
 import type {
   ClaudeCodeClient,
   ClaudeCodeRunInput,
@@ -28,9 +29,6 @@ import type {
 /** 只读工具白名单：检视需要仓库读取与检索，禁止一切写/执行类工具 */
 export const CLAUDE_CODE_ALLOWED_TOOLS: readonly string[] = ["Read", "Grep", "Glob"];
 
-/** 模型 id 字符白名单（经 shell 传递前的注入防线） */
-const MODEL_ID_RE = /^[A-Za-z0-9._-]{1,100}$/;
-
 export const DEFAULT_CLAUDE_CODE_TIMEOUT_MS = 600_000;
 const VERSION_TIMEOUT_MS = 30_000;
 const STDERR_SNIPPET_LENGTH = 400;
@@ -53,9 +51,10 @@ export interface ClaudeCodeCliClientOptions {
 
 /** 无头调用的参数构造（纯函数：全部为程序控制的白名单值） */
 export function buildClaudeCodeArgs(input: ClaudeCodeRunInput): readonly string[] {
-  if (!MODEL_ID_RE.test(input.model)) {
+  if (!isClaudeCodeModelId(input.model)) {
     throw new ClaudeCodeClientError(
-      `claude model id must match ${MODEL_ID_RE.source} (got ${JSON.stringify(input.model)})`,
+      `claude model id must be a Claude-family id (claude-* or sonnet/opus/haiku alias, ` +
+        `got ${JSON.stringify(input.model)}); other model families belong to the main experiment`,
     );
   }
   if (!Number.isInteger(input.maxTurns) || input.maxTurns < 1) {

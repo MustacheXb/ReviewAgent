@@ -65,8 +65,18 @@ export const DEFAULT_CLAUDE_CODE_MAX_TURNS = 5;
 
 const VALID_SOURCES = new Set<string>(REFERENCE_SOURCES);
 const REFERENCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-/** 模型 id 字符白名单（与 client.ts 的注入防线一致；计划层提前 fail fast） */
-const MODEL_ID_RE = /^[A-Za-z0-9._-]{1,100}$/;
+/**
+ * Claude 系模型 id 词表（外部参照的模型族约束）：`claude-*` 完整 id 或
+ * sonnet / opus / haiku 别名。字符集本身排除 shell 元字符（注入防线）；
+ * 非标准后端（本机代理把别名路由到自有模型）仍以别名请求，实际模型经
+ * CLI 回报（modelUsage）照实归档对照。
+ */
+export const CLAUDE_MODEL_ID_RE = /^(?:claude-[A-Za-z0-9._-]{1,93}|sonnet|opus|haiku)$/;
+
+/** 模型 id 是否为 Claude 系（计划校验与 client 参数构造共用） */
+export function isClaudeCodeModelId(model: string): boolean {
+  return CLAUDE_MODEL_ID_RE.test(model);
+}
 
 /** 计划校验（fail fast：错误指明字段与期望；不修改入参） */
 export function validateReferencePlan(plan: ClaudeCodeReferencePlan): void {
@@ -99,9 +109,10 @@ export function validateReferencePlan(plan: ClaudeCodeReferencePlan): void {
   if (!Number.isInteger(plan.reps) || plan.reps < 1) {
     throw new Error(`plan.reps must be an integer >= 1 (got ${JSON.stringify(plan.reps)})`);
   }
-  if (typeof plan.model !== "string" || !MODEL_ID_RE.test(plan.model)) {
+  if (typeof plan.model !== "string" || !isClaudeCodeModelId(plan.model)) {
     throw new Error(
-      `plan.model must match ${MODEL_ID_RE.source} (Claude-family model id, got ${JSON.stringify(plan.model)})`,
+      `plan.model must be a Claude-family model id (claude-* full id or sonnet/opus/haiku alias; ` +
+        `external reference must not request other model families, got ${JSON.stringify(plan.model)})`,
     );
   }
   if (!Number.isInteger(plan.maxTurns) || plan.maxTurns < 1) {

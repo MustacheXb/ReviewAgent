@@ -143,12 +143,17 @@ describe("referenceCliOptionsToPlan", () => {
     });
   });
 
-  it("非法模型 id（shell 元字符）在计划层被拒", () => {
+  it("非法模型 id（shell 元字符）与非 Claude 系模型族在计划层被拒", () => {
     const parsed = parseReferenceArgs(["--id", "plan-2", "--model", "sonnet; rm"]);
     if (!parsed.ok) {
       throw new Error("parse failed");
     }
     expect(() => referenceCliOptionsToPlan(parsed.options)).toThrow(/model/);
+    const foreign = parseReferenceArgs(["--id", "plan-3", "--model", "gpt-5.2-pro"]);
+    if (!foreign.ok) {
+      throw new Error("parse failed");
+    }
+    expect(() => referenceCliOptionsToPlan(foreign.options)).toThrow(/Claude-family/);
   });
 });
 
@@ -244,6 +249,22 @@ describe("runClaudeCodeReferenceCli（主流程）", () => {
         deps,
       ),
     ).toBe(2);
+    // 非 Claude 系模型族：外部参照不得请求（计划层 fail fast，exit 2）
+    const { deps: foreignDeps, lines } = fakeDeps([]);
+    expect(
+      await runClaudeCodeReferenceCli(
+        [
+          "--id",
+          "foreign-model",
+          "--model",
+          "deepseek-v4-flash",
+          "--runs-root",
+          path.join(workDir, "runs-foreign"),
+        ],
+        foreignDeps,
+      ),
+    ).toBe(2);
+    expect(lines.some((l) => l.includes("Claude-family"))).toBe(true);
   });
 
   it("零匹配单元（过滤不命中）：exit 2", async () => {

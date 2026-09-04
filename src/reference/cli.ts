@@ -87,7 +87,7 @@ export function referenceCliUsage(): string {
     "  --clean-mr-repo <path>    repoPath for clean-MR cases (read by the claude CLI subprocess)",
     "  --sources <list>          comma list of defects4j,vul4j,msb-java,clean-mr (default: all)",
     "  --reps <n>                repetitions per MR (default: 1)",
-    "  --model <id>              Claude-family model id passed to --model (default: sonnet)",
+    "  --model <id>              Claude-family model id: claude-* full id or sonnet/opus/haiku alias (default: sonnet)",
     "  --max-turns <n>           --max-turns bound per review run (default: 5)",
     "  --timeout-ms <n>          wall-clock timeout per CLI call (default: 600000)",
     "  --limit <n>               per-source case cap (default: none)",
