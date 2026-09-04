@@ -59,6 +59,7 @@ export function renderDashboardMarkdown(report: ExperimentReport): string {
   appendVerdicts(lines, report);
   appendMetricsTable(lines, "Metrics — rep2+ hot (mean ± std, primary)", report, "hot");
   appendMetricsTable(lines, "Metrics — rep1 cold (mean ± std, separate)", report, "cold");
+  appendWarmupCurve(lines, report);
   appendNegativeControl(lines, report);
   appendVerifierAblation(lines, report);
   appendDedup(lines, report);
@@ -121,6 +122,46 @@ function appendMetricsTable(
       return fmtStat(stats?.values[row.field] ?? null, row.field);
     });
     lines.push(`| ${row.field} | ${cells.join(" | ")} |`);
+  }
+  lines.push("");
+}
+
+/**
+ * 预热曲线（spec US27）：rep1..repN 逐 repIndex 的跨 case 均值。
+ * 展示口径：每 config 三列（cases / cacheHitRate / totalTokens）——
+ * 预热故事的判据是命中率爬升与总 token 走平，其余字段以 report.json 为准。
+ */
+function appendWarmupCurve(lines: string[], report: ExperimentReport): void {
+  if (report.metrics === null) {
+    return;
+  }
+  const configs = CONFIG_IDS.filter((configId) => {
+    const summary = report.metrics?.perConfig[configId];
+    return summary !== undefined && summary.warmupCurve.length > 0;
+  });
+  if (configs.length === 0) {
+    return;
+  }
+  const maxReps = Math.max(
+    ...configs.map((configId) => report.metrics?.perConfig[configId]?.warmupCurve.length ?? 0),
+  );
+  lines.push("## Metrics — warm-up curve (per-rep cross-case mean)");
+  lines.push("");
+  lines.push(`| Rep | ${configs.flatMap((configId) => [`${configId} cases`, `${configId} cacheHit`, `${configId} totalTokens`]).join(" | ")} |`);
+  lines.push(`|---|${configs.flatMap(() => ["---", "---", "---"]).join("|")}|`);
+  for (let repIndex = 1; repIndex <= maxReps; repIndex++) {
+    const cells = configs.flatMap((configId) => {
+      const point = report.metrics?.perConfig[configId]?.warmupCurve[repIndex - 1];
+      if (point === undefined || point.repIndex !== repIndex) {
+        return ["—", "—", "—"];
+      }
+      return [
+        `${point.caseCount}`,
+        fmtStat(point.stats.values.cacheHitRate, "cacheHitRate"),
+        fmtStat(point.stats.values.totalTokens, "totalTokens"),
+      ];
+    });
+    lines.push(`| rep${repIndex} | ${cells.join(" | ")} |`);
   }
   lines.push("");
 }

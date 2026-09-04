@@ -20,6 +20,7 @@ import type {
   MetricsStats,
   RunMetrics,
   Stat,
+  WarmupCurvePoint,
 } from "./types.js";
 import { DEFAULT_METRICS_OPTIONS, METRICS_FIELDS } from "./types.js";
 
@@ -205,8 +206,31 @@ function summarizeConfigCases(
     hotCaseCount: hotMeans.length,
     cold: coldSamples.length > 0 ? summarizeFlatMetrics(coldSamples) : null,
     hot: hotMeans.length > 0 ? summarizeFlatMetrics(hotMeans) : null,
+    warmupCurve: buildWarmupCurve(entries),
     perCase: entries.map((entry) => summarizeCaseEntry(entry.caseId, entry.report)),
   };
+}
+
+/**
+ * 预热曲线（spec US27）：逐 repIndex 跨 case 聚合——
+ * repIndex i 的样本 = 各 case 在该顺序位的运行（reps[i-1]），rep 数不齐的 case 逐点缺席。
+ */
+function buildWarmupCurve(
+  entries: readonly { readonly caseId: string; readonly report: ConfigCaseReport }[],
+): readonly WarmupCurvePoint[] {
+  const maxReps = entries.reduce((max, entry) => Math.max(max, entry.report.reps.length), 0);
+  const curve: WarmupCurvePoint[] = [];
+  for (let repIndex = 1; repIndex <= maxReps; repIndex++) {
+    const samples = entries.flatMap((entry) => {
+      const rep = entry.report.reps[repIndex - 1];
+      return rep === undefined ? [] : [flattenRunMetrics(rep)];
+    });
+    if (samples.length === 0) {
+      continue;
+    }
+    curve.push({ repIndex, caseCount: samples.length, stats: summarizeFlatMetrics(samples) });
+  }
+  return curve;
 }
 
 function summarizeCaseEntry(caseId: string, report: ConfigCaseReport): CaseSummaryEntry {

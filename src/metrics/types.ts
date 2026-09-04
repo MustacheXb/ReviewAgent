@@ -274,6 +274,19 @@ export interface CaseSummaryEntry {
   readonly hot: FlatMetrics | null;
 }
 
+/**
+ * 预热曲线单点（spec #1 user story 27 跨会话预热曲线）：
+ * 同一 repIndex 跨 case 的均值（repIndex 1 起 = rep1 冷启动；repIndex = 运行顺序位）。
+ */
+export interface WarmupCurvePoint {
+  /** 重复运行序（1 起：1 = rep1 冷启动） */
+  readonly repIndex: number;
+  /** 该 repIndex 有运行的 case 数（各 case rep 数不齐时逐点如实上报） */
+  readonly caseCount: number;
+  /** 该 repIndex 跨 case 均值 ± 标准差（每 case 等权） */
+  readonly stats: MetricsStats;
+}
+
 /** 跨 case 的 config 级汇总（每 case 等权） */
 export interface ConfigSummary {
   readonly configId: MetricsConfigId;
@@ -285,6 +298,8 @@ export interface ConfigSummary {
   readonly cold: MetricsStats | null;
   /** rep2+（热）主口径：先 case 内热均值、再跨 case 均值 ± 标准差（每 case 等权） */
   readonly hot: MetricsStats | null;
+  /** 预热曲线：rep1..repN 逐 repIndex 的跨 case 均值（长度 = 最大 rep 数；冷/热两档的细化） */
+  readonly warmupCurve: readonly WarmupCurvePoint[];
   readonly perCase: readonly CaseSummaryEntry[];
 }
 

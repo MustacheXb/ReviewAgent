@@ -176,6 +176,57 @@ describe("buildMetricsReport — cross-case aggregation (equal weight per case)"
   });
 });
 
+describe("buildMetricsReport — warm-up curve（spec US27：rep1..repN 逐 repIndex 均值）", () => {
+  it("逐 repIndex 输出跨 case 均值：rep1 全冷、rep2+ 命中率爬升", () => {
+    // case-001：3 rep（1100 / 2000+1000hit / 1000+3000hit totalTokens）
+    const case1: EvaluationInput = {
+      mrCase: caseWithTruth("case-001"),
+      runsByConfig: {
+        E: repRuns("case-001", "E", [
+          usage(1000, 100),
+          usage(1000, 500, { cacheReadTokens: 1000 }),
+          usage(1000, 0, { cacheReadTokens: 3000 }),
+        ]),
+      },
+    };
+    // case-002：2 rep（1000 / 2000 totalTokens，零命中）
+    const case2: EvaluationInput = {
+      mrCase: caseWithTruth("case-002"),
+      runsByConfig: {
+        E: repRuns("case-002", "E", [usage(500, 500), usage(2000, 0)]),
+      },
+    };
+    const report = buildMetricsReport([case1, case2]);
+    const curve = report.perConfig.E?.warmupCurve ?? [];
+
+    expect(curve.map((point) => point.repIndex)).toEqual([1, 2, 3]);
+    // rep1：两 case 均有运行 [1100, 1000] → 1050，全冷（命中率 0）
+    expect(curve[0]).toMatchObject({ repIndex: 1, caseCount: 2 });
+    expect(curve[0]?.stats.values.totalTokens?.mean).toBe(1050);
+    expect(curve[0]?.stats.values.cacheHitRate?.mean).toBe(0);
+    // rep2：[2500, 2000] → 2250；命中率 [0.5, 0] → 0.25
+    expect(curve[1]).toMatchObject({ repIndex: 2, caseCount: 2 });
+    expect(curve[1]?.stats.values.totalTokens?.mean).toBe(2250);
+    expect(curve[1]?.stats.values.cacheHitRate?.mean).toBeCloseTo(0.25, 12);
+    // rep3：仅 case-001（rep 数不齐逐点缺席）→ 4000，命中率 0.75
+    expect(curve[2]).toMatchObject({ repIndex: 3, caseCount: 1 });
+    expect(curve[2]?.stats.values.totalTokens?.mean).toBe(4000);
+    expect(curve[2]?.stats.values.cacheHitRate?.mean).toBeCloseTo(0.75, 12);
+    expect(curve[2]?.stats.values.totalTokens?.std).toBe(0);
+  });
+
+  it("单 rep config 的曲线只有 rep1 一点（与 cold 一致）", () => {
+    const single: EvaluationInput = {
+      mrCase: caseWithTruth("case-solo"),
+      runsByConfig: { A: repRuns("case-solo", "A", [usage(100, 10)]) },
+    };
+    const curve = buildMetricsReport([single]).perConfig.A?.warmupCurve ?? [];
+    expect(curve).toHaveLength(1);
+    expect(curve[0]).toMatchObject({ repIndex: 1, caseCount: 1 });
+    expect(curve[0]?.stats.values.totalTokens?.mean).toBe(110);
+  });
+});
+
 describe("buildMetricsReport / evaluateCase — input validation", () => {
   it("rejects an empty evaluations array", () => {
     expect(() => buildMetricsReport([])).toThrow(/evaluations must be a non-empty array/);
