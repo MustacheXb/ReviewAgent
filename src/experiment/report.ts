@@ -1,7 +1,9 @@
 import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
 import type { MRCase } from "../contracts/mr-case.js";
+import type { CacheBreakReason } from "../contracts/run.js";
 import type { RunResult } from "../contracts/run.js";
+import { CACHE_BREAK_REASONS, tallyCacheBreakReasons } from "../loop/cache-break.js";
 import type { JudgeClient, JudgeRunResult } from "../judge/index.js";
 import { flattenJudgeRun, judgeRun } from "../judge/index.js";
 import {
@@ -86,6 +88,17 @@ export interface LedgerDedupConfigEntry {
   readonly dedupRatio: number | null;
 }
 
+/** Cache Break 原因分类统计（spec US13；run 内相邻请求对的前缀分歧归因） */
+export interface CacheBreakConfigEntry {
+  readonly configId: ConfigId;
+  /** 参与统计的运行记录数 */
+  readonly runCount: number;
+  /** Cache Break 总数（0 = 前缀纪律未被破坏） */
+  readonly breakCount: number;
+  /** 按原因分类计数（零值字段保留，列序恒定） */
+  readonly byReason: Readonly<Record<CacheBreakReason, number>>;
+}
+
 export interface JudgeStageReport {
   readonly runCount: number;
   readonly judgedCount: number;
@@ -126,6 +139,8 @@ export interface ExperimentReport {
   readonly negativeControl: NegativeControlReport | null;
   readonly verifierAblation: VerifierAblationReport | null;
   readonly dedup: readonly LedgerDedupConfigEntry[];
+  /** Cache Break 原因分类统计（spec US13） */
+  readonly cacheBreaks: readonly CacheBreakConfigEntry[];
   readonly judge: JudgeStageReport | null;
   readonly humanReview: HumanReviewOutput | null;
 }
@@ -161,6 +176,7 @@ export async function buildExperimentReport(
   const verifierAblation =
     plan.verifier === "on" ? buildVerifierAblation(mainCases, byCase, outcome.records) : null;
   const dedup = buildLedgerDedupReport(outcome.records);
+  const cacheBreaks = buildCacheBreakReport(outcome.records);
   const judge =
     plan.judge && deps.judgeClient !== undefined
       ? await runJudgeStage(outcome.cases, outcome.records, deps.judgeClient, deps, paths)
@@ -188,6 +204,7 @@ export async function buildExperimentReport(
     negativeControl,
     verifierAblation,
     dedup,
+    cacheBreaks,
     judge,
     humanReview,
   };
@@ -388,6 +405,42 @@ function buildLedgerDedupReport(records: readonly RunRecord[]): readonly LedgerD
     });
   }
   return perConfig;
+}
+
+/** Cache Break 原因分类统计（spec US13）：run 内相邻请求分歧归因，按 config 汇总 */
+export function buildCacheBreakReport(records: readonly RunRecord[]): readonly CacheBreakConfigEntry[] {
+  const perConfig: CacheBreakConfigEntry[] = [];
+  for (const configId of CONFIG_IDS) {
+    const configRecords = records.filter((record) => record.configId === configId);
+    if (configRecords.length === 0) {
+      continue;
+    }
+    const byReason = configRecords.reduce(
+      (tally, record) => {
+        const snapshot = record.effective ?? record.baseline;
+        return mergeReasonTallies(tally, tallyCacheBreakReasons(snapshot.audit.cacheBreaks ?? []));
+      },
+      tallyCacheBreakReasons([]),
+    );
+    perConfig.push({
+      configId,
+      runCount: configRecords.length,
+      breakCount: CACHE_BREAK_REASONS.reduce((sum, reason) => sum + byReason[reason], 0),
+      byReason,
+    });
+  }
+  return perConfig;
+}
+
+function mergeReasonTallies(
+  a: Readonly<Record<CacheBreakReason, number>>,
+  b: Readonly<Record<CacheBreakReason, number>>,
+): Readonly<Record<CacheBreakReason, number>> {
+  const merged = { ...a };
+  for (const reason of CACHE_BREAK_REASONS) {
+    merged[reason] = (merged[reason] ?? 0) + (b[reason] ?? 0);
+  }
+  return merged;
 }
 
 /** judge 判定链阶段（断点续跑：单元级落盘 judge/<source>/<caseId>/<configId>/rep-<rep>.json） */

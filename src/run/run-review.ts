@@ -195,6 +195,7 @@ async function finalizeRun(args: {
     toolCallLog: outcome.toolCallLog,
     phaseLog: outcome.phaseLog,
     rejections: outcome.rejections,
+    cacheBreaks: outcome.cacheBreaks,
     truncated: outcome.truncated,
     truncationReasons: outcome.truncationReasons,
     ...(args.prefetchRecords !== undefined ? { prefetch: args.prefetchRecords } : {}),

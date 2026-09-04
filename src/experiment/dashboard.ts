@@ -1,5 +1,6 @@
 import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
+import { CACHE_BREAK_REASONS } from "../loop/cache-break.js";
 import type { FlatMetrics, MetricsField, Stat } from "../metrics/types.js";
 import type { ExperimentReport } from "./report.js";
 
@@ -61,6 +62,7 @@ export function renderDashboardMarkdown(report: ExperimentReport): string {
   appendNegativeControl(lines, report);
   appendVerifierAblation(lines, report);
   appendDedup(lines, report);
+  appendCacheBreaks(lines, report);
   appendJudge(lines, report);
   appendHumanReview(lines, report);
   appendFailures(lines, report);
@@ -168,6 +170,24 @@ function appendDedup(lines: string[], report: ExperimentReport): void {
     lines.push(
       `| ${entry.configId} | ${entry.toolCalls} | ${entry.dedupCalls} | ${entry.dedupRatio === null ? "—" : `${round(entry.dedupRatio * 100, 1)}%`} |`,
     );
+  }
+  lines.push("");
+}
+
+/** Cache Break 原因分类（spec US13：归因缓存命中率波动；0 breaks = 前缀纪律未破坏） */
+function appendCacheBreaks(lines: string[], report: ExperimentReport): void {
+  if (report.cacheBreaks.length === 0) {
+    return;
+  }
+  lines.push("## Cache break classification (adjacent request prefix divergence, US13)");
+  lines.push("");
+  lines.push(
+    `| Config | Runs | Breaks | ${CACHE_BREAK_REASONS.join(" | ")} |`,
+  );
+  lines.push(`|---|---|---|${CACHE_BREAK_REASONS.map(() => "---").join("|")}|`);
+  for (const entry of report.cacheBreaks) {
+    const counts = CACHE_BREAK_REASONS.map((reason) => `${entry.byReason[reason]}`).join(" | ");
+    lines.push(`| ${entry.configId} | ${entry.runCount} | ${entry.breakCount} | ${counts} |`);
   }
   lines.push("");
 }

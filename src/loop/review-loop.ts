@@ -10,8 +10,9 @@ import type {
   ToolSchema,
 } from "../contracts/llm-client.js";
 import type { MRCase } from "../contracts/mr-case.js";
-import type { CandidateRejection, PhaseRecord, ReviewPhase, ToolCallRecord } from "../contracts/run.js";
+import type { CandidateRejection, CacheBreakRecord, PhaseRecord, ReviewPhase, ToolCallRecord } from "../contracts/run.js";
 import { applyCandidateGate } from "../gate/candidate-gate.js";
+import { classifyCacheBreaks } from "./cache-break.js";
 import { MAX_ROUNDS, MAX_TOOL_CALLS, TRUNCATION_MAX_ROUNDS, TRUNCATION_TOOL_BUDGET } from "./constants.js";
 import { buildInitialMessages, type ContextMessages } from "./messages.js";
 import type { CandidatesParseResult, VerificationParseResult } from "./parse.js";
@@ -44,6 +45,8 @@ export interface LoopOutcome {
   readonly requests: readonly LlmRequest[];
   readonly phaseLog: readonly PhaseRecord[];
   readonly toolCallLog: readonly ToolCallRecord[];
+  /** 相邻请求前缀分歧的 Cache Break 原因分类（spec US13；循环结束后对请求序列纯观测） */
+  readonly cacheBreaks: readonly CacheBreakRecord[];
   readonly toolCallCount: number;
   readonly rounds: number;
   readonly truncated: boolean;
@@ -109,7 +112,9 @@ export async function runReviewLoop(inputs: LoopInputs): Promise<LoopOutcome> {
   if (!complete) {
     state = { ...state, truncationReasons: appendReason(state.truncationReasons, TRUNCATION_MAX_ROUNDS) };
   }
-  return { ...state, truncated: !complete };
+  // Cache Break 原因分类（spec US13）：对已发出的请求序列做纯观测，不改变任何请求字节
+  const cacheBreaks = classifyCacheBreaks(state.requests);
+  return { ...state, cacheBreaks, truncated: !complete };
 }
 
 async function runRound(

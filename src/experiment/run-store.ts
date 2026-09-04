@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ConfigId } from "../contracts/config.js";
 import type { Finding } from "../contracts/finding.js";
 import type { LlmRequest, LlmUsage } from "../contracts/llm-client.js";
-import type { CandidateRejection, FullRepoRecord, PhaseRecord, RunAudit, RunResult, ToolCallRecord } from "../contracts/run.js";
+import type { CandidateRejection, CacheBreakRecord, FullRepoRecord, PhaseRecord, RunAudit, RunResult, ToolCallRecord } from "../contracts/run.js";
 import type { LedgerEntry } from "../contracts/ledger.js";
 import type { PrefetchLayerRecord } from "../contracts/prefetch.js";
 import type { ExperimentModel, ExperimentSource, RunUnit, VerifierMode } from "./plan.js";
@@ -22,6 +22,8 @@ export interface AuditLight {
   readonly toolCallLog: readonly ToolCallRecord[];
   readonly phaseLog: readonly PhaseRecord[];
   readonly rejections: readonly CandidateRejection[];
+  /** Cache Break 原因分类（spec US13；小体量留痕，旧记录缺省视同无 break） */
+  readonly cacheBreaks?: readonly CacheBreakRecord[];
   readonly truncated: boolean;
   readonly truncationReasons: readonly string[];
   readonly prefetch?: readonly PrefetchLayerRecord[];
@@ -87,6 +89,9 @@ export function toAuditLight(audit: RunAudit): AuditLight {
     toolCallLog: audit.toolCallLog,
     phaseLog: audit.phaseLog,
     rejections: audit.rejections,
+    ...(audit.cacheBreaks !== undefined && audit.cacheBreaks.length > 0
+      ? { cacheBreaks: audit.cacheBreaks }
+      : {}),
     truncated: audit.truncated,
     truncationReasons: audit.truncationReasons,
     ...(audit.prefetch !== undefined ? { prefetch: audit.prefetch } : {}),
@@ -103,6 +108,7 @@ export function recordToRunResult(record: RunRecord): RunResult {
     toolCallLog: snapshot.audit.toolCallLog,
     phaseLog: snapshot.audit.phaseLog,
     rejections: snapshot.audit.rejections,
+    cacheBreaks: snapshot.audit.cacheBreaks ?? [],
     truncated: snapshot.audit.truncated,
     truncationReasons: snapshot.audit.truncationReasons,
     ...(snapshot.audit.prefetch !== undefined ? { prefetch: snapshot.audit.prefetch } : {}),

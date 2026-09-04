@@ -42,6 +42,7 @@ const AUDIT: RunAudit = {
   toolCallLog: [{ name: "review.get_file", argumentsJson: "{}", resultSummary: "loaded" }],
   phaseLog: [{ round: 1, phase: "Deep Reasoning", requestCount: 1 }],
   rejections: [],
+  cacheBreaks: [],
   truncated: false,
   truncationReasons: [],
 };

@@ -5,6 +5,7 @@ import type { Finding } from "../contracts/finding.js";
 import type { LedgerEntry } from "../contracts/ledger.js";
 import type { LlmRequest, LlmUsage } from "../contracts/llm-client.js";
 import type { PrefetchLayerRecord } from "../contracts/prefetch.js";
+import type { CacheBreakRecord } from "../contracts/run.js";
 import type { CandidateRejection, FullRepoRecord, PhaseRecord, RunAudit, ToolCallRecord } from "../contracts/run.js";
 
 /** 审计文件默认落盘目录（相对 cwd；测试注入临时目录） */
@@ -32,6 +33,8 @@ export interface AuditFileContent {
   readonly findings: readonly Finding[];
   readonly phaseLog: readonly PhaseRecord[];
   readonly rejections: readonly CandidateRejection[];
+  /** 相邻请求前缀分歧的 Cache Break 原因分类（spec US13；与 rejections/phaseLog 同级留痕） */
+  readonly cacheBreaks: readonly CacheBreakRecord[];
   readonly requests: readonly LlmRequest[];
   readonly toolCallLog: readonly ToolCallRecord[];
   /** config B 预取注入层记账（非预取配置缺省） */
@@ -83,6 +86,7 @@ export function buildAuditFileContent(args: {
     findings: args.findings,
     phaseLog: args.audit.phaseLog,
     rejections: args.audit.rejections,
+    cacheBreaks: args.audit.cacheBreaks,
     requests: args.audit.requests,
     toolCallLog: args.audit.toolCallLog,
     ...(args.prefetch !== undefined ? { prefetch: args.prefetch } : {}),

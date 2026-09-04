@@ -62,6 +62,7 @@ function sampleRunResult(): RunResult {
       toolCallLog: [],
       phaseLog: [],
       rejections: [],
+      cacheBreaks: [],
       truncated: false,
       truncationReasons: [],
     },

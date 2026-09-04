@@ -81,6 +81,8 @@ export function referenceRecordToRunResult(record: ReferenceRunRecord): RunResul
       toolCallLog: [],
       phaseLog: [],
       rejections: [],
+      // 外部参照不经 harness 循环，无请求序列可分类（Claude Code CLI 不暴露请求字节）
+      cacheBreaks: [],
       truncated: false,
       truncationReasons: [],
     },

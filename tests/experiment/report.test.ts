@@ -318,6 +318,7 @@ function craftRecord(
       toolCallLog,
       phaseLog: [],
       rejections: [],
+      cacheBreaks: [],
       truncated: false,
       truncationReasons: [],
     },

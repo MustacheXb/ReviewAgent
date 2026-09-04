@@ -136,6 +136,8 @@ describe("referenceRecordToRunResult（同一 metrics 管线的投影）", () =>
       toolCallLog: [],
       phaseLog: [],
       rejections: [],
+      // 外部参照不经 harness 循环，无请求序列可分类
+      cacheBreaks: [],
       truncated: false,
       truncationReasons: [],
     });

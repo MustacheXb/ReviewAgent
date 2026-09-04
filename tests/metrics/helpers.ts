@@ -71,6 +71,7 @@ export function makeRunResult(overrides: {
     toolCallLog: [...toolCallLog],
     phaseLog: [],
     rejections: [],
+    cacheBreaks: [],
     truncated: false,
     truncationReasons: [],
   };

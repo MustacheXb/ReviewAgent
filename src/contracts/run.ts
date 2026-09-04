@@ -43,6 +43,8 @@ export interface RunAudit {
   readonly phaseLog: readonly PhaseRecord[];
   /** Evidence Gate 等候选拦截记录（No Evidence, No Finding 的留痕） */
   readonly rejections: readonly CandidateRejection[];
+  /** 相邻请求前缀分歧的 Cache Break 原因分类（spec #1 user story 13；纯观测，不改变请求字节） */
+  readonly cacheBreaks: readonly CacheBreakRecord[];
   /** 是否被硬上界截断 */
   readonly truncated: boolean;
   /** 截断原因（MAX_ROUNDS_REACHED / TOOL_BUDGET_EXHAUSTED） */
@@ -53,6 +55,32 @@ export interface RunAudit {
   readonly fullRepo?: FullRepoRecord;
   /** config E Context Ledger 的登记快照（工单 #8 扩展字段；非 ledger 配置与显式工具覆盖缺省） */
   readonly ledger?: readonly LedgerEntry[];
+}
+
+/** Cache Break 原因分类（spec #1 user story 13：归因缓存命中率波动） */
+export type CacheBreakReason =
+  /** model 字段分歧（请求元数据，Zone 外） */
+  | "MODEL_CHANGED"
+  /** Zone A 头部 system 消息（Stable Prefix）字节分歧 */
+  | "SYSTEM_PROMPT_CHANGED"
+  /** Zone A 工具 schema 字节分歧（消息序列一致时才可见；线上 wire 布局中 tools 位于 messages 之后） */
+  | "TOOL_SCHEMA_CHANGED"
+  /** 消息序列中段分歧（重排 / 中段插入 / 改写：破坏 append-only 前缀纪律） */
+  | "CONTEXT_REORDERED";
+
+/** 分歧命中的 Zone 分区（CONTEXT.md 术语：A = Stable Prefix；B/C = 消息序列中段） */
+export type CacheBreakZone = "MODEL" | "A" | "B/C";
+
+/** 一对相邻请求的前缀分歧留痕（requests[i-1] vs requests[i]） */
+export interface CacheBreakRecord {
+  /** 分歧对中后一请求在 requests 数组中的下标 */
+  readonly requestIndex: number;
+  /** 原因分类 */
+  readonly reason: CacheBreakReason;
+  /** 分歧命中的 Zone 分区 */
+  readonly zone: CacheBreakZone;
+  /** 分歧在前一请求规范字节布局（model → messages → tools）中的首个字节位置 */
+  readonly divergeByteOffset: number;
 }
 
 /** config C 全仓注入的留痕（超限截断必须显式，不静默丢弃） */
