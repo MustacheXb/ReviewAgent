@@ -132,6 +132,13 @@ export function recordToBaselineRunResult(record: RunRecord): RunResult {
   return recordToRunResult({ ...record, effective: null });
 }
 
+/** readAll 的结果：有效记录 + 因损坏被跳过的文件清单（相对 rootDir；不静默丢弃） */
+export interface ReadAllResult {
+  readonly records: readonly RunRecord[];
+  /** 读取/解析/形状校验失败的 rep-*.json（视同未完成，重跑覆盖；留痕供报告上报） */
+  readonly skippedFiles: readonly string[];
+}
+
 /** 运行记录存储：读写 + 断点续跑扫描 */
 export class RunStore {
   private readonly rootDir: string;
@@ -179,14 +186,15 @@ export class RunStore {
     }
   }
 
-  /** 全量扫描已完成的记录（报告重建 / 断点统计）；目录不存在返回空数组 */
-  async readAll(): Promise<readonly RunRecord[]> {
+  /** 全量扫描已完成的记录（报告重建 / 断点统计）；目录不存在时记录与跳过清单均为空 */
+  async readAll(): Promise<ReadAllResult> {
     try {
       await stat(this.rootDir);
     } catch {
-      return [];
+      return { records: [], skippedFiles: [] };
     }
     const records: RunRecord[] = [];
+    const skippedFiles: string[] = [];
     const sources = await listDirectories(this.rootDir);
     for (const source of sources) {
       const caseDirs = await listDirectories(path.join(this.rootDir, source));
@@ -195,17 +203,19 @@ export class RunStore {
         for (const configDir of configDirs) {
           const repFiles = await listFiles(path.join(this.rootDir, source, caseDir, configDir));
           for (const repFile of repFiles.filter((name) => /^rep-\d+\.json$/.test(name))) {
-            const record = await this.readRecordFile(
-              path.join(this.rootDir, source, caseDir, configDir, repFile),
-            );
+            const filePath = path.join(this.rootDir, source, caseDir, configDir, repFile);
+            const record = await this.readRecordFile(filePath);
             if (record !== null) {
               records.push(record);
+            } else {
+              // 读取/解析/形状校验失败：视同未完成（重跑覆盖），但不再静默——留痕可审计
+              skippedFiles.push(path.relative(this.rootDir, filePath));
             }
           }
         }
       }
     }
-    return records;
+    return { records, skippedFiles };
   }
 
   private async readRecordFile(filePath: string): Promise<RunRecord | null> {

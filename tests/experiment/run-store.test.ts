@@ -170,9 +170,9 @@ describe("RunStore（断点续跑读写）", () => {
     expect(await store.read(unit)).toBeNull();
   });
 
-  it("readAll 递归扫描 rep-*.json，忽略其他文件；目录缺失返回空数组", async () => {
+  it("readAll 递归扫描 rep-*.json，忽略其他文件；损坏文件上报 skippedFiles；目录缺失返回空结果", async () => {
     const empty = new RunStore(path.join(storeDir, "missing-root"));
-    expect(await empty.readAll()).toEqual([]);
+    expect(await empty.readAll()).toEqual({ records: [], skippedFiles: [] });
     const store = new RunStore(path.join(storeDir, "scan"));
     await store.save(record({ rep: 1 }));
     await store.save(
@@ -185,15 +185,17 @@ describe("RunStore（断点续跑读写）", () => {
     );
     const unit: RunUnit = { source: "defects4j", caseId: "case-1", configId: "A", rep: 3 };
     await mkdir(path.dirname(store.pathOf(unit)), { recursive: true });
-    await writeFile(store.pathOf(unit), JSON.stringify({ stray: true }), "utf8"); // 形状不符 → 不计入
+    await writeFile(store.pathOf(unit), JSON.stringify({ stray: true }), "utf8"); // 形状不符 → 不计入 records
     await mkdir(path.join(store.root, "defects4j", "case-1", "A", "notes.txt"), {
       recursive: true,
     });
     const all = await store.readAll();
-    expect(all.map((entry) => `${entry.source}/${entry.caseId}/${entry.configId}/rep-${entry.rep}`).sort()).toEqual([
+    expect(all.records.map((entry) => `${entry.source}/${entry.caseId}/${entry.configId}/rep-${entry.rep}`).sort()).toEqual([
       "clean-mr/case-2/C/rep-2",
       "defects4j/case-1/A/rep-1",
     ]);
+    // 形状不符的 rep-*.json 不再被静默丢弃：上报相对路径（视同未完成，重跑覆盖）
+    expect(all.skippedFiles).toEqual([path.relative(store.root, store.pathOf(unit))]);
   });
 
   it("caseId 含路径分隔符时按 sanitize 落盘（防目录逃逸）", async () => {

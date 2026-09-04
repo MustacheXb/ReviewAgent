@@ -110,15 +110,20 @@ describe("ReferenceRunStore", () => {
     expect(await store.read(base)).toBeNull();
   });
 
-  it("readAll 递归扫描全部记录；根目录不存在返回空数组", async () => {
+  it("readAll 递归扫描全部记录；损坏文件上报 skippedFiles；根目录不存在返回空结果", async () => {
     const empty = new ReferenceRunStore(path.join(workDir, "missing-root"));
-    expect(await empty.readAll()).toEqual([]);
+    expect(await empty.readAll()).toEqual({ records: [], skippedFiles: [] });
     const store = new ReferenceRunStore(path.join(workDir, "all"));
     await store.save(makeRecord({ caseId: "all-1", rep: 1 }));
     await store.save(makeRecord({ caseId: "all-2", rep: 1, source: "clean-mr" }));
-    const records = await store.readAll();
-    expect(records).toHaveLength(2);
-    expect(new Set(records.map((r) => r.caseId))).toEqual(new Set(["all-1", "all-2"]));
+    const corrupt = { source: "defects4j" as const, caseId: "all-corrupt", rep: 1 };
+    await mkdir(path.dirname(store.pathOf(corrupt)), { recursive: true });
+    await writeFile(store.pathOf(corrupt), "{ not json", "utf8"); // 解析失败 → 不计入 records
+    const result = await store.readAll();
+    expect(result.records).toHaveLength(2);
+    expect(new Set(result.records.map((r) => r.caseId))).toEqual(new Set(["all-1", "all-2"]));
+    // 损坏的 rep-*.json 不再被静默丢弃：上报相对路径（视同未完成，重跑覆盖）
+    expect(result.skippedFiles).toEqual([path.relative(store.root, store.pathOf(corrupt))]);
   });
 });
 

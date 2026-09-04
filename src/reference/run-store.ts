@@ -89,9 +89,15 @@ export function referenceRecordToRunResult(record: ReferenceRunRecord): RunResul
   };
 }
 
+/** readAll 的结果：有效记录 + 因损坏被跳过的文件清单（相对 rootDir；不静默丢弃） */
+export interface ReferenceReadAllResult {
+  readonly records: readonly ReferenceRunRecord[];
+  /** 读取/解析/形状校验失败的 rep-*.json（视同未完成，重跑覆盖；留痕供报告上报） */
+  readonly skippedFiles: readonly string[];
+}
+
 /** 运行记录存储：读写 + 断点续跑扫描 */
-export class ReferenceRunStore {
-  private readonly rootDir: string;
+export class ReferenceRunStore {  private readonly rootDir: string;
 
   constructor(rootDir: string) {
     if (typeof rootDir !== "string" || rootDir.trim() === "") {
@@ -155,28 +161,33 @@ export class ReferenceRunStore {
     }
   }
 
-  /** 全量扫描已完成记录（报告重建 / 断点统计）；目录不存在返回空数组 */
-  async readAll(): Promise<readonly ReferenceRunRecord[]> {
+  /** 全量扫描已完成记录（报告重建 / 断点统计）；目录不存在时记录与跳过清单均为空 */
+  async readAll(): Promise<ReferenceReadAllResult> {
     const runsRoot = path.join(this.rootDir, "runs");
     try {
       await stat(runsRoot);
     } catch {
-      return [];
+      return { records: [], skippedFiles: [] };
     }
     const records: ReferenceRunRecord[] = [];
+    const skippedFiles: string[] = [];
     for (const source of await listDirectories(runsRoot)) {
       const caseDirs = await listDirectories(path.join(runsRoot, source));
       for (const caseDir of caseDirs) {
         const repFiles = await listFiles(path.join(runsRoot, source, caseDir));
         for (const repFile of repFiles.filter((name) => /^rep-\d+\.json$/.test(name))) {
-          const record = await this.readRecordFile(path.join(runsRoot, source, caseDir, repFile));
+          const filePath = path.join(runsRoot, source, caseDir, repFile);
+          const record = await this.readRecordFile(filePath);
           if (record !== null) {
             records.push(record);
+          } else {
+            // 读取/解析/形状校验失败：视同未完成（重跑覆盖），但不再静默——留痕可审计
+            skippedFiles.push(path.relative(this.rootDir, filePath));
           }
         }
       }
     }
-    return records;
+    return { records, skippedFiles };
   }
 
   private async readRecordFile(filePath: string): Promise<ReferenceRunRecord | null> {
@@ -204,7 +215,8 @@ function safeSegment(caseId: string): string {
   return safe === "." || safe === ".." ? "_" : safe;
 }
 
-function isReferenceRunRecordShape(value: unknown): value is ReferenceRunRecord {  if (typeof value !== "object" || value === null) {
+function isReferenceRunRecordShape(value: unknown): value is ReferenceRunRecord {
+  if (typeof value !== "object" || value === null) {
     return false;
   }
   const record = value as Partial<ReferenceRunRecord>;

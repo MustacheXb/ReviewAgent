@@ -138,6 +138,8 @@ export interface ExperimentReport {
   readonly resumed: number;
   readonly failed: number;
   readonly failures: readonly RunFailure[];
+  /** --report-only 重建时因损坏被跳过的记录文件（相对 runs 根；不静默丢弃的审计口径） */
+  readonly corruptRecordFiles: readonly string[];
   /** 主集（truth ≠ null）case 数 */
   readonly caseCount: number;
   /** 阴性对照（clean MR）case 数 */
@@ -168,6 +170,8 @@ export async function buildExperimentReport(
     readonly executed: number;
     readonly resumed: number;
     readonly failures: readonly RunFailure[];
+    /** 重建路径下的损坏记录文件清单（在线运行路径无此字段） */
+    readonly skippedCorruptFiles?: readonly string[];
   },
   deps: ReportDeps,
   paths: RunnerPaths,
@@ -205,6 +209,7 @@ export async function buildExperimentReport(
     resumed: outcome.resumed,
     failed: outcome.failures.length,
     failures: outcome.failures,
+    corruptRecordFiles: outcome.skippedCorruptFiles ?? [],
     caseCount: mainCases.length,
     negativeControlCaseCount: negativeCases.length,
     metrics,
@@ -593,12 +598,13 @@ export async function rebuildExperimentOutcome(
   readonly executed: number;
   readonly resumed: number;
   readonly failures: readonly RunFailure[];
+  readonly skippedCorruptFiles: readonly string[];
 }> {
   const plan = await loadPlan();
   const cases = await loadCases();
   const expanded = expandPlan(plan, cases);
   const store = new RunStore(path.join(experimentRoot, "runs"));
-  const all = await store.readAll();
+  const { records: all, skippedFiles } = await store.readAll();
   const plannedKeys = new Set(expanded.units.map(runUnitKeyString));
   const records = expanded.units.flatMap((unit) => {
     const record = all.find(
@@ -617,6 +623,7 @@ export async function rebuildExperimentOutcome(
     executed: 0,
     resumed: records.length,
     failures: await readFailures(experimentRoot),
+    skippedCorruptFiles: skippedFiles,
   };
 }
 

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -15,8 +15,10 @@ import {
 } from "../../src/experiment/report.js";
 import type { ExperimentReport } from "../../src/experiment/report.js";
 import { toRunSnapshot } from "../../src/experiment/run-store.js";
+import { RunStore } from "../../src/experiment/run-store.js";
 import type { RunRecord } from "../../src/experiment/run-store.js";
-import type { ExperimentSource } from "../../src/experiment/plan.js";
+import { renderDashboardMarkdown } from "../../src/experiment/dashboard.js";
+import type { ExperimentSource, RunUnit } from "../../src/experiment/plan.js";
 import { HAPPY_PATH_FINDING, HAPPY_PATH_RESPONSES, HAPPY_PATH_TOTAL_USAGE } from "../helpers/happy-path-script.js";
 import {
   experimentCleanCase,
@@ -296,6 +298,36 @@ describe("报告落盘与重建", () => {
       () => loadPersistedCases(experimentRoot),
     );
     expect(rebuilt.failures.map((failure) => failure.caseId)).toEqual(["fail-main-2"]);
+  });
+
+  it("重建遇损坏记录：不静默丢弃——skippedCorruptFiles 上报，报告与 dashboard 留痕", async () => {
+    const experimentRoot = path.join(workDir, "with-corrupt");
+    const outcome = await runExperiment(
+      experimentPlan({ experimentId: "with-corrupt" }),
+      [experimentMainCase("corrupt-main-1")],
+      { llmClient: scriptedLlmClient(1) },
+      { experimentRoot },
+    );
+    expect(outcome.failures).toEqual([]);
+    // 覆写唯一一条记录为损坏 JSON → 重建时视同未完成，但不再静默丢弃
+    const store = new RunStore(path.join(experimentRoot, "runs"));
+    const unit: RunUnit = { source: "defects4j", caseId: "corrupt-main-1", configId: "A", rep: 1 };
+    await writeFile(store.pathOf(unit), "{ not json", "utf8");
+    const rebuilt = await rebuildExperimentOutcome(
+      experimentRoot,
+      () => loadPersistedPlan(experimentRoot),
+      () => loadPersistedCases(experimentRoot),
+    );
+    expect(rebuilt.records).toHaveLength(0);
+    expect(rebuilt.skippedCorruptFiles).toEqual([
+      path.join("defects4j", "corrupt-main-1", "A", "rep-1.json"),
+    ]);
+    const report = await buildExperimentReport(rebuilt, {}, { experimentRoot });
+    expect(report.corruptRecordFiles).toEqual(rebuilt.skippedCorruptFiles);
+    const markdown = renderDashboardMarkdown(report);
+    expect(markdown).toContain(
+      "## Corrupt run records (1; treated as incomplete, rerun overwrites)",
+    );
   });
 });
 

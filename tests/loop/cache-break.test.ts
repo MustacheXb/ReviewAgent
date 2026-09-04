@@ -326,6 +326,7 @@ describe("报告与 dashboard — Cache Break 统计可见", () => {
       resumed: 0,
       failed: 0,
       failures: [],
+      corruptRecordFiles: [],
       caseCount: 1,
       negativeControlCaseCount: 0,
       metrics: null,

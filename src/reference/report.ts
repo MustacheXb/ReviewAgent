@@ -85,6 +85,8 @@ export interface ClaudeCodeReferenceReport {
   readonly resumed: number;
   readonly failed: number;
   readonly failures: readonly ReferenceFailure[];
+  /** 重建路径下因损坏被跳过的记录文件（相对 referenceRoot；在线运行路径恒空） */
+  readonly corruptRecordFiles: readonly string[];
   /** 主集（truth ≠ null）case 数 */
   readonly caseCount: number;
   /** 阴性对照（clean MR）case 数 */
@@ -107,7 +109,10 @@ export function buildClaudeCodeReferenceReport(
   outcome: Pick<
     ReferenceOutcome,
     "plan" | "records" | "cases" | "executed" | "resumed" | "failures"
-  >,
+  > & {
+    /** 重建路径下的损坏记录文件清单（在线运行路径无此字段） */
+    readonly skippedCorruptFiles?: readonly string[];
+  },
 ): ClaudeCodeReferenceReport {
   const { plan } = outcome;
   const byCase = groupRecordsByCase(outcome.records);
@@ -126,6 +131,7 @@ export function buildClaudeCodeReferenceReport(
     resumed: outcome.resumed,
     failed: outcome.failures.length,
     failures: outcome.failures,
+    corruptRecordFiles: outcome.skippedCorruptFiles ?? [],
     caseCount: mainCases.length,
     negativeControlCaseCount: negativeCases.length,
     metrics,
@@ -287,13 +293,15 @@ export async function rebuildReferenceOutcome(
   loadPlan: () => Promise<ClaudeCodeReferencePlan>,
   loadCases: () => Promise<readonly MRCase[]>,
 ): Promise<
-  Pick<ReferenceOutcome, "plan" | "records" | "cases" | "executed" | "resumed" | "failures">
+  Pick<ReferenceOutcome, "plan" | "records" | "cases" | "executed" | "resumed" | "failures"> & {
+    readonly skippedCorruptFiles: readonly string[];
+  }
 > {
   const plan = await loadPlan();
   const cases = await loadCases();
   const expanded = expandReferencePlan(plan, cases);
   const store = new ReferenceRunStore(referenceRoot);
-  const all = await store.readAll();
+  const { records: all, skippedFiles } = await store.readAll();
   const plannedKeys = new Set(expanded.units.map(unitKeyOf));
   const records = expanded.units.flatMap((unit) => {
     const record = all.find(
@@ -313,6 +321,7 @@ export async function rebuildReferenceOutcome(
     executed: 0,
     resumed: records.length,
     failures: await readFailures(referenceRoot),
+    skippedCorruptFiles: skippedFiles,
   };
 }
 
@@ -387,6 +396,7 @@ export function renderReferenceDashboardMarkdown(report: ClaudeCodeReferenceRepo
   appendReferenceNormalization(lines, report);
   appendReferenceRuntime(lines, report);
   appendReferenceFailures(lines, report);
+  appendReferenceCorruptRecords(lines, report);
   return `${lines.join("\n")}\n`;
 }
 
@@ -486,6 +496,27 @@ function appendReferenceFailures(lines: string[], report: ClaudeCodeReferenceRep
   }
   if (report.failures.length > 20) {
     lines.push(`- ... and ${report.failures.length - 20} more (see reference-report.json)`);
+  }
+  lines.push("");
+}
+
+/** 损坏记录上报（run-store readAll 跳过的 rep-*.json；视同未完成，重跑覆盖） */
+function appendReferenceCorruptRecords(
+  lines: string[],
+  report: ClaudeCodeReferenceReport,
+): void {
+  if (report.corruptRecordFiles.length === 0) {
+    return;
+  }
+  lines.push(
+    `## Corrupt run records (${report.corruptRecordFiles.length}; treated as incomplete, rerun overwrites)`,
+  );
+  lines.push("");
+  for (const file of report.corruptRecordFiles.slice(0, 20)) {
+    lines.push(`- \`${file}\``);
+  }
+  if (report.corruptRecordFiles.length > 20) {
+    lines.push(`- ... and ${report.corruptRecordFiles.length - 20} more (see reference-report.json)`);
   }
   lines.push("");
 }

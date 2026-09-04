@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -22,7 +22,12 @@ import {
   referenceMainCase,
   referencePlan,
 } from "./helpers.js";
-import { runClaudeCodeReference } from "../../src/reference/runner.js";
+import {
+  loadPersistedReferenceCases,
+  loadPersistedReferencePlan,
+  runClaudeCodeReference,
+} from "../../src/reference/runner.js";
+import { ReferenceRunStore } from "../../src/reference/run-store.js";
 
 /**
  * 外部参照报告装配（Ticket 13 验收）：
@@ -305,5 +310,41 @@ describe("端到端：runner → report → 落盘 → --report-only 重建", ()
     expect(rebuiltReport.normalization).toEqual(report.normalization);
     expect(rebuiltReport.metrics?.perConfig["claude-code"]?.cold?.values.lineTp?.mean).toBe(1);
     expect(rebuiltReport.negativeControl?.totalFalsePositives).toBe(2);
+    // 全部记录合法：损坏清单恒空（不谎报）
+    expect(rebuilt.skippedCorruptFiles).toEqual([]);
+    expect(rebuiltReport.corruptRecordFiles).toEqual([]);
+  });
+
+  it("重建遇损坏记录：不静默丢弃——skippedCorruptFiles 上报，报告与 dashboard 留痕", async () => {
+    const referenceRoot = path.join(workDir, "ref-corrupt");
+    const client = FakeClaudeCodeClient.fromOutputs([
+      okRunOutput(claudeStdout({ findings: [findingJson("F001")] })),
+    ]);
+    await runClaudeCodeReference(
+      referencePlan({ referenceId: "ref-corrupt" }),
+      [referenceMainCase("corrupt-main-001")],
+      { client },
+      { referenceRoot },
+    );
+    // 覆写唯一一条记录为损坏 JSON → 重建时视同未完成，但不再静默丢弃
+    const store = new ReferenceRunStore(referenceRoot);
+    const unit = { source: "defects4j" as const, caseId: "corrupt-main-001", rep: 1 };
+    await writeFile(store.pathOf(unit), "{ not json", "utf8");
+    const rebuilt = await rebuildReferenceOutcome(
+      referenceRoot,
+      () => loadPersistedReferencePlan(referenceRoot),
+      () => loadPersistedReferenceCases(referenceRoot),
+    );
+    expect(rebuilt.records).toHaveLength(0);
+    expect(rebuilt.skippedCorruptFiles).toEqual([
+      path.join("runs", "defects4j", "corrupt-main-001", "rep-1.json"),
+    ]);
+    const report = buildClaudeCodeReferenceReport(rebuilt);
+    expect(report.corruptRecordFiles).toEqual(rebuilt.skippedCorruptFiles);
+    const markdown = renderReferenceDashboardMarkdown(report);
+    expect(markdown).toContain(
+      "## Corrupt run records (1; treated as incomplete, rerun overwrites)",
+    );
+    expect(markdown).toContain("Corrupt run records");
   });
 });

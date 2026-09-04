@@ -59,6 +59,7 @@ function buildReport(options: MetricsOptions = DEFAULT_METRICS_OPTIONS): Experim
     resumed: 0,
     failed: 0,
     failures: [],
+    corruptRecordFiles: [],
     caseCount: 1,
     negativeControlCaseCount: 0,
     metrics: buildMetricsReport([case1], options),

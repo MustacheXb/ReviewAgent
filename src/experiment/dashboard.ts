@@ -67,6 +67,7 @@ export function renderDashboardMarkdown(report: ExperimentReport): string {
   appendJudge(lines, report);
   appendHumanReview(lines, report);
   appendFailures(lines, report);
+  appendCorruptRecords(lines, report);
   return `${lines.join("\n")}\n`;
 }
 
@@ -282,6 +283,24 @@ function appendFailures(lines: string[], report: ExperimentReport): void {
   }
   if (report.failures.length > 20) {
     lines.push(`- ... and ${report.failures.length - 20} more (see report.json)`);
+  }
+  lines.push("");
+}
+
+/** 损坏记录上报（run-store readAll 跳过的 rep-*.json；视同未完成，重跑覆盖） */
+function appendCorruptRecords(lines: string[], report: ExperimentReport): void {
+  if (report.corruptRecordFiles.length === 0) {
+    return;
+  }
+  lines.push(
+    `## Corrupt run records (${report.corruptRecordFiles.length}; treated as incomplete, rerun overwrites)`,
+  );
+  lines.push("");
+  for (const file of report.corruptRecordFiles.slice(0, 20)) {
+    lines.push(`- \`${file}\``);
+  }
+  if (report.corruptRecordFiles.length > 20) {
+    lines.push(`- ... and ${report.corruptRecordFiles.length - 20} more (see report.json)`);
   }
   lines.push("");
 }
