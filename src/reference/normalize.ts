@@ -125,16 +125,19 @@ function mapUsage(raw: unknown, notes: string[]): LlmUsage {
     inputTokens: nonNegativeIntOrZero(record.input_tokens, "usage.input_tokens", notes),
     outputTokens: nonNegativeIntOrZero(record.output_tokens, "usage.output_tokens", notes),
   };
-  const cacheRead = nonNegativeIntOrZero(
-    record.cache_read_input_tokens,
-    "usage.cache_read_input_tokens",
-    notes,
-  );
-  const cacheWrite = nonNegativeIntOrZero(
-    record.cache_creation_input_tokens,
-    "usage.cache_creation_input_tokens",
-    notes,
-  );
+  // 缓存字段可选：缺失静默记 0（CLI 常在零缓存时省略）；存在但非法才留痕
+  const cacheRead =
+    record.cache_read_input_tokens === undefined
+      ? 0
+      : nonNegativeIntOrZero(record.cache_read_input_tokens, "usage.cache_read_input_tokens", notes);
+  const cacheWrite =
+    record.cache_creation_input_tokens === undefined
+      ? 0
+      : nonNegativeIntOrZero(
+          record.cache_creation_input_tokens,
+          "usage.cache_creation_input_tokens",
+          notes,
+        );
   // 与 DeepSeekClient 同风格：仅在上报非零时携带可选字段
   if (cacheRead > 0) {
     return { ...usage, cacheReadTokens: cacheRead, ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}) };
@@ -198,22 +201,25 @@ export function normalizeClaudeCodeRun(raw: ClaudeCodeRunOutput): NormalizedClau
   };
 }
 
-/** 从 result 文本提取 findings 载荷（JSON 值；提取不到返回 null） */
+/** 从 result 文本提取 findings 载荷（JSON 候选按序尝试；提取不到返回 null） */
 export function extractFindingsPayload(resultText: string): unknown {
   const trimmed = resultText.trim();
   if (trimmed.length === 0) {
     return null;
   }
+  // 候选顺序：全文 → 方括号子串 → 花括号子串。
+  // 方括号先于花括号：裸数组 [{...}] 的载荷里，花括号子串会命中首个对象
+  // （单元素数组时恰好可解析，误把数组降级成对象）；方括号子串则取回完整数组。
   const candidates = [stripCodeFence(trimmed)];
-  const braceStart = trimmed.indexOf("{");
-  const braceEnd = trimmed.lastIndexOf("}");
-  if (braceStart >= 0 && braceEnd > braceStart) {
-    candidates.push(stripCodeFence(trimmed.slice(braceStart, braceEnd + 1)));
-  }
   const bracketStart = trimmed.indexOf("[");
   const bracketEnd = trimmed.lastIndexOf("]");
   if (bracketStart >= 0 && bracketEnd > bracketStart) {
     candidates.push(stripCodeFence(trimmed.slice(bracketStart, bracketEnd + 1)));
+  }
+  const braceStart = trimmed.indexOf("{");
+  const braceEnd = trimmed.lastIndexOf("}");
+  if (braceStart >= 0 && braceEnd > braceStart) {
+    candidates.push(stripCodeFence(trimmed.slice(braceStart, braceEnd + 1)));
   }
   for (const candidate of candidates) {
     const value = tryParseJson(candidate);

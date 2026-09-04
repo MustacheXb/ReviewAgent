@@ -104,14 +104,12 @@ export class ReferenceRunStore {
 
   /** 记录文件路径：<root>/runs/<source>/<caseId>/rep-<rep>.json */
   pathOf(unit: ReferenceRunUnit): string {
-    const safeCaseId = unit.caseId.replace(/[^A-Za-z0-9_.-]/g, "_");
-    return path.join(this.rootDir, "runs", unit.source, safeCaseId, `rep-${unit.rep}.json`);
+    return path.join(this.rootDir, "runs", unit.source, safeSegment(unit.caseId), `rep-${unit.rep}.json`);
   }
 
   /** raw 档案路径：<root>/raw/<source>/<caseId>/rep-<rep>.json */
   rawPathOf(unit: ReferenceRunUnit): string {
-    const safeCaseId = unit.caseId.replace(/[^A-Za-z0-9_.-]/g, "_");
-    return path.join(this.rootDir, "raw", unit.source, safeCaseId, `rep-${unit.rep}.json`);
+    return path.join(this.rootDir, "raw", unit.source, safeSegment(unit.caseId), `rep-${unit.rep}.json`);
   }
 
   /** 读单条记录；不存在或损坏返回 null（损坏视同未完成，重跑覆盖） */
@@ -195,8 +193,16 @@ export class ReferenceRunStore {
   }
 }
 
-function isReferenceRunRecordShape(value: unknown): value is ReferenceRunRecord {
-  if (typeof value !== "object" || value === null) {
+/**
+ * caseId → 路径段安全化：非法字符替换为下划线；
+ * 恰为 "." / ".." 的段（唯一会目录上跳的字面量）替换为 "_"。
+ */
+function safeSegment(caseId: string): string {
+  const safe = caseId.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return safe === "." || safe === ".." ? "_" : safe;
+}
+
+function isReferenceRunRecordShape(value: unknown): value is ReferenceRunRecord {  if (typeof value !== "object" || value === null) {
     return false;
   }
   const record = value as Partial<ReferenceRunRecord>;

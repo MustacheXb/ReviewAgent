@@ -138,7 +138,8 @@ export function parseReferenceArgs(argv: readonly string[]): ParseReferenceArgsR
       if (typeof value !== "string") {
         return value;
       }
-      const parsed = parseInt(value, 10);
+      // Number + isInteger（parseInt 会把 "1.5" 静默截成 1，放过非法输入）
+      const parsed = Number(value);
       if (!Number.isInteger(parsed) || parsed < min) {
         return { error: `${flag} must be an integer >= ${min} (got ${JSON.stringify(value)})` };
       }

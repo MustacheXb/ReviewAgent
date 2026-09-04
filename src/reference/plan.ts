@@ -166,6 +166,8 @@ export function expandReferencePlan(
 
 /** 单元键的稳定字符串形式（runs/<source>/<caseId>/rep-<rep> 的目录骨架） */
 export function referenceUnitKeyPath(unit: ReferenceRunUnit): string {
-  const safeCaseId = unit.caseId.replace(/[^A-Za-z0-9_.-]/g, "_");
+  const safe = unit.caseId.replace(/[^A-Za-z0-9_.-]/g, "_");
+  // 恰为 "." / ".." 的段替换为 "_"（与 run-store safeSegment 同口径的路径防线）
+  const safeCaseId = safe === "." || safe === ".." ? "_" : safe;
   return `${unit.source}/${safeCaseId}/rep-${unit.rep}`;
 }
