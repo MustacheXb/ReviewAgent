@@ -91,21 +91,21 @@ describe("DeepSeekClient — API key handling", () => {
 
 describe("DeepSeekClient — constructor option validation", () => {
   it("rejects invalid baseUrl, timeoutMs and maxRetries values", () => {
-    expect(() => new DeepSeekClient({ apiKey: "k", baseUrl: "ftp://api.example.com" })).toThrowError(
+    expect(() => new DeepSeekClient({ apiKey: "test-key-001", baseUrl: "ftp://api.example.com" })).toThrowError(
       /baseUrl must start with/,
     );
-    expect(() => new DeepSeekClient({ apiKey: "k", timeoutMs: 0 })).toThrowError(/timeoutMs must be a positive integer/);
-    expect(() => new DeepSeekClient({ apiKey: "k", maxRetries: -1 })).toThrowError(
+    expect(() => new DeepSeekClient({ apiKey: "test-key-001", timeoutMs: 0 })).toThrowError(/timeoutMs must be a positive integer/);
+    expect(() => new DeepSeekClient({ apiKey: "test-key-001", maxRetries: -1 })).toThrowError(
       /maxRetries must be a non-negative integer/,
     );
-    expect(() => new DeepSeekClient({ apiKey: "k", retryBaseDelayMs: -5 })).toThrowError(
+    expect(() => new DeepSeekClient({ apiKey: "test-key-001", retryBaseDelayMs: -5 })).toThrowError(
       /retryBaseDelayMs must be a non-negative integer/,
     );
   });
 
   it("normalizes a trailing slash in baseUrl", async () => {
     const stub = createFetchStub(() => okResponse());
-    const client = new DeepSeekClient({ apiKey: "k", baseUrl: "https://api.deepseek.com/", fetchFn: stub.fetch });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", baseUrl: "https://api.deepseek.com/", fetchFn: stub.fetch });
     await client.complete(baseRequest());
     expect(stub.requests[0]?.url).toBe("https://api.deepseek.com/chat/completions");
   });
@@ -137,7 +137,7 @@ describe("DeepSeekClient — request wire shape", () => {
 
   it("serializes tool schemas and assistant tool-call rounds in the wire body", async () => {
     const stub = createFetchStub(() => okResponse());
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
     await client.complete(
       baseRequest({
         messages: [
@@ -176,7 +176,7 @@ describe("DeepSeekClient — request wire shape", () => {
 
   it("validates the request before any network activity", async () => {
     const stub = createFetchStub(() => okResponse());
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
     await expect(client.complete(baseRequest({ model: "deepseek-chat" }))).rejects.toThrowError(
       /unsupported model/,
     );
@@ -190,7 +190,7 @@ describe("DeepSeekClient — response mapping", () => {
     const stub = createFetchStub(() =>
       okResponse({ prompt_tokens: 24, prompt_cache_hit_tokens: 16, prompt_cache_miss_tokens: 8, completion_tokens: 12 }),
     );
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
     const response = await client.complete(baseRequest());
     expect(response.content).toBe("ok");
     expect(response.toolCalls).toEqual([]);
@@ -204,7 +204,7 @@ describe("DeepSeekClient — retry policy (bounded, safe errors only)", () => {
     const stub = createFetchStub((_request, index) =>
       index === 0 ? jsonResponse(429, httpErrorBody("rate limit exceeded", "rate_limit_exceeded")) : okResponse(),
     );
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, sleepFn: sleep.sleep });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, sleepFn: sleep.sleep });
     const response = await client.complete(baseRequest());
     expect(response.content).toBe("ok");
     expect(stub.requests).toHaveLength(2);
@@ -216,7 +216,7 @@ describe("DeepSeekClient — retry policy (bounded, safe errors only)", () => {
     const stub = createFetchStub((_request, index) =>
       index < 2 ? jsonResponse(429, httpErrorBody("rate limit exceeded")) : okResponse(),
     );
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, sleepFn: sleep.sleep });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, sleepFn: sleep.sleep });
     await client.complete(baseRequest());
     expect(sleep.delays).toEqual([1_000, 2_000]);
   });
@@ -225,7 +225,7 @@ describe("DeepSeekClient — retry policy (bounded, safe errors only)", () => {
     const stub = createFetchStub((_request, index) =>
       index === 0 ? jsonResponse(status, httpErrorBody("transient")) : okResponse(),
     );
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, sleepFn: async () => {} });
     const response = await client.complete(baseRequest());
     expect(response.content).toBe("ok");
     expect(stub.requests).toHaveLength(2);
@@ -233,7 +233,7 @@ describe("DeepSeekClient — retry policy (bounded, safe errors only)", () => {
 
   it.each([400, 401, 402, 404, 422])("does not retry client-error HTTP %s", async (status) => {
     const stub = createFetchStub(() => jsonResponse(status, httpErrorBody("client error")));
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, sleepFn: async () => {} });
     await expect(client.complete(baseRequest())).rejects.toBeInstanceOf(DeepSeekHttpError);
     expect(stub.requests).toHaveLength(1);
   });
@@ -241,7 +241,7 @@ describe("DeepSeekClient — retry policy (bounded, safe errors only)", () => {
   it("gives up after maxRetries and throws the final HTTP error", async () => {
     const sleep = createSleepRecorder();
     const stub = createFetchStub(() => jsonResponse(429, httpErrorBody("rate limit exceeded")));
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, maxRetries: 2, sleepFn: sleep.sleep });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, maxRetries: 2, sleepFn: sleep.sleep });
     const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(DeepSeekHttpError);
     expect((error as DeepSeekHttpError).status).toBe(429);
@@ -252,7 +252,7 @@ describe("DeepSeekClient — retry policy (bounded, safe errors only)", () => {
 
   it("falls back to statusText when the error body carries no message", async () => {
     const stub = createFetchStub(() => textResponse(503, ""));
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, sleepFn: async () => {} });
     const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(DeepSeekHttpError);
     expect((error as DeepSeekHttpError).message).toMatch(/HTTP 503/);
@@ -260,7 +260,7 @@ describe("DeepSeekClient — retry policy (bounded, safe errors only)", () => {
 
   it("includes the server message from a non-JSON error body", async () => {
     const stub = createFetchStub(() => textResponse(500, "<html>upstream exploded</html>"));
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, sleepFn: async () => {} });
     const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
     expect((error as DeepSeekHttpError).message).toContain("upstream exploded");
   });
@@ -278,6 +278,57 @@ describe("DeepSeekClient — retry policy (bounded, safe errors only)", () => {
   });
 });
 
+describe("DeepSeekClient — error message redaction（key 绝不回显）", () => {
+  const SECRET = "sk-redaction-secret-001";
+
+  it("redacts the key echoed by an HTTP error body (server message path)", async () => {
+    const stub = createFetchStub(() =>
+      jsonResponse(401, httpErrorBody(`Authentication Fails for key ${SECRET}`)),
+    );
+    const client = new DeepSeekClient({ apiKey: SECRET, fetchFn: stub.fetch, sleepFn: async () => {} });
+    const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(DeepSeekHttpError);
+    expect((error as Error).message).toContain("[REDACTED]");
+    expect((error as Error).message).not.toContain(SECRET);
+  });
+
+  it("redacts the key echoed by a non-JSON 200 body (parseWire snippet path)", async () => {
+    const stub = createFetchStub(() => textResponse(200, `Bearer ${SECRET} is not json`));
+    const client = new DeepSeekClient({ apiKey: SECRET, fetchFn: stub.fetch, sleepFn: async () => {} });
+    const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(DeepSeekResponseFormatError);
+    expect((error as Error).message).toContain("[REDACTED]");
+    expect((error as Error).message).not.toContain(SECRET);
+  });
+
+  it("redacts the key echoed by a network failure message (post catch path)", async () => {
+    const stub = createFetchStub(() => {
+      throw new TypeError(`connection reset while sending Bearer ${SECRET}`);
+    });
+    const client = new DeepSeekClient({ apiKey: SECRET, fetchFn: stub.fetch, maxRetries: 0, sleepFn: async () => {} });
+    const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(DeepSeekNetworkError);
+    expect((error as Error).message).toContain("[REDACTED]");
+    expect((error as Error).message).not.toContain(SECRET);
+  });
+
+  it("redacts the key echoed by a failing body read (readBodyText path)", async () => {
+    // Response 替身：ok = true 但 text() 拒绝并回显 key
+    const bodyRejecting = {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: () => Promise.reject(new TypeError(`stream aborted after Bearer ${SECRET}`)),
+    } as unknown as Response;
+    const stub = createFetchStub(() => bodyRejecting);
+    const client = new DeepSeekClient({ apiKey: SECRET, fetchFn: stub.fetch, maxRetries: 0, sleepFn: async () => {} });
+    const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(DeepSeekNetworkError);
+    expect((error as Error).message).toContain("[REDACTED]");
+    expect((error as Error).message).not.toContain(SECRET);
+  });
+});
+
 describe("DeepSeekClient — network and timeout errors", () => {
   it("retries transient network failures", async () => {
     const stub = createFetchStub((_request, index) => {
@@ -286,7 +337,7 @@ describe("DeepSeekClient — network and timeout errors", () => {
       }
       return okResponse();
     });
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, sleepFn: async () => {} });
     const response = await client.complete(baseRequest());
     expect(response.content).toBe("ok");
     expect(stub.requests).toHaveLength(2);
@@ -296,7 +347,13 @@ describe("DeepSeekClient — network and timeout errors", () => {
     const stub = createFetchStub(() => {
       throw new TypeError("fetch failed");
     });
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, maxRetries: 1, sleepFn: async () => {} });
+    // key 用真实形态的长串：单字符 key 会被脱敏逻辑当作子串误伤错误文本
+    const client = new DeepSeekClient({
+      apiKey: "test-key-001",
+      fetchFn: stub.fetch,
+      maxRetries: 1,
+      sleepFn: async () => {},
+    });
     const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(DeepSeekNetworkError);
     expect((error as Error).message).toContain("network error");
@@ -311,7 +368,7 @@ describe("DeepSeekClient — network and timeout errors", () => {
       }
       return okResponse();
     });
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, timeoutMs: 5_000, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, timeoutMs: 5_000, sleepFn: async () => {} });
     const response = await client.complete(baseRequest());
     expect(response.content).toBe("ok");
 
@@ -319,7 +376,7 @@ describe("DeepSeekClient — network and timeout errors", () => {
       throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
     });
     const failing = new DeepSeekClient({
-      apiKey: "k",
+      apiKey: "test-key-001",
       fetchFn: exhausted.fetch,
       timeoutMs: 5_000,
       maxRetries: 0,
@@ -335,7 +392,7 @@ describe("DeepSeekClient — network and timeout errors", () => {
 describe("DeepSeekClient — malformed response bodies", () => {
   it("fails fast on a non-JSON 200 body without retrying", async () => {
     const stub = createFetchStub(() => textResponse(200, "<html>not json</html>"));
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, sleepFn: async () => {} });
     const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(DeepSeekResponseFormatError);
     expect((error as Error).message).toContain("not valid JSON");
@@ -344,7 +401,7 @@ describe("DeepSeekClient — malformed response bodies", () => {
 
   it("fails fast when the JSON body does not match the chat completions shape", async () => {
     const stub = createFetchStub(() => jsonResponse(200, { id: "unexpected" }));
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, sleepFn: async () => {} });
     await expect(client.complete(baseRequest())).rejects.toBeInstanceOf(DeepSeekResponseFormatError);
     expect(stub.requests).toHaveLength(1);
   });
@@ -362,7 +419,7 @@ describe("DeepSeekClient — insufficient_system_resource", () => {
       usage: { prompt_tokens: 10, prompt_cache_hit_tokens: 3, prompt_cache_miss_tokens: 7, completion_tokens: 2 },
     });
     const stub = createFetchStub((_request, index) => jsonResponse(200, index === 0 ? insufficient : recovered));
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, maxRetries: 1, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, maxRetries: 1, sleepFn: async () => {} });
     const response = await client.complete(baseRequest());
     expect(response.content).toBe("done");
     expect(response.usage).toEqual({ inputTokens: 17, outputTokens: 7, cacheReadTokens: 3 });
@@ -375,7 +432,7 @@ describe("DeepSeekClient — insufficient_system_resource", () => {
       usage: { prompt_tokens: 10, prompt_cache_miss_tokens: 10, completion_tokens: 5 },
     });
     const stub = createFetchStub(() => jsonResponse(200, insufficient));
-    const client = new DeepSeekClient({ apiKey: "k", fetchFn: stub.fetch, maxRetries: 1, sleepFn: async () => {} });
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch, maxRetries: 1, sleepFn: async () => {} });
     const error = await client.complete(baseRequest()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(DeepSeekInsufficientResourceError);
     expect(stub.requests).toHaveLength(2);

@@ -122,9 +122,11 @@ export class DeepSeekClient implements LlmClient {
       });
     } catch (error) {
       throw new DeepSeekNetworkError({
-        message: isTimeoutError(error)
-          ? `DeepSeek API request timed out after ${this.timeoutMs}ms`
-          : `DeepSeek API network error: ${errorMessage(error)}`,
+        message: this.redact(
+          isTimeoutError(error)
+            ? `DeepSeek API request timed out after ${this.timeoutMs}ms`
+            : `DeepSeek API network error: ${errorMessage(error)}`,
+        ),
         timedOut: isTimeoutError(error),
         cause: error,
       });
@@ -136,7 +138,7 @@ export class DeepSeekClient implements LlmClient {
       return await response.text();
     } catch (error) {
       throw new DeepSeekNetworkError({
-        message: `DeepSeek API response body could not be read: ${errorMessage(error)}`,
+        message: this.redact(`DeepSeek API response body could not be read: ${errorMessage(error)}`),
         timedOut: false,
         cause: error,
       });
@@ -148,7 +150,7 @@ export class DeepSeekClient implements LlmClient {
       return JSON.parse(text) as unknown;
     } catch (error) {
       throw new DeepSeekResponseFormatError(
-        `response body is not valid JSON: ${truncate(collapseWhitespace(text), 120)}`,
+        this.redact(`response body is not valid JSON: ${truncate(collapseWhitespace(text), 120)}`),
         { cause: error },
       );
     }
@@ -160,10 +162,17 @@ export class DeepSeekClient implements LlmClient {
     const fallback = response.statusText.length > 0 ? response.statusText : `HTTP ${response.status}`;
     return new DeepSeekHttpError({
       status: response.status,
-      message: `DeepSeek API HTTP ${response.status}: ${truncate(serverMessage ?? fallback, ERROR_MESSAGE_SNIPPET_LENGTH)}`,
+      message: this.redact(
+        `DeepSeek API HTTP ${response.status}: ${truncate(serverMessage ?? fallback, ERROR_MESSAGE_SNIPPET_LENGTH)}`,
+      ),
       errorCode: extractServerErrorCode(text),
       retryable: isRetryableStatus(response.status),
     });
+  }
+
+  /** 错误信息脱敏：key 若被服务端/异常文本回显，一律替换为 [REDACTED]（与 gpt-judge-client 对齐） */
+  private redact(message: string): string {
+    return this.apiKey.length > 0 ? message.split(this.apiKey).join("[REDACTED]") : message;
   }
 }
 
