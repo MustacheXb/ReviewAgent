@@ -20,7 +20,8 @@ import type {
  *   （Read / Grep / Glob），未授权工具由 CLI 记入 permission_denials（留痕）；
  * - shell: true 仅为兼容 Windows .cmd 启动器；所有参数为程序控制的白名单值，
  *   模型 id 经严格字符校验（杜绝 shell 元字符注入）；
- * - 子进程环境剔除嵌套会话标记（CLAUDECODE / CLAUDE_CODE_ENTRYPOINT），
+ * - 子进程环境原样透传（本实测：代理型后端依赖 CLI 自身注入的环境变量做模型
+ *   路由，剔除 CLAUDECODE 等变量会直接导致 unrecognized_model）；
  *   认证沿用 CLI 自身配置（本 harness 不经手任何凭据）。
  */
 
@@ -101,7 +102,7 @@ export class ClaudeCodeCliClient implements ClaudeCodeClient {
       const child = spawn(this.claudePath, args, {
         cwd: input.cwd,
         shell: true,
-        env: sanitizedEnv(this.env),
+        env: this.env,
         stdio: ["pipe", "pipe", "pipe"],
       });
       let stdout = "";
@@ -161,7 +162,7 @@ export class ClaudeCodeCliClient implements ClaudeCodeClient {
     const version = await new Promise<string>((resolve, reject) => {
       const child = spawn(this.claudePath, ["--version"], {
         shell: true,
-        env: sanitizedEnv(this.env),
+        env: this.env,
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";
@@ -213,16 +214,6 @@ export class ClaudeCodeCliClient implements ClaudeCodeClient {
     this.versionCache = version;
     return version;
   }
-}
-
-/** 剔除嵌套会话标记（在 Claude Code 会话内再起 claude CLI 时的干扰防线） */
-function sanitizedEnv(
-  env: Readonly<Record<string, string | undefined>>,
-): Readonly<Record<string, string | undefined>> {
-  const clone: Record<string, string | undefined> = { ...env };
-  delete clone.CLAUDECODE;
-  delete clone.CLAUDE_CODE_ENTRYPOINT;
-  return clone;
 }
 
 function truncate(text: string, maxLength: number): string {
