@@ -1,6 +1,8 @@
 /**
- * GPT 系 LLM-as-judge 真实客户端（原生 fetch，OpenAI 兼容 chat completions，无 SDK——
- * 镜像 src/deepseek/deepseek-client.ts 的访问模式）。
+ * GPT 系 LLM-as-judge 真实客户端（原生 fetch，OpenAI 兼容 chat completions，无 SDK）。
+ *
+ * HTTP/重试/脱敏/解析内核共享自 src/shared/openai-http-kernel.ts（与 DeepSeek 主客户端
+ * 去重）；本文件只保留 judge 特有语义。
  *
  * 纪律：
  * - API key 仅经 OPENAI_API_KEY 环境变量或显式参数注入，绝不硬编码、绝不出现在错误信息中；
@@ -24,6 +26,16 @@ import type { GptRequestMapperOptions } from "./gpt-request-mapper.js";
 import { mapGptChatCompletionsResponse } from "./gpt-response-mapper.js";
 import { parseJudgeAdjudication } from "./parse.js";
 import type { WireGptChatCompletionsRequest } from "./gpt-wire-types.js";
+import {
+  defaultSleep,
+  nonNegativeIntOption,
+  OpenAiHttpKernel,
+  positiveIntOption,
+  resolveApiKey,
+  resolveEndpointUrl,
+  runWithRetries,
+  type HttpKernelErrorFactories,
+} from "../shared/openai-http-kernel.js";
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 export const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
@@ -31,8 +43,17 @@ export const DEFAULT_GPT_JUDGE_TIMEOUT_MS = 300_000;
 export const DEFAULT_GPT_JUDGE_MAX_RETRIES = 3;
 export const DEFAULT_GPT_JUDGE_RETRY_BASE_DELAY_MS = 1_000;
 
-const CHAT_COMPLETIONS_PATH = "/chat/completions";
-const ERROR_MESSAGE_SNIPPET_LENGTH = 300;
+/** 服务标签：错误消息前缀（内核参数化） */
+const SERVICE_LABEL = "OpenAI API";
+
+/** 内核错误工厂：构造 judge 自有错误类型（instanceof / name 语义不变） */
+const KERNEL_ERROR_FACTORIES: HttpKernelErrorFactories = {
+  clientError: (message) => new JudgeClientError(message),
+  networkError: (args) => new GptJudgeNetworkError(args),
+  httpError: (args) => new GptJudgeHttpError(args),
+  responseFormatError: (message, options) => new GptJudgeResponseFormatError(message, options),
+  isRetryableStatus,
+};
 
 export interface GptJudgeClientOptions extends GptRequestMapperOptions {
   /** API key；缺省读环境变量 OPENAI_API_KEY（启动即校验，缺失 fail fast） */
@@ -52,31 +73,36 @@ export interface GptJudgeClientOptions extends GptRequestMapperOptions {
 }
 
 export class GptJudgeClient implements JudgeClient {
-  private readonly apiKey: string;
-  private readonly endpointUrl: string;
-  private readonly timeoutMs: number;
   private readonly maxRetries: number;
   private readonly retryBaseDelayMs: number;
-  private readonly fetchFn: typeof fetch;
   private readonly sleepFn: (ms: number) => Promise<void>;
   private readonly mapperOptions: GptRequestMapperOptions;
+  private readonly kernel: OpenAiHttpKernel;
 
   constructor(options: GptJudgeClientOptions = {}) {
-    this.apiKey = resolveApiKey(options.apiKey);
-    this.endpointUrl = resolveEndpointUrl(options.baseUrl);
-    this.timeoutMs = positiveIntOption(options.timeoutMs, DEFAULT_GPT_JUDGE_TIMEOUT_MS, "timeoutMs");
+    const clientError = KERNEL_ERROR_FACTORIES.clientError;
+    // 校验顺序与重构前一致（key → baseUrl → timeoutMs → maxRetries → retryBaseDelayMs）
+    this.kernel = new OpenAiHttpKernel({
+      serviceLabel: SERVICE_LABEL,
+      apiKey: resolveApiKey(options.apiKey, OPENAI_API_KEY_ENV_VAR, SERVICE_LABEL, clientError),
+      endpointUrl: resolveEndpointUrl(options.baseUrl, OPENAI_API_BASE_URL, clientError),
+      timeoutMs: positiveIntOption(options.timeoutMs, DEFAULT_GPT_JUDGE_TIMEOUT_MS, "timeoutMs", clientError),
+      fetchFn: options.fetchFn ?? fetch,
+      errors: KERNEL_ERROR_FACTORIES,
+    });
     this.maxRetries = nonNegativeIntOption(
       options.maxRetries,
       DEFAULT_GPT_JUDGE_MAX_RETRIES,
       "maxRetries",
+      clientError,
     );
     this.retryBaseDelayMs = nonNegativeIntOption(
       options.retryBaseDelayMs,
       DEFAULT_GPT_JUDGE_RETRY_BASE_DELAY_MS,
       "retryBaseDelayMs",
+      clientError,
     );
-    this.fetchFn = options.fetchFn ?? fetch;
-    this.sleepFn = options.sleepFn ?? sleepMs;
+    this.sleepFn = options.sleepFn ?? defaultSleep;
     this.mapperOptions = {
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.limits !== undefined ? { limits: options.limits } : {}),
@@ -85,26 +111,23 @@ export class GptJudgeClient implements JudgeClient {
 
   async adjudicate(request: JudgeRequest): Promise<JudgeAdjudication> {
     const body = buildGptJudgeBody(request, this.mapperOptions);
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const content = await this.fetchContent(body);
-        return parseJudgeAdjudication(content);
-      } catch (error) {
-        if (attempt >= this.maxRetries || !isRetryableJudgeError(error)) {
-          throw error;
-        }
-        await this.sleepFn(backoffDelayMs(this.retryBaseDelayMs, attempt));
-      }
-    }
+    return await runWithRetries({
+      maxRetries: this.maxRetries,
+      retryBaseDelayMs: this.retryBaseDelayMs,
+      sleepFn: this.sleepFn,
+      isRetryable: isRetryableJudgeError,
+      // 裁定解析保留在重试操作内（解析失败为不可重试错误，语义与重构前一致）
+      operation: async () => parseJudgeAdjudication(await this.fetchContent(body)),
+    });
   }
 
   private async fetchContent(body: WireGptChatCompletionsRequest): Promise<string> {
-    const response = await this.post(body);
+    const response = await this.kernel.postJson(body);
     if (!response.ok) {
-      throw await this.httpErrorFrom(response);
+      throw await this.kernel.httpErrorFrom(response);
     }
     const mapped = mapGptChatCompletionsResponse(
-      this.parseWire(await this.readBodyText(response)),
+      this.kernel.parseJsonBody(await this.kernel.readBodyText(response)),
     );
     if (mapped.finishReason === "length") {
       throw new GptJudgeHttpError({
@@ -116,173 +139,4 @@ export class GptJudgeClient implements JudgeClient {
     }
     return mapped.content;
   }
-
-  private async post(body: WireGptChatCompletionsRequest): Promise<Response> {
-    try {
-      return await this.fetchFn(this.endpointUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (error) {
-      throw new GptJudgeNetworkError({
-        message: this.redact(
-          isTimeoutError(error)
-            ? `OpenAI API request timed out after ${this.timeoutMs}ms`
-            : `OpenAI API network error: ${errorMessage(error)}`,
-        ),
-        timedOut: isTimeoutError(error),
-        cause: error,
-      });
-    }
-  }
-
-  private async readBodyText(response: Response): Promise<string> {
-    try {
-      return await response.text();
-    } catch (error) {
-      throw new GptJudgeNetworkError({
-        message: this.redact(`OpenAI API response body could not be read: ${errorMessage(error)}`),
-        timedOut: false,
-        cause: error,
-      });
-    }
-  }
-
-  private parseWire(text: string): unknown {
-    try {
-      return JSON.parse(text) as unknown;
-    } catch (error) {
-      throw new GptJudgeResponseFormatError(
-        this.redact(`response body is not valid JSON: ${truncate(collapseWhitespace(text), 120)}`),
-        { cause: error },
-      );
-    }
-  }
-
-  private async httpErrorFrom(response: Response): Promise<GptJudgeHttpError> {
-    const text = await response.text().catch(() => "");
-    const serverMessage = extractServerError(text);
-    const fallback = response.statusText.length > 0 ? response.statusText : `HTTP ${response.status}`;
-    return new GptJudgeHttpError({
-      status: response.status,
-      message: this.redact(
-        `OpenAI API HTTP ${response.status}: ${truncate(serverMessage ?? fallback, ERROR_MESSAGE_SNIPPET_LENGTH)}`,
-      ),
-      errorCode: extractServerErrorCode(text),
-      retryable: isRetryableStatus(response.status),
-    });
-  }
-
-  /** 错误信息脱敏：key 若被服务端/异常文本回显，一律替换为 [REDACTED] */
-  private redact(message: string): string {
-    return this.apiKey.length > 0 ? message.split(this.apiKey).join("[REDACTED]") : message;
-  }
-}
-
-function resolveApiKey(explicit: string | undefined): string {
-  const fromOptions = explicit?.trim();
-  if (fromOptions !== undefined && fromOptions.length > 0) {
-    return fromOptions;
-  }
-  const fromEnv = process.env[OPENAI_API_KEY_ENV_VAR]?.trim();
-  if (fromEnv !== undefined && fromEnv.length > 0) {
-    return fromEnv;
-  }
-  throw new JudgeClientError(
-    `OpenAI API key is missing: set the ${OPENAI_API_KEY_ENV_VAR} environment variable or pass the apiKey option. The key is only read from the environment/options and is never logged or persisted.`,
-  );
-}
-
-function resolveEndpointUrl(baseUrl: string | undefined): string {
-  const base = (baseUrl ?? OPENAI_API_BASE_URL).trim();
-  if (!/^https?:\/\//.test(base)) {
-    throw new JudgeClientError(
-      `baseUrl must start with http:// or https:// (got ${JSON.stringify(baseUrl)})`,
-    );
-  }
-  return `${base.replace(/\/+$/, "")}${CHAT_COMPLETIONS_PATH}`;
-}
-
-function positiveIntOption(value: number | undefined, fallback: number, name: string): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new JudgeClientError(`${name} must be a positive integer (got ${JSON.stringify(value)})`);
-  }
-  return value;
-}
-
-function nonNegativeIntOption(value: number | undefined, fallback: number, name: string): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || value < 0) {
-    throw new JudgeClientError(
-      `${name} must be a non-negative integer (got ${JSON.stringify(value)})`,
-    );
-  }
-  return value;
-}
-
-function backoffDelayMs(base: number, attempt: number): number {
-  return base * 2 ** attempt;
-}
-
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function isTimeoutError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) {
-    return false;
-  }
-  const name = (error as { readonly name?: unknown }).name;
-  return name === "TimeoutError" || name === "AbortError";
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function extractServerError(text: string): string | undefined {
-  const parsed = tryParseJson(text);
-  if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
-    const trimmed = collapseWhitespace(text).trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }
-  const message = (parsed as { readonly error?: { readonly message?: unknown } }).error?.message;
-  return typeof message === "string" && message.length > 0 ? message : undefined;
-}
-
-function extractServerErrorCode(text: string): string | undefined {
-  const parsed = tryParseJson(text);
-  if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
-    return undefined;
-  }
-  const code = (parsed as { readonly error?: { readonly code?: unknown } }).error?.code;
-  return typeof code === "string" && code.length > 0 ? code : undefined;
-}
-
-function tryParseJson(text: string): unknown {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-function collapseWhitespace(text: string): string {
-  return text.replace(/\s+/g, " ");
-}
-
-function truncate(text: string, maxLength: number): string {
-  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`;
 }
