@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:e2e": "vitest run --config vitest.config.e2e.ts",
     "typecheck": "tsc --noEmit",
-    "experiment": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --outDir .tmp-gen scripts/run-experiment.ts && node .tmp-gen/scripts/run-experiment.js"
+    "experiment": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --outDir .tmp-gen scripts/run-experiment.ts && node .tmp-gen/scripts/run-experiment.js",
+    "reference": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --outDir .tmp-gen scripts/run-claude-code-reference.ts && node .tmp-gen/scripts/run-claude-code-reference.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
