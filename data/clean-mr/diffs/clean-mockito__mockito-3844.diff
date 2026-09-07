@@ -1,0 +1,466 @@
+diff --git a/mockito-core/src/main/java/org/mockito/internal/matchers/apachecommons/ReflectionEquals.java b/mockito-core/src/main/java/org/mockito/internal/matchers/apachecommons/ReflectionEquals.java
+index 6dcbfc65e2..2b15cdcedb 100644
+--- a/mockito-core/src/main/java/org/mockito/internal/matchers/apachecommons/ReflectionEquals.java
++++ b/mockito-core/src/main/java/org/mockito/internal/matchers/apachecommons/ReflectionEquals.java
+@@ -7,6 +7,7 @@
+ import java.io.Serializable;
+ 
+ import org.mockito.ArgumentMatcher;
++import org.mockito.internal.matchers.text.ValuePrinter;
+ 
+ public class ReflectionEquals implements ArgumentMatcher<Object>, Serializable {
+ 
+@@ -25,6 +26,6 @@ public boolean matches(Object actual) {
+ 
+     @Override
+     public String toString() {
+-        return "refEq(" + wanted + ")";
++        return "refEq(" + ValuePrinter.print(wanted) + ")";
+     }
+ }
+diff --git a/mockito-core/src/main/java/org/mockito/internal/matchers/text/ValuePrinter.java b/mockito-core/src/main/java/org/mockito/internal/matchers/text/ValuePrinter.java
+index 4517d7525e..40a9a22cd3 100644
+--- a/mockito-core/src/main/java/org/mockito/internal/matchers/text/ValuePrinter.java
++++ b/mockito-core/src/main/java/org/mockito/internal/matchers/text/ValuePrinter.java
+@@ -4,9 +4,17 @@
+  */
+ package org.mockito.internal.matchers.text;
+ 
++import static java.util.Comparator.comparing;
++
+ import java.lang.reflect.Array;
++import java.lang.reflect.Field;
++import java.lang.reflect.Modifier;
++import java.util.Arrays;
+ import java.util.Iterator;
+ import java.util.Map;
++import java.util.stream.Collectors;
++import org.mockito.internal.configuration.plugins.Plugins;
++import org.mockito.plugins.MemberAccessor;
+ 
+ /**
+  * Prints a Java object value in a way humans can read it neatly.
+@@ -146,11 +154,78 @@ private static String printChar(char value) {
+         return sb.toString();
+     }
+ 
++    private static final int MAX_FIELD_VALUE_LENGTH = 100;
++
++    /**
++     * Return string representation of given object.
++     * If 'value' has its own {@code toString()} method, it's called.
++     * If 'value' does not declare its own {@code toString()} then {@code Object.toString()} is useless for a
++     * human-readable diff, so fields are printed reflectively instead.
++     *
++     * @param value any java object
++     * @return String representation of this object (non-nullable)
++     */
+     private static String descriptionOf(Object value) {
+         try {
++            if (!declaresOwnToString(value.getClass())) {
++                return reflectiveToString(value);
++            }
+             return String.valueOf(value);
+         } catch (RuntimeException e) {
+             return value.getClass().getName() + "@" + Integer.toHexString(value.hashCode());
+         }
+     }
++
++    private static boolean declaresOwnToString(Class<?> type) {
++        try {
++            return type.getMethod("toString").getDeclaringClass() != Object.class;
++        } catch (NoSuchMethodException neverHappensBecauseObjectDeclaresToString) {
++            return false;
++        }
++    }
++
++    private static String reflectiveToString(Object value) {
++        MemberAccessor accessor = Plugins.getMemberAccessor();
++        StringBuilder result = new StringBuilder(value.getClass().getSimpleName()).append('[');
++        boolean first = true;
++        for (Class<?> type = value.getClass();
++                type != null && type != Object.class;
++                type = type.getSuperclass()) {
++            for (Field field : fields(type)) {
++                if (!first) {
++                    result.append(", ");
++                }
++                first = false;
++                result.append(field.getName())
++                        .append('=')
++                        .append(fieldValue(accessor, field, value));
++            }
++        }
++        return result.append(']').toString();
++    }
++
++    /**
++     * Sorts fields by name - this guarantees the same output every time, thus avoiding flaky tests.
++     */
++    private static Iterable<Field> fields(Class<?> type) {
++        return Arrays.stream(type.getDeclaredFields())
++                .filter(field -> !Modifier.isStatic(field.getModifiers()))
++                .filter(field -> !field.isSynthetic())
++                .sorted(comparing(Field::getName))
++                .collect(Collectors.toList());
++    }
++
++    private static String fieldValue(MemberAccessor accessor, Field field, Object target) {
++        try {
++            return truncate(String.valueOf(accessor.get(field, target)));
++        } catch (RuntimeException | IllegalAccessException fieldNotReadable) {
++            return "<unavailable>";
++        }
++    }
++
++    private static String truncate(String text) {
++        return text.length() > MAX_FIELD_VALUE_LENGTH
++                ? text.substring(0, MAX_FIELD_VALUE_LENGTH) + "..."
++                : text;
++    }
+ }
+diff --git a/mockito-core/src/test/java/org/mockito/internal/matchers/apachecommons/ReflectionEqualsTest.java b/mockito-core/src/test/java/org/mockito/internal/matchers/apachecommons/ReflectionEqualsTest.java
+new file mode 100644
+index 0000000000..06cf978e3c
+--- /dev/null
++++ b/mockito-core/src/test/java/org/mockito/internal/matchers/apachecommons/ReflectionEqualsTest.java
+@@ -0,0 +1,74 @@
++/*
++ * Copyright (c) 2007 Mockito contributors
++ * This program is made available under the terms of the MIT License.
++ */
++package org.mockito.internal.matchers.apachecommons;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++import org.junit.Test;
++import org.mockitoutil.TestBase;
++
++public class ReflectionEqualsTest extends TestBase {
++
++    static class NoToString {
++        private final String name;
++        private final int age;
++
++        NoToString(String name, int age) {
++            this.name = name;
++            this.age = age;
++        }
++    }
++
++    static class WithToString {
++        private final String name;
++
++        WithToString(String name) {
++            this.name = name;
++        }
++
++        @Override
++        public String toString() {
++            return "WithToString(" + name + ")";
++        }
++    }
++
++    static class LongField {
++        private final String value;
++
++        LongField(String value) {
++            this.value = value;
++        }
++    }
++
++    @Test
++    public void prints_fields_reflectively_when_toString_not_overridden() {
++        ReflectionEquals matcher = new ReflectionEquals(new NoToString("john", 42));
++
++        assertThat(matcher.toString()).isEqualTo("refEq(NoToString[age=42, name=john])");
++    }
++
++    @Test
++    public void uses_declared_toString_when_present() {
++        ReflectionEquals matcher = new ReflectionEquals(new WithToString("john"));
++
++        assertThat(matcher.toString()).isEqualTo("refEq(WithToString(john))");
++    }
++
++    @Test
++    public void prints_null_as_null() {
++        ReflectionEquals matcher = new ReflectionEquals(null);
++
++        assertThat(matcher.toString()).isEqualTo("refEq(null)");
++    }
++
++    @Test
++    public void truncates_long_field_values() {
++        String longValue = "x".repeat(200);
++        ReflectionEquals matcher = new ReflectionEquals(new LongField(longValue));
++
++        assertThat(matcher.toString())
++                .isEqualTo("refEq(LongField[value=" + "x".repeat(100) + "...])");
++    }
++}
+diff --git a/mockito-core/src/test/java/org/mockito/internal/matchers/text/ValuePrinterTest.java b/mockito-core/src/test/java/org/mockito/internal/matchers/text/ValuePrinterTest.java
+index 56b5e5fad0..2ecb5b4d12 100644
+--- a/mockito-core/src/test/java/org/mockito/internal/matchers/text/ValuePrinterTest.java
++++ b/mockito-core/src/test/java/org/mockito/internal/matchers/text/ValuePrinterTest.java
+@@ -4,11 +4,15 @@
+  */
+ package org.mockito.internal.matchers.text;
+ 
++import static java.util.Arrays.asList;
+ import static org.assertj.core.api.Assertions.assertThat;
+ import static org.junit.Assert.assertTrue;
+ import static org.mockito.internal.matchers.text.ValuePrinter.print;
++import static org.mockito.internal.matchers.text.ValuePrinter.printValues;
+ 
++import java.math.BigDecimal;
+ import java.util.LinkedHashMap;
++import java.util.List;
+ import java.util.Map;
+ import org.junit.Test;
+ 
+@@ -46,12 +50,41 @@ public void prints_values() {
+         assertThat(print(new FormattedText("formatted"))).isEqualTo("formatted");
+     }
+ 
++    @Test
++    public void prints_fields_reflectively_when_toString_not_overridden() {
++        assertThat(print(new NoToString("john", 42))).isEqualTo("NoToString[age=42, name=john]");
++        assertThat(print(new ChildWithoutToString("john", 42, new BigDecimal("100.99"))))
++                .isEqualTo("ChildWithoutToString[salary=100.99, age=42, name=john]");
++    }
++
++    @Test
++    public void callsToString_when_toString_is_overridden() {
++        assertThat(print(new Credentials("john", "secret")))
++                .isEqualTo("Credentials{username:joh.., password:***}");
++    }
++
++    @Test
++    public void truncates_long_field_values_when_printing_reflectively() {
++        String longValue = "x".repeat(200);
++
++        assertThat(print(new NoToString(longValue, 0)))
++                .isEqualTo("NoToString[age=0, name=" + "x".repeat(100) + "...]");
++    }
++
+     @Test
+     public void prints_chars() {
+         assertThat(print('a')).isEqualTo("'a'");
+         assertThat(print('\n')).isEqualTo("'\\n'");
+         assertThat(print('\t')).isEqualTo("'\\t'");
+         assertThat(print('\r')).isEqualTo("'\\r'");
++        assertThat(print('"')).isEqualTo("'\\\"'");
++    }
++
++    @Test
++    public void printValues_withDefaultSeparator() {
++        List<Integer> values = asList(111, 222, 333);
++
++        assertThat(printValues(null, null, null, values.iterator())).isEqualTo("(111,222,333)");
+     }
+ 
+     static class ToString {
+@@ -65,4 +98,40 @@ public String toString() {
+             throw new RuntimeException("ka-boom!");
+         }
+     }
++
++    static class NoToString {
++        private static final int MIN_AGE = 23;
++        private final String name;
++        private final int age;
++
++        NoToString(String name, int age) {
++            this.name = name;
++            this.age = age;
++        }
++    }
++
++    static class ChildWithoutToString extends NoToString {
++        private final BigDecimal salary;
++
++        public ChildWithoutToString(String name, int age, BigDecimal salary) {
++            super(name, age);
++            this.salary = salary;
++        }
++    }
++
++    static class Credentials {
++        private final String username;
++        private final String password;
++
++        public Credentials(String username, String password) {
++            this.username = username;
++            this.password = password;
++        }
++
++        @Override
++        public String toString() {
++            return String.format(
++                    "Credentials{username:%s.., password:***}", username.substring(0, 3));
++        }
++    }
+ }
+diff --git a/mockito-core/src/test/java/org/mockitousage/matchers/ReflectionMatchersTest.java b/mockito-core/src/test/java/org/mockitousage/matchers/ReflectionMatchersTest.java
+index 5afd360c15..a05165fc20 100644
+--- a/mockito-core/src/test/java/org/mockitousage/matchers/ReflectionMatchersTest.java
++++ b/mockito-core/src/test/java/org/mockitousage/matchers/ReflectionMatchersTest.java
+@@ -73,10 +73,10 @@ public void shouldNotMatchWhenFieldValuesDiffer() throws Exception {
+                 .hasMessageContainingAll(
+                         "Argument(s) are different! Wanted:",
+                         "mockMe.run(",
+-                        "    refEq(org.mockitousage.matchers.ReflectionMatchersTest",
++                        "    refEq(Child[childFieldOne=2, childFieldTwo=bar XXX, parentField=1, protectedParentField=foo])",
+                         "Actual invocations have different arguments:",
+                         "mockMe.run(",
+-                        "    org.mockitousage.matchers.ReflectionMatchersTest");
++                        "    Child[childFieldOne=2, childFieldTwo=bar, parentField=1, protectedParentField=foo]");
+     }
+ 
+     @Test
+@@ -90,10 +90,10 @@ public void shouldNotMatchAgain() throws Exception {
+                 .hasMessageContainingAll(
+                         "Argument(s) are different! Wanted:",
+                         "mockMe.run(",
+-                        "    refEq(org.mockitousage.matchers.ReflectionMatchersTest",
++                        "    refEq(Child[childFieldOne=999, childFieldTwo=bar, parentField=1, protectedParentField=foo])",
+                         "Actual invocations have different arguments:",
+                         "mockMe.run(",
+-                        "    org.mockitousage.matchers.ReflectionMatchersTest");
++                        "    Child[childFieldOne=2, childFieldTwo=bar, parentField=1, protectedParentField=foo]");
+     }
+ 
+     @Test
+@@ -107,10 +107,10 @@ public void shouldNotMatchYetAgain() throws Exception {
+                 .hasMessageContainingAll(
+                         "Argument(s) are different! Wanted:",
+                         "mockMe.run(",
+-                        "    refEq(org.mockitousage.matchers.ReflectionMatchersTest",
++                        "    refEq(Child[childFieldOne=2, childFieldTwo=bar, parentField=1, protectedParentField=XXXXX])",
+                         "Actual invocations have different arguments:",
+                         "mockMe.run(",
+-                        "    org.mockitousage.matchers.ReflectionMatchersTest");
++                        "    Child[childFieldOne=2, childFieldTwo=bar, parentField=1, protectedParentField=foo]");
+     }
+ 
+     @Test
+@@ -124,10 +124,10 @@ public void shouldNotMatch() throws Exception {
+                 .hasMessageContainingAll(
+                         "Argument(s) are different! Wanted:",
+                         "mockMe.run(",
+-                        "    refEq(org.mockitousage.matchers.ReflectionMatchersTest",
++                        "    refEq(Child[childFieldOne=2, childFieldTwo=bar, parentField=234234, protectedParentField=foo])",
+                         "Actual invocations have different arguments:",
+                         "mockMe.run(",
+-                        "    org.mockitousage.matchers.ReflectionMatchersTest");
++                        "    Child[childFieldOne=2, childFieldTwo=bar, parentField=1, protectedParentField=foo]");
+     }
+ 
+     @Test
+@@ -154,9 +154,9 @@ public void shouldNotMatchWithFieldsExclusion() throws Exception {
+                 .hasMessageContainingAll(
+                         "Argument(s) are different! Wanted:",
+                         "mockMe.run(",
+-                        "    refEq(org.mockitousage.matchers.ReflectionMatchersTest",
++                        "    refEq(Child[childFieldOne=2, childFieldTwo=excluded, parentField=234234, protectedParentField=foo])",
+                         "Actual invocations have different arguments:",
+                         "mockMe.run(",
+-                        "    org.mockitousage.matchers.ReflectionMatchersTest");
++                        "    Child[childFieldOne=2, childFieldTwo=bar, parentField=1, protectedParentField=foo]");
+     }
+ }
+diff --git a/mockito-core/src/test/java/org/mockitousage/matchers/ReflectivePrintingTest.java b/mockito-core/src/test/java/org/mockitousage/matchers/ReflectivePrintingTest.java
+new file mode 100644
+index 0000000000..8af5a5e1dd
+--- /dev/null
++++ b/mockito-core/src/test/java/org/mockitousage/matchers/ReflectivePrintingTest.java
+@@ -0,0 +1,88 @@
++/*
++ * Copyright (c) 2026 Mockito contributors
++ * This program is made available under the terms of the MIT License.
++ */
++package org.mockitousage.matchers;
++
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.ArgumentMatchers.refEq;
++import static org.mockito.ArgumentMatchers.same;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
++
++import org.junit.Test;
++import org.mockitoutil.TestBase;
++
++@SuppressWarnings("all")
++public class ReflectivePrintingTest extends TestBase {
++
++    /**
++     * Class without own "toString()" method
++     */
++    class Credentials {
++        private final String username;
++        private final String password;
++
++        Credentials(String username, String password) {
++            this.username = username;
++            this.password = password;
++        }
++    }
++
++    interface LoginService {
++        void run(Credentials credentials);
++    }
++
++    private final Credentials actual = new Credentials("usr", "pwd");
++    private final Credentials expected = new Credentials("john", "secret");
++    private final LoginService mock = mock();
++
++    @Test
++    public void printsObjectFieldsUsingReflection() {
++        mock.run(actual);
++
++        assertThatThrownBy(() -> verify(mock).run(expected))
++                .isInstanceOf(AssertionError.class)
++                .hasMessageContaining("Argument(s) are different! Wanted:")
++                .hasMessageContaining("Credentials[password=secret, username=john]")
++                .hasMessageContaining("Actual invocations have different arguments:")
++                .hasMessageContaining("Credentials[password=pwd, username=usr]");
++    }
++
++    @Test
++    public void eq_printsObjectFieldsUsingReflection() {
++        mock.run(actual);
++
++        assertThatThrownBy(() -> verify(mock).run(eq(expected)))
++                .isInstanceOf(AssertionError.class)
++                .hasMessageContaining("Argument(s) are different! Wanted:")
++                .hasMessageContaining("Credentials[password=secret, username=john]")
++                .hasMessageContaining("Actual invocations have different arguments:")
++                .hasMessageContaining("Credentials[password=pwd, username=usr]");
++    }
++
++    @Test
++    public void refEq_printsObjectFieldsUsingReflection() {
++        mock.run(actual);
++
++        assertThatThrownBy(() -> verify(mock).run(refEq(expected)))
++                .isInstanceOf(AssertionError.class)
++                .hasMessageContaining("Argument(s) are different! Wanted:")
++                .hasMessageContaining("refEq(Credentials[password=secret, username=john])")
++                .hasMessageContaining("Actual invocations have different arguments:")
++                .hasMessageContaining("Credentials[password=pwd, username=usr]");
++    }
++
++    @Test
++    public void same_printsObjectFieldsUsingReflection() {
++        mock.run(actual);
++
++        assertThatThrownBy(() -> verify(mock).run(same(expected)))
++                .isInstanceOf(AssertionError.class)
++                .hasMessageContaining("Argument(s) are different! Wanted:")
++                .hasMessageContaining("same(Credentials[password=secret, username=john])")
++                .hasMessageContaining("Actual invocations have different arguments:")
++                .hasMessageContaining("Credentials[password=pwd, username=usr]");
++    }
++}

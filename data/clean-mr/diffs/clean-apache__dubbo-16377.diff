@@ -1,0 +1,79 @@
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/mesh/route/MeshRuleRouter.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/mesh/route/MeshRuleRouter.java
+index 06d43e94325..6737884c8da 100644
+--- a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/mesh/route/MeshRuleRouter.java
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/mesh/route/MeshRuleRouter.java
+@@ -197,7 +197,7 @@ protected List<DubboRouteDestination> getDubboRouteDestination(DubboRoute dubboR
+                 }
+ 
+                 if (matchRequestList.stream()
+-                        .allMatch(request -> request.isMatch(invocation, sourcesLabels, tracingContextProviders))) {
++                        .anyMatch(request -> request.isMatch(invocation, sourcesLabels, tracingContextProviders))) {
+                     return dubboRouteDetail.getRoute();
+                 }
+             }
+diff --git a/dubbo-cluster/src/test/java/org/apache/dubbo/rpc/cluster/router/mesh/route/MeshRuleRouterTest.java b/dubbo-cluster/src/test/java/org/apache/dubbo/rpc/cluster/router/mesh/route/MeshRuleRouterTest.java
+index 2cf9da4cf2e..ddf461700bd 100644
+--- a/dubbo-cluster/src/test/java/org/apache/dubbo/rpc/cluster/router/mesh/route/MeshRuleRouterTest.java
++++ b/dubbo-cluster/src/test/java/org/apache/dubbo/rpc/cluster/router/mesh/route/MeshRuleRouterTest.java
+@@ -20,9 +20,11 @@
+ import org.apache.dubbo.common.beans.factory.ScopeBeanFactory;
+ import org.apache.dubbo.common.extension.ExtensionLoader;
+ import org.apache.dubbo.common.utils.Holder;
++import org.apache.dubbo.common.utils.PojoUtils;
+ import org.apache.dubbo.common.utils.StringUtils;
+ import org.apache.dubbo.rpc.Invoker;
+ import org.apache.dubbo.rpc.RpcInvocation;
++import org.apache.dubbo.rpc.cluster.router.mesh.rule.virtualservice.DubboRoute;
+ import org.apache.dubbo.rpc.cluster.router.mesh.util.TracingContextProvider;
+ import org.apache.dubbo.rpc.cluster.router.state.BitList;
+ import org.apache.dubbo.rpc.model.ApplicationModel;
+@@ -46,6 +48,8 @@
+ import org.yaml.snakeyaml.constructor.SafeConstructor;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertNull;
+ import static org.junit.jupiter.api.Assertions.assertTrue;
+ import static org.mockito.Mockito.times;
+ import static org.mockito.Mockito.verify;
+@@ -452,4 +456,40 @@ void testRoute2() {
+         invokers.removeAll(Arrays.asList(isolation, testingTrunk, testing));
+         assertEquals(invokers, meshRuleRouter.route(invokers.clone(), null, rpcInvocation, false, null));
+     }
++
++    @Test
++    void routeDetailShouldMatchWhenAnyRequestMatches() throws ReflectiveOperationException {
++        StandardMeshRuleRouter<Object> router = new StandardMeshRuleRouter<>(url.addParameter("trafficLabel", "gray"));
++
++        DubboRoute dubboRoute = createRouteWithAlternativeMatches();
++
++        RpcInvocation invocation =
++                new RpcInvocation(null, "sayHello", "DemoInterface", "", new Class<?>[0], new Object[0]);
++
++        assertNotNull(router.getDubboRouteDestination(dubboRoute, invocation));
++    }
++
++    @Test
++    void routeDetailShouldNotMatchWhenNoRequestMatches() throws ReflectiveOperationException {
++        StandardMeshRuleRouter<Object> router = new StandardMeshRuleRouter<>(url.addParameter("trafficLabel", "green"));
++
++        DubboRoute dubboRoute = createRouteWithAlternativeMatches();
++
++        RpcInvocation invocation =
++                new RpcInvocation(null, "sayHello", "DemoInterface", "", new Class<?>[0], new Object[0]);
++
++        assertNull(router.getDubboRouteDestination(dubboRoute, invocation));
++    }
++
++    private DubboRoute createRouteWithAlternativeMatches() throws ReflectiveOperationException {
++        Yaml yaml = new Yaml(new SafeConstructor(new LoaderOptions()));
++        Map<String, Object> rule = yaml.load("routedetail:\n"
++                + "  - match:\n"
++                + "      - sourceLabels: {trafficLabel: blue}\n"
++                + "      - sourceLabels: {trafficLabel: gray}\n"
++                + "    route:\n"
++                + "      - destination: {host: demo, subset: gray}\n");
++
++        return PojoUtils.mapToPojo(rule, DubboRoute.class);
++    }
+ }

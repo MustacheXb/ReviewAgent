@@ -1,0 +1,76 @@
+diff --git a/release-notes/CREDITS b/release-notes/CREDITS
+index 9f623f88..9468658b 100644
+--- a/release-notes/CREDITS
++++ b/release-notes/CREDITS
+@@ -183,3 +183,6 @@ Christian Beikov (@beikov)
+  * Fixed #893: Decode element name before matching virtual wrapper in
+    `_initStartElement`
+   (3.3.0)
++ * Fixed #899: Return `null` from `nextStringValue()` at end-of-input (instead
++   of throwing `IllegalStateException`)
++  (3.3.0)
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index 66f49f7c..bfb1aa7b 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -28,6 +28,9 @@ Version: 3.x (for earlier see VERSION-2.x)
+  (fix by @Sahana2524)
+ #893: Decode element name before matching virtual wrapper in `_initStartElement`
+  (fix by @Sahana2524)
++#899: Return `null` from `nextStringValue()` at end-of-input (instead of
++  throwing `IllegalStateException`)
++ (fix by @Sahana2524)
+ 
+ 3.2.2 (14-Aug-2026)
+ 
+diff --git a/src/main/java/tools/jackson/dataformat/xml/deser/FromXmlParser.java b/src/main/java/tools/jackson/dataformat/xml/deser/FromXmlParser.java
+index a87bc808..2d8fb94b 100644
+--- a/src/main/java/tools/jackson/dataformat/xml/deser/FromXmlParser.java
++++ b/src/main/java/tools/jackson/dataformat/xml/deser/FromXmlParser.java
+@@ -996,6 +996,7 @@ public String nextStringValue() throws JacksonException
+             break;
+         case XmlTokenStream.XML_END:
+             _updateTokenToNull();
++            break;
+         default:
+             return _internalErrorUnknownToken(token);
+         }
+diff --git a/src/test/java/tools/jackson/dataformat/xml/stream/XmlParserNextXxxTest.java b/src/test/java/tools/jackson/dataformat/xml/stream/XmlParserNextXxxTest.java
+index 6da2cd57..4b7e0ae8 100644
+--- a/src/test/java/tools/jackson/dataformat/xml/stream/XmlParserNextXxxTest.java
++++ b/src/test/java/tools/jackson/dataformat/xml/stream/XmlParserNextXxxTest.java
+@@ -7,6 +7,7 @@
+ import tools.jackson.dataformat.xml.deser.FromXmlParser;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNull;
+ 
+ public class XmlParserNextXxxTest extends XmlTestUtil
+ {
+@@ -43,4 +44,26 @@ public void testXmlAttributesWithNextTextValue() throws Exception
+         assertToken(JsonToken.END_OBJECT, xp.nextToken()); // </data>
+         xp.close();
+     }
++
++    // [dataformat-xml#899]: nextStringValue() must honor the JsonParser contract
++    // at end of input: return null, same as nextToken() does, instead of leaking
++    // an unchecked IllegalStateException from the internal XML_END branch.
++    @Test
++    public void testNextStringValueAtEndOfInput() throws Exception
++    {
++        final String XML = "<data max=\"7\" offset=\"9\"/>";
++
++        JsonParser xp = xmlMapper(false).createParser(XML);
++
++        assertToken(JsonToken.START_OBJECT, xp.nextToken()); // <data>
++        assertToken(JsonToken.PROPERTY_NAME, xp.nextToken()); // max
++        assertEquals("7", xp.nextStringValue());
++        assertToken(JsonToken.PROPERTY_NAME, xp.nextToken()); // offset
++        assertEquals("9", xp.nextStringValue());
++        assertToken(JsonToken.END_OBJECT, xp.nextToken()); // </data>
++
++        // One more call past the end: should quietly report end-of-input
++        assertNull(xp.nextStringValue());
++        xp.close();
++    }
+ }

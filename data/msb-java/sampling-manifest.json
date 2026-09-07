@@ -1,0 +1,1601 @@
+{
+  "seed": "poc1-msb-java-2026",
+  "targetTotal": 30,
+  "minPerStratum": 1,
+  "stratification": "by-repo proportional (largest remainder), min 1 per repo, cap at stratum size; in-stratum deterministic sample (mulberry32, seed hash(\"poc1-msb-java-2026:<org>/<repo>\"))",
+  "boundary": {
+    "maxFiles": 10,
+    "maxDiffLines": 2000
+  },
+  "poolTotal": 128,
+  "eligibleCount": 124,
+  "rejectedCount": 4,
+  "rejectedByReason": {
+    "too-many-files": 4
+  },
+  "pool": [
+    {
+      "instanceId": "alibaba__fastjson2-1245",
+      "org": "alibaba",
+      "repo": "fastjson2",
+      "number": 1245,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "alibaba__fastjson2-2097",
+      "org": "alibaba",
+      "repo": "fastjson2",
+      "number": 2097,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 2,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "alibaba__fastjson2-2285",
+      "org": "alibaba",
+      "repo": "fastjson2",
+      "number": 2285,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 1,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "alibaba__fastjson2-2559",
+      "org": "alibaba",
+      "repo": "fastjson2",
+      "number": 2559,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 17,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "alibaba__fastjson2-2775",
+      "org": "alibaba",
+      "repo": "fastjson2",
+      "number": 2775,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 31,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "alibaba__fastjson2-82",
+      "org": "alibaba",
+      "repo": "fastjson2",
+      "number": 82,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "apache__dubbo-10638",
+      "org": "apache",
+      "repo": "dubbo",
+      "number": 10638,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 20,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "apache__dubbo-11781",
+      "org": "apache",
+      "repo": "dubbo",
+      "number": 11781,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 4,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "apache__dubbo-7041",
+      "org": "apache",
+      "repo": "dubbo",
+      "number": 7041,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 4,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-13825",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 13825,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 208,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-13880",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 13880,
+      "status": "eligible",
+      "files": 6,
+      "changedLines": 113,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-13902",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 13902,
+      "status": "eligible",
+      "files": 5,
+      "changedLines": 93,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-13914",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 13914,
+      "status": "eligible",
+      "files": 6,
+      "changedLines": 113,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-13930",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 13930,
+      "status": "eligible",
+      "files": 5,
+      "changedLines": 93,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-13931",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 13931,
+      "status": "eligible",
+      "files": 5,
+      "changedLines": 93,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-13997",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 13997,
+      "status": "eligible",
+      "files": 8,
+      "changedLines": 181,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-14000",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14000,
+      "status": "rejected",
+      "files": 48,
+      "changedLines": 3358,
+      "rejectReason": "too-many-files"
+    },
+    {
+      "instanceId": "elastic__logstash-14027",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14027,
+      "status": "eligible",
+      "files": 6,
+      "changedLines": 146,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-14045",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14045,
+      "status": "rejected",
+      "files": 21,
+      "changedLines": 740,
+      "rejectReason": "too-many-files"
+    },
+    {
+      "instanceId": "elastic__logstash-14058",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14058,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 39,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-14571",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14571,
+      "status": "rejected",
+      "files": 11,
+      "changedLines": 1338,
+      "rejectReason": "too-many-files"
+    },
+    {
+      "instanceId": "elastic__logstash-14878",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14878,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 40,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-14897",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14897,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 40,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-14898",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14898,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 40,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-14970",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14970,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 11,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-14981",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14981,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 11,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15000",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15000,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 88,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15008",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15008,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 88,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15233",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15233,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 27,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15241",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15241,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 27,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15680",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15680,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 68,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15697",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15697,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 68,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15925",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15925,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 28,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15928",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15928,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 28,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15964",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15964,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 14,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15969",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15969,
+      "status": "eligible",
+      "files": 9,
+      "changedLines": 95,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16079",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16079,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 4,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16094",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16094,
+      "status": "eligible",
+      "files": 9,
+      "changedLines": 95,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16195",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16195,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 159,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16482",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16482,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 67,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16569",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16569,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 67,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16579",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16579,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 67,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16681",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16681,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 16,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16968",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16968,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 101,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-17019",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 17019,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 101,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-17020",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 17020,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 101,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-17021",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 17021,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 101,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1016",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1016,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 14,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1053",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1053,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 15,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1142",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1142,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 24,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1172",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1172,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 54,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1182",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1182,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 65,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1204",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1204,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 54,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1208",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1208,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 14,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1263",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1263,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 62,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1309",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1309,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 20,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-174",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 174,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 21,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-183",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 183,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 2,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-370",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 370,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 49,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-566",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 566,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 26,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-729",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 729,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 92,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-891",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 891,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 3,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-922",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 922,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 24,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-964",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 964,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 27,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-980",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 980,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 42,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-1923",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 1923,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 11,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-2036",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 2036,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 59,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3371",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3371,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 14,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3509",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3509,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 66,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3560",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3560,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 61,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3621",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3621,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 57,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3625",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3625,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 11,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3626",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3626,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 19,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3666",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3666,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 16,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3701",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3701,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 2,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3716",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3716,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 68,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3851",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3851,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 29,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3860",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3860,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 25,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4013",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4013,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 53,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4015",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4015,
+      "status": "eligible",
+      "files": 4,
+      "changedLines": 30,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4048",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4048,
+      "status": "eligible",
+      "files": 4,
+      "changedLines": 15,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4050",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4050,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 3,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4072",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4072,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4087",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4087,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 19,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4131",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4131,
+      "status": "eligible",
+      "files": 4,
+      "changedLines": 91,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4132",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4132,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 36,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4159",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4159,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 24,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4186",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4186,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 11,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4189",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4189,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 12,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4219",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4219,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 14,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4228",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4228,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 86,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4230",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4230,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 62,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4257",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4257,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4304",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4304,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4311",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4311,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 12,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4320",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4320,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 23,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4325",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4325,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 54,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4338",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4338,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 4,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4360",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4360,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 8,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4365",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4365,
+      "status": "eligible",
+      "files": 4,
+      "changedLines": 163,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4426",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4426,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 15,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4468",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4468,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 16,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4469",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4469,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 20,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4486",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4486,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 9,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4487",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4487,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4615",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4615,
+      "status": "eligible",
+      "files": 5,
+      "changedLines": 222,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4641",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4641,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 12,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-dataformat-xml-531",
+      "org": "fasterxml",
+      "repo": "jackson-dataformat-xml",
+      "number": 531,
+      "status": "eligible",
+      "files": 8,
+      "changedLines": 393,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-dataformat-xml-544",
+      "org": "fasterxml",
+      "repo": "jackson-dataformat-xml",
+      "number": 544,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-dataformat-xml-590",
+      "org": "fasterxml",
+      "repo": "jackson-dataformat-xml",
+      "number": 590,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 20,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-dataformat-xml-638",
+      "org": "fasterxml",
+      "repo": "jackson-dataformat-xml",
+      "number": 638,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 23,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-dataformat-xml-644",
+      "org": "fasterxml",
+      "repo": "jackson-dataformat-xml",
+      "number": 644,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 50,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "google__gson-1093",
+      "org": "google",
+      "repo": "gson",
+      "number": 1093,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 4,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "google__gson-1391",
+      "org": "google",
+      "repo": "gson",
+      "number": 1391,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 57,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "google__gson-1555",
+      "org": "google",
+      "repo": "gson",
+      "number": 1555,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 19,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "google__gson-1703",
+      "org": "google",
+      "repo": "gson",
+      "number": 1703,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 22,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "google__gson-1787",
+      "org": "google",
+      "repo": "gson",
+      "number": 1787,
+      "status": "eligible",
+      "files": 4,
+      "changedLines": 77,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "googlecontainertools__jib-2536",
+      "org": "googlecontainertools",
+      "repo": "jib",
+      "number": 2536,
+      "status": "eligible",
+      "files": 4,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "googlecontainertools__jib-2542",
+      "org": "googlecontainertools",
+      "repo": "jib",
+      "number": 2542,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 32,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "googlecontainertools__jib-2688",
+      "org": "googlecontainertools",
+      "repo": "jib",
+      "number": 2688,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "googlecontainertools__jib-4035",
+      "org": "googlecontainertools",
+      "repo": "jib",
+      "number": 4035,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 4,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "googlecontainertools__jib-4144",
+      "org": "googlecontainertools",
+      "repo": "jib",
+      "number": 4144,
+      "status": "eligible",
+      "files": 5,
+      "changedLines": 28,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "mockito__mockito-3129",
+      "org": "mockito",
+      "repo": "mockito",
+      "number": 3129,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 29,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "mockito__mockito-3133",
+      "org": "mockito",
+      "repo": "mockito",
+      "number": 3133,
+      "status": "eligible",
+      "files": 7,
+      "changedLines": 164,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "mockito__mockito-3167",
+      "org": "mockito",
+      "repo": "mockito",
+      "number": 3167,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 24,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "mockito__mockito-3173",
+      "org": "mockito",
+      "repo": "mockito",
+      "number": 3173,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 12,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "mockito__mockito-3220",
+      "org": "mockito",
+      "repo": "mockito",
+      "number": 3220,
+      "status": "rejected",
+      "files": 11,
+      "changedLines": 251,
+      "rejectReason": "too-many-files"
+    },
+    {
+      "instanceId": "mockito__mockito-3424",
+      "org": "mockito",
+      "repo": "mockito",
+      "number": 3424,
+      "status": "eligible",
+      "files": 5,
+      "changedLines": 75,
+      "rejectReason": null
+    }
+  ],
+  "sampled": [
+    {
+      "instanceId": "alibaba__fastjson2-2775",
+      "org": "alibaba",
+      "repo": "fastjson2",
+      "number": 2775,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 31,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "alibaba__fastjson2-82",
+      "org": "alibaba",
+      "repo": "fastjson2",
+      "number": 82,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "apache__dubbo-11781",
+      "org": "apache",
+      "repo": "dubbo",
+      "number": 11781,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 4,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-13931",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 13931,
+      "status": "eligible",
+      "files": 5,
+      "changedLines": 93,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-14970",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 14970,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 11,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15008",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15008,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 88,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-15964",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 15964,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 14,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16079",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16079,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 4,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16094",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16094,
+      "status": "eligible",
+      "files": 9,
+      "changedLines": 95,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "elastic__logstash-16968",
+      "org": "elastic",
+      "repo": "logstash",
+      "number": 16968,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 101,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1016",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1016,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 14,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-1208",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 1208,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 14,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-183",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 183,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 2,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-core-922",
+      "org": "fasterxml",
+      "repo": "jackson-core",
+      "number": 922,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 24,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3371",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3371,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 14,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3625",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3625,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 11,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-3851",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 3851,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 29,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4087",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4087,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 19,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4189",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4189,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 12,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4257",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4257,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4360",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4360,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 8,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-databind-4469",
+      "org": "fasterxml",
+      "repo": "jackson-databind",
+      "number": 4469,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 20,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-dataformat-xml-590",
+      "org": "fasterxml",
+      "repo": "jackson-dataformat-xml",
+      "number": 590,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 20,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "fasterxml__jackson-dataformat-xml-638",
+      "org": "fasterxml",
+      "repo": "jackson-dataformat-xml",
+      "number": 638,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 23,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "google__gson-1555",
+      "org": "google",
+      "repo": "gson",
+      "number": 1555,
+      "status": "eligible",
+      "files": 2,
+      "changedLines": 19,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "google__gson-1787",
+      "org": "google",
+      "repo": "gson",
+      "number": 1787,
+      "status": "eligible",
+      "files": 4,
+      "changedLines": 77,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "googlecontainertools__jib-2536",
+      "org": "googlecontainertools",
+      "repo": "jib",
+      "number": 2536,
+      "status": "eligible",
+      "files": 4,
+      "changedLines": 6,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "googlecontainertools__jib-2542",
+      "org": "googlecontainertools",
+      "repo": "jib",
+      "number": 2542,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 32,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "mockito__mockito-3129",
+      "org": "mockito",
+      "repo": "mockito",
+      "number": 3129,
+      "status": "eligible",
+      "files": 3,
+      "changedLines": 29,
+      "rejectReason": null
+    },
+    {
+      "instanceId": "mockito__mockito-3167",
+      "org": "mockito",
+      "repo": "mockito",
+      "number": 3167,
+      "status": "eligible",
+      "files": 1,
+      "changedLines": 24,
+      "rejectReason": null
+    }
+  ],
+  "total": 30
+}

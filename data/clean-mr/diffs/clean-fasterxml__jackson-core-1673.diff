@@ -1,0 +1,139 @@
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index 3934161530..aa7fdc0d97 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -21,6 +21,9 @@ JSON library.
+   lands at the output buffer boundary
+  (reported by @hdimitrieski)
+  (fix by @kalayciburak)
++#1673: `readString(Writer)` AIOOBE when an escape or multi-byte character
++  lands at the output buffer boundary
++ (fix by @pjfanning)
+ 
+ 3.1.6 (14-Aug-2026)
+ 
+diff --git a/src/main/java/tools/jackson/core/json/UTF8DataInputJsonParser.java b/src/main/java/tools/jackson/core/json/UTF8DataInputJsonParser.java
+index 40000ab11f..cc74979905 100644
+--- a/src/main/java/tools/jackson/core/json/UTF8DataInputJsonParser.java
++++ b/src/main/java/tools/jackson/core/json/UTF8DataInputJsonParser.java
+@@ -2199,11 +2199,9 @@ private long _streamString(Writer writer) throws IOException, JacksonException
+ 
+             ascii_loop:
+             while (true) {
+-                c = _inputData.readUnsignedByte();
+-                if (codes[c] != 0) {
+-                    break ascii_loop;
+-                }
+-                // Flush intermediate buffer when full
++                // 30-Aug-2026, pjfanning: Flush before decoding, not before
++                //   appending: guarantees room is left when we exit the loop
++                //   for an escape or multi-byte char, which append unchecked
+                 if (outPtr >= outBuf.length) {
+                     writer.write(outBuf, 0, outPtr);
+                     totalLen += outPtr;
+@@ -2213,6 +2211,10 @@ private long _streamString(Writer writer) throws IOException, JacksonException
+                         _streamReadConstraints.validateStringLengthLong(totalLen);
+                     }
+                 }
++                c = _inputData.readUnsignedByte();
++                if (codes[c] != 0) {
++                    break ascii_loop;
++                }
+                 // Accumulate character in intermediate buffer
+                 outBuf[outPtr++] = (char) c;
+             }
+diff --git a/src/main/java/tools/jackson/core/json/UTF8StreamJsonParser.java b/src/main/java/tools/jackson/core/json/UTF8StreamJsonParser.java
+index fcfc3543a3..31b29cc6c5 100644
+--- a/src/main/java/tools/jackson/core/json/UTF8StreamJsonParser.java
++++ b/src/main/java/tools/jackson/core/json/UTF8StreamJsonParser.java
+@@ -3167,12 +3167,9 @@ private long _streamString(Writer writer) throws IOException, JacksonException
+                     max = _inputEnd;
+                 }
+                 while (ptr < max) {
+-                    c = inputBuffer[ptr++] & 0xFF;
+-                    if (codes[c] != 0) {
+-                        _inputPtr = ptr;
+-                        break ascii_loop;
+-                    }
+-                    // Flush intermediate buffer when full
++                    // 30-Aug-2026, pjfanning: Flush before decoding, not before
++                    //   appending: guarantees room is left when we exit the loop
++                    //   for an escape or multi-byte char, which append unchecked
+                     if (outPtr >= outBuf.length) {
+                         writer.write(outBuf, 0, outPtr);
+                         totalLen += outPtr;
+@@ -3182,6 +3179,11 @@ private long _streamString(Writer writer) throws IOException, JacksonException
+                         }
+                         outPtr = 0;
+                     }
++                    c = inputBuffer[ptr++] & 0xFF;
++                    if (codes[c] != 0) {
++                        _inputPtr = ptr;
++                        break ascii_loop;
++                    }
+                     // Accumulate character in intermediate buffer
+                     outBuf[outPtr++] = (char) c;
+                 }
+diff --git a/src/test/java/tools/jackson/core/unittest/read/ReadStringStreamingTest.java b/src/test/java/tools/jackson/core/unittest/read/ReadStringStreamingTest.java
+index 9601293ec6..e6ec665209 100644
+--- a/src/test/java/tools/jackson/core/unittest/read/ReadStringStreamingTest.java
++++ b/src/test/java/tools/jackson/core/unittest/read/ReadStringStreamingTest.java
+@@ -160,6 +160,36 @@ private void _testEscapesAtOutputBufferBoundary(int mode) throws Exception
+         }
+     }
+ 
++    @Test
++    void escapeAtFullOutputBuffer() throws Exception
++    {
++        // Buffer *exactly* full when the escape is reached: the ASCII loop only
++        // flushes before appending, so on exit `outPtr` can equal the buffer
++        // length and the escape branch must make room for itself.
++        for (int mode : ALL_MODES) {
++            _testEscapeAfterAsciiPrefix(mode, OUT_BUF_SIZE);
++            _testEscapeAfterAsciiPrefix(mode, OUT_BUF_SIZE * 2);
++        }
++    }
++
++    private void _testEscapeAfterAsciiPrefix(int mode, int prefixLen) throws Exception
++    {
++        String prefix = "x".repeat(prefixLen);
++        String json = "[\"" + prefix + "\\n\"]";
++        String expected = prefix + "\n";
++        String desc = "mode=" + mode + ", prefixLen=" + prefixLen;
++
++        try (JsonParser p = createParser(JSON_FACTORY, mode, json)) {
++            assertToken(JsonToken.START_ARRAY, p.nextToken());
++            assertToken(JsonToken.VALUE_STRING, p.nextToken());
++
++            Writer w = new StringWriter();
++            long len = p.readString(w);
++            assertEquals(expected, w.toString(), desc);
++            assertEquals((long) expected.length(), len, desc);
++        }
++    }
++
+     /*
+     /**********************************************************************
+     /* Multi-byte UTF-8 (exercises binary-parser code paths)
+@@ -211,6 +241,21 @@ void surrogateAtOutputBufferBoundary() throws Exception
+         }
+     }
+ 
++    @Test
++    void multiByteAtFullOutputBuffer() throws Exception
++    {
++        // Same boundary as escapeAtFullOutputBuffer(), but reached via 2-, 3- and
++        // 4-byte UTF-8 characters instead of a backslash escape.
++        for (String ch : new String[] { "\u00e9", "\u4e2d", "\uD83D\uDE00" }) {
++            for (int prefixLen : new int[] { OUT_BUF_SIZE, OUT_BUF_SIZE * 2 }) {
++                String value = "x".repeat(prefixLen) + ch + "tail";
++                for (int mode : ALL_BINARY_MODES) {
++                    _testUtf8Value(mode, value);
++                }
++            }
++        }
++    }
++
+     private void _testUtf8Value(int mode, String value) throws Exception
+     {
+         String json = "[" + q(value) + "]";

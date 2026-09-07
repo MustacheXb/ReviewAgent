@@ -1,0 +1,807 @@
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index f975f3b594..dd7749923b 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -24,6 +24,9 @@ Versions: 3.x (for earlier see VERSION-2.x)
+  (fix by @pjfanning)
+ #6113: Fix `DOMSerializer` to support polymorphic serialization
+  (fix by @dong0713)
++#6120: Use per-node-type Type Ids for DOM values, reconstruct via DOM factory
++  instead of always parsing a `Document`
++ (fix by @cowtowncoder, w/ Claude code)
+ 
+ 3.2.1 (10-Jul-2026)
+ 
+diff --git a/src/main/java/tools/jackson/databind/ext/DOMDeserializer.java b/src/main/java/tools/jackson/databind/ext/DOMDeserializer.java
+index 8648e0fe98..6ca8b02bdf 100644
+--- a/src/main/java/tools/jackson/databind/ext/DOMDeserializer.java
++++ b/src/main/java/tools/jackson/databind/ext/DOMDeserializer.java
+@@ -6,20 +6,31 @@
+ import javax.xml.parsers.DocumentBuilder;
+ import javax.xml.parsers.DocumentBuilderFactory;
+ import javax.xml.parsers.ParserConfigurationException;
+-import org.w3c.dom.Document;
+-import org.w3c.dom.Node;
++import org.w3c.dom.*;
+ import org.xml.sax.InputSource;
+ 
+ import tools.jackson.databind.DeserializationContext;
++import tools.jackson.databind.ValueDeserializer;
++import tools.jackson.databind.annotation.JacksonStdImpl;
+ import tools.jackson.databind.deser.std.FromStringDeserializer;
++import tools.jackson.databind.util.AccessPattern;
++import tools.jackson.databind.util.ClassUtil;
+ 
+ /**
+- * Base for deserializers that allows parsing DOM Documents from JSON Strings.
+- * Nominal type can be either {@link org.w3c.dom.Node} or
+- * {@link org.w3c.dom.Document}.
++ * Base for deserializers that allows parsing DOM values from JSON Strings.
++ * Nominal type can be {@link org.w3c.dom.Node} or one of the node types that
++ * {@link DOMSerializer} writes a distinct Type Id for; see
++ * {@link #findDeserializer} for the full set, and for which types fall back to
++ * plain {@code Node} handling.
+  */
+ public abstract class DOMDeserializer<T> extends FromStringDeserializer<T>
+ {
++    /**
++     * Name of throw-away root element used for parsing node types that are not
++     * well-formed XML documents on their own; never part of the result.
++     */
++    private final static String WRAPPER_ELEMENT = "jacksonDomWrapper";
++
+     private final static DocumentBuilderFactory DEFAULT_PARSER_FACTORY;
+     static {
+         DocumentBuilderFactory parserFactory = DocumentBuilderFactory.newInstance();
+@@ -49,6 +60,47 @@ public abstract class DOMDeserializer<T> extends FromStringDeserializer<T>
+     @Override
+     public abstract T _deserialize(String value, DeserializationContext ctxt);
+ 
++    /**
++     * Lookup of deserializer for a DOM {@link Node} subtype. Order matters: the most
++     * specific type must be checked first, since a check matching a supertype would
++     * leave the more specific handler unreachable
++     * (23-Jul-2026, [databind#6113]: `Document` vs `Node`;
++     *  24-Jul-2026, [databind#6120]: the rest).
++     *<p>
++     * Node types with no entry here -- notably {@link Attr}, for which the
++     * {@code Transformer} emits nothing usable -- fall back to {@code NodeDeserializer},
++     * which can only produce a {@link Document}. Must stay in sync with the Type Ids
++     * {@code DOMSerializer} writes.
++     *
++     * @since 3.3
++     */
++    public static ValueDeserializer<?> findDeserializer(Class<?> rawType)
++    {
++        if (Document.class.isAssignableFrom(rawType)) {
++            return new DocumentDeserializer();
++        }
++        if (Element.class.isAssignableFrom(rawType)) {
++            return new ElementDeserializer();
++        }
++        // `CDATASection` is a subtype of `Text`, so must precede it
++        if (CDATASection.class.isAssignableFrom(rawType)) {
++            return new CDATASectionDeserializer();
++        }
++        if (Text.class.isAssignableFrom(rawType)) {
++            return new TextDeserializer();
++        }
++        if (Comment.class.isAssignableFrom(rawType)) {
++            return new CommentDeserializer();
++        }
++        if (ProcessingInstruction.class.isAssignableFrom(rawType)) {
++            return new ProcessingInstructionDeserializer();
++        }
++        if (DocumentFragment.class.isAssignableFrom(rawType)) {
++            return new DocumentFragmentDeserializer();
++        }
++        return new NodeDeserializer();
++    }
++
+     protected final Document parse(String value) throws IllegalArgumentException {
+         try {
+             return documentBuilder().parse(new InputSource(new StringReader(value)));
+@@ -57,6 +109,29 @@ protected final Document parse(String value) throws IllegalArgumentException {
+         }
+     }
+ 
++    /**
++     * Helper method for reconstructing node types that are not, by themselves,
++     * well-formed XML documents (text, comments, processing instructions and so on):
++     * wraps given XML text in a throw-away root element, parses that, and returns
++     * the wrapper element whose children are the reconstructed node(s).
++     *<p>
++     * NOTE: input is concatenated into XML, but cannot widen what a caller could
++     * already reach via {@link #parse}: content that closes the wrapper leaves the
++     * document with 2 root elements, and a {@code DOCTYPE} may not follow a start tag
++     * -- both are fatal parse errors, on top of the parser factory already disallowing
++     * DOCTYPE declarations and entity expansion.
++     *<p>
++     * NOTE: DOM Level 3 {@code LSParser.parseWithContext()} would do this directly, but
++     * the JDK's bundled parser does not implement it (throws {@code NOT_SUPPORTED_ERR}),
++     * so wrapping is the only option that avoids a third-party XML dependency.
++     *
++     * @since 3.3
++     */
++    protected final Element parseWrapped(String value) throws IllegalArgumentException {
++        return parse("<"+WRAPPER_ELEMENT+">"+value+"</"+WRAPPER_ELEMENT+">")
++                .getDocumentElement();
++    }
++
+     /**
+      * Overridable factory method used to create {@link DocumentBuilder} for parsing
+      * XML as DOM.
+@@ -67,12 +142,35 @@ protected DocumentBuilder documentBuilder() throws ParserConfigurationException
+         return DEFAULT_PARSER_FACTORY.newDocumentBuilder();
+     }
+ 
++    /**
++     * Helper method for extracting the single child of expected type from wrapper
++     * element created by {@link #parseWrapped}.
++     *<p>
++     * NOTE: only usable for node types with no sub-interface of their own (a
++     * {@link CDATASection}, for example, would satisfy a {@link Text} check here).
++     *
++     * @since 3.3
++     */
++    protected final <N extends Node> N parseWrappedChild(String value, Class<N> expType)
++        throws IllegalArgumentException
++    {
++        Node child = parseWrapped(value).getFirstChild();
++        if (!expType.isInstance(child)) {
++            throw new IllegalArgumentException(String.format(
++                    "Failed to parse JSON String as XML %s node: got %s",
++                    ClassUtil.nameOf(expType),
++                    (child == null) ? "no content" : "node type "+child.getNodeType()));
++        }
++        return expType.cast(child);
++    }
++
+     /*
+     /**********************************************************
+     /* Concrete deserializers
+     /**********************************************************
+      */
+ 
++    @JacksonStdImpl
+     public static class NodeDeserializer extends DOMDeserializer<Node> {
+         public NodeDeserializer() { super(Node.class); }
+         @Override
+@@ -81,6 +179,7 @@ public Node _deserialize(String value, DeserializationContext ctxt) throws Illeg
+         }
+     }
+ 
++    @JacksonStdImpl
+     public static class DocumentDeserializer extends DOMDeserializer<Document> {
+         public DocumentDeserializer() { super(Document.class); }
+         @Override
+@@ -88,4 +187,123 @@ public Document _deserialize(String value, DeserializationContext ctxt) throws I
+             return parse(value);
+         }
+     }
++
++    /**
++     * @since 3.3
++     */
++    @JacksonStdImpl
++    static class ElementDeserializer extends DOMDeserializer<Element> {
++        ElementDeserializer() { super(Element.class); }
++        @Override
++        public Element _deserialize(String value, DeserializationContext ctxt) throws IllegalArgumentException {
++            // Serialized Element is a well-formed document on its own (Transformer
++            // hoists any ancestor namespace declarations into the subtree)
++            return parse(value).getDocumentElement();
++        }
++    }
++
++    /**
++     * @since 3.3
++     */
++    @JacksonStdImpl
++    static class TextDeserializer extends DOMDeserializer<Text> {
++        TextDeserializer() { super(Text.class); }
++
++        // 24-Jul-2026, tatu: [databind#6120] Unlike every other DOM type, the written
++        //    form of a `Text` node IS its (escaped) content, with no delimiters. Default
++        //    trimming would silently drop leading/trailing whitespace -- and turn a
++        //    whitespace-only node (indentation in any pretty-printed document) into
++        //    an empty String, and thereby `null`.
++        @Override
++        protected boolean _shouldTrim() { return false; }
++
++        // ... and for the same reason empty content is a legal `Text` node, not `null`.
++        // NOTE: must go via `getEmptyValue()`, which is what `CoercionAction.AsEmpty`
++        // and `@JsonSetter(contentNulls=AS_EMPTY)` consult (compare to
++        // `JDKFromStringDeserializer`)
++        @Override
++        public Object getEmptyValue(DeserializationContext ctxt) {
++            return _deserialize("", ctxt);
++        }
++
++        // ... and unlike the immutable scalars `StdScalarDeserializer` assumes, a DOM
++        // node is mutable and carries a parent pointer (`appendChild()` reparents), so
++        // the empty value must NOT be shared: `CONSTANT` would have
++        // `NullsConstantProvider` hand every null the very same node
++        @Override
++        public AccessPattern getEmptyAccessPattern() {
++            return AccessPattern.DYNAMIC;
++        }
++
++        @Override
++        protected Object _deserializeFromEmptyStringDefault(DeserializationContext ctxt) {
++            return getEmptyValue(ctxt);
++        }
++
++        @Override
++        public Text _deserialize(String value, DeserializationContext ctxt) throws IllegalArgumentException {
++            // Cannot just take the first child: parser is allowed to split character
++            // data into multiple `Text` nodes
++            Element wrapper = parseWrapped(value);
++            return wrapper.getOwnerDocument().createTextNode(wrapper.getTextContent());
++        }
++    }
++
++    /**
++     * @since 3.3
++     */
++    @JacksonStdImpl
++    static class CDATASectionDeserializer extends DOMDeserializer<CDATASection> {
++        CDATASectionDeserializer() { super(CDATASection.class); }
++        @Override
++        public CDATASection _deserialize(String value, DeserializationContext ctxt) throws IllegalArgumentException {
++            // Same as with `Text`: content containing "]]>" is written out as multiple
++            // CDATA sections, so recombine into one
++            Element wrapper = parseWrapped(value);
++            return wrapper.getOwnerDocument().createCDATASection(wrapper.getTextContent());
++        }
++    }
++
++    /**
++     * @since 3.3
++     */
++    @JacksonStdImpl
++    static class CommentDeserializer extends DOMDeserializer<Comment> {
++        CommentDeserializer() { super(Comment.class); }
++        @Override
++        public Comment _deserialize(String value, DeserializationContext ctxt) throws IllegalArgumentException {
++            return parseWrappedChild(value, Comment.class);
++        }
++    }
++
++    /**
++     * @since 3.3
++     */
++    @JacksonStdImpl
++    static class ProcessingInstructionDeserializer extends DOMDeserializer<ProcessingInstruction> {
++        ProcessingInstructionDeserializer() { super(ProcessingInstruction.class); }
++        @Override
++        public ProcessingInstruction _deserialize(String value, DeserializationContext ctxt) throws IllegalArgumentException {
++            return parseWrappedChild(value, ProcessingInstruction.class);
++        }
++    }
++
++    /**
++     * @since 3.3
++     */
++    @JacksonStdImpl
++    static class DocumentFragmentDeserializer extends DOMDeserializer<DocumentFragment> {
++        DocumentFragmentDeserializer() { super(DocumentFragment.class); }
++        @Override
++        public DocumentFragment _deserialize(String value, DeserializationContext ctxt) throws IllegalArgumentException {
++            Element wrapper = parseWrapped(value);
++            Document doc = wrapper.getOwnerDocument();
++            DocumentFragment frag = doc.createDocumentFragment();
++            // NOTE: `appendChild()` detaches from wrapper, so this consumes the list
++            for (Node child; (child = wrapper.getFirstChild()) != null; ) {
++                frag.appendChild(child);
++            }
++            return frag;
++        }
++    }
+ }
+diff --git a/src/main/java/tools/jackson/databind/ext/DOMSerializer.java b/src/main/java/tools/jackson/databind/ext/DOMSerializer.java
+index 2624d21ee2..2c2fe51311 100644
+--- a/src/main/java/tools/jackson/databind/ext/DOMSerializer.java
++++ b/src/main/java/tools/jackson/databind/ext/DOMSerializer.java
+@@ -6,17 +6,18 @@
+ import javax.xml.transform.*;
+ import javax.xml.transform.dom.DOMSource;
+ import javax.xml.transform.stream.StreamResult;
+-import org.w3c.dom.Document;
+-import org.w3c.dom.Node;
++import org.w3c.dom.*;
+ 
+ import tools.jackson.core.*;
+ import tools.jackson.core.type.WritableTypeId;
+ import tools.jackson.databind.JavaType;
+ import tools.jackson.databind.SerializationContext;
++import tools.jackson.databind.annotation.JacksonStdImpl;
+ import tools.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
+ import tools.jackson.databind.jsontype.TypeSerializer;
+ import tools.jackson.databind.ser.std.StdSerializer;
+ 
++@JacksonStdImpl
+ public class DOMSerializer extends StdSerializer<Node>
+ {
+     protected final TransformerFactory transformerFactory;
+@@ -65,7 +66,7 @@ public void serializeWithType(Node value, JsonGenerator g, SerializationContext
+         // class (like `com.sun.org.apache.xerces.internal.dom.DocumentImpl`); but
+         // cannot always use `Node` either, since that is not a subtype of `Document`
+         // and would fail on deserialization of `Document`-declared values
+-        Class<?> typeForId = (value instanceof Document) ? Document.class : Node.class;
++        Class<?> typeForId = _typeIdClassFor(value);
+         WritableTypeId typeIdDef = typeSer.writeTypePrefix(g, ctxt,
+                 typeSer.typeId(value, typeForId, JsonToken.VALUE_STRING));
+         serialize(value, g, ctxt);
+@@ -79,6 +80,40 @@ public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType t
+         visitStringFormat(visitor, typeHint);
+     }
+ 
++    /**
++     * Helper method for finding the DOM interface to use as the Type Id for given
++     * value: switches on {@link Node#getNodeType()} since runtime classes are
++     * JDK-internal implementation types, and node types are mutually exclusive.
++     *<p>
++     * Must stay in sync with {@link DOMDeserializer#findDeserializer}, which documents
++     * the supported set and the fallback.
++     *
++     * @since 3.3
++     */
++    private static Class<? extends Node> _typeIdClassFor(Node value)
++    {
++        switch (value.getNodeType()) {
++        case Node.DOCUMENT_NODE:
++            return Document.class;
++        case Node.ELEMENT_NODE:
++            return Element.class;
++        // NOTE: needs its own Type Id even though `CDATASection` is a subtype of
++        // `Text`, or it would be read back as a plain `Text` node
++        case Node.CDATA_SECTION_NODE:
++            return CDATASection.class;
++        case Node.TEXT_NODE:
++            return Text.class;
++        case Node.COMMENT_NODE:
++            return Comment.class;
++        case Node.PROCESSING_INSTRUCTION_NODE:
++            return ProcessingInstruction.class;
++        case Node.DOCUMENT_FRAGMENT_NODE:
++            return DocumentFragment.class;
++        default:
++            return Node.class;
++        }
++    }
++
+     private static void setTransformerFactoryAttribute(final TransformerFactory transformerFactory,
+                                                        final String name, final Object value) {
+         try {
+diff --git a/src/main/java/tools/jackson/databind/ext/OptionalHandlerFactory.java b/src/main/java/tools/jackson/databind/ext/OptionalHandlerFactory.java
+index 420954b20f..2eb4452813 100644
+--- a/src/main/java/tools/jackson/databind/ext/OptionalHandlerFactory.java
++++ b/src/main/java/tools/jackson/databind/ext/OptionalHandlerFactory.java
+@@ -23,7 +23,6 @@ public class OptionalHandlerFactory
+     // // and because Android (and presumably GAE) have these classes
+ 
+     private final static Class<?> CLASS_DOM_NODE = org.w3c.dom.Node.class;
+-    private final static Class<?> CLASS_DOM_DOCUMENT = org.w3c.dom.Document.class;
+ 
+     public final static OptionalHandlerFactory instance = new OptionalHandlerFactory();
+ 
+@@ -62,14 +61,8 @@ public ValueSerializer<?> findSerializer(SerializationConfig config, JavaType ty
+     public ValueDeserializer<?> findDeserializer(DeserializationConfig config, JavaType type)
+     {
+         final Class<?> rawType = type.getRawClass();
+-        // 23-Jul-2026, tatu: [databind#6113] Must check most-specific type first:
+-        //    `Document` is a subtype of `Node`, so checking `Node` first would
+-        //    leave `DocumentDeserializer` unreachable
+-        if (_IsXOfY(rawType, CLASS_DOM_DOCUMENT)) {
+-            return new DOMDeserializer.DocumentDeserializer();
+-        }
+         if (_IsXOfY(rawType, CLASS_DOM_NODE)) {
+-            return new DOMDeserializer.NodeDeserializer();
++            return DOMDeserializer.findDeserializer(rawType);
+         }
+         String className = rawType.getName();
+         if (className.startsWith(PACKAGE_PREFIX_JAVAX_XML)
+diff --git a/src/test/java/tools/jackson/databind/ext/xml/DOMTypeReadWriteTest.java b/src/test/java/tools/jackson/databind/ext/xml/DOMTypeReadWriteTest.java
+index ebe709d6c2..657d7e65c3 100644
+--- a/src/test/java/tools/jackson/databind/ext/xml/DOMTypeReadWriteTest.java
++++ b/src/test/java/tools/jackson/databind/ext/xml/DOMTypeReadWriteTest.java
+@@ -1,11 +1,14 @@
+ package tools.jackson.databind.ext.xml;
+ 
+ import java.io.StringReader;
++import java.util.List;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+ import javax.xml.parsers.DocumentBuilderFactory;
+ 
++import com.fasterxml.jackson.annotation.JsonSetter;
+ import com.fasterxml.jackson.annotation.JsonTypeInfo;
++import com.fasterxml.jackson.annotation.Nulls;
+ 
+ import org.junit.jupiter.api.Test;
+ import org.w3c.dom.*;
+@@ -14,6 +17,8 @@
+ import tools.jackson.databind.JavaType;
+ import tools.jackson.databind.JsonNode;
+ import tools.jackson.databind.ObjectMapper;
++import tools.jackson.databind.cfg.CoercionAction;
++import tools.jackson.databind.cfg.CoercionInputShape;
+ import tools.jackson.databind.exc.InvalidFormatException;
+ import tools.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
+ import tools.jackson.databind.jsonFormatVisitors.JsonStringFormatVisitor;
+@@ -30,8 +35,12 @@ public class DOMTypeReadWriteTest extends DatabindTestUtil
+     final static String SIMPLE_XML_DEFAULT_NS =
+             "<root xmlns='http://foo'/>";
+ 
+-    // [databind#6113]: wrappers for polymorphic handling, with the 2 DOM types
+-    // for which deserializers exist (see `OptionalHandlerFactory`)
++    // [databind#6120]: node types not present in `SIMPLE_XML`
++    final static String MIXED_XML =
++        "<root><![CDATA[cd & data]]><!--comment--></root>";
++
++    // [databind#6113]: wrappers for polymorphic handling; [databind#6120] extended
++    // the set of DOM types for which deserializers exist (see `DOMDeserializer.findDeserializer`)
+     static class NodeWrapper {
+         @JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
+         public Node value;
+@@ -48,6 +57,12 @@ protected DocumentWrapper() { }
+         public DocumentWrapper(Document d) { value = d; }
+     }
+ 
++    // [databind#6120]: for verifying empty `Text` values are not shared
++    static class TextListWrapper {
++        @JsonSetter(contentNulls = Nulls.AS_EMPTY)
++        public List<Text> values;
++    }
++
+     private final ObjectMapper MAPPER = new ObjectMapper();
+ 
+     @Test
+@@ -159,6 +174,42 @@ public void nodeUsesNodeDeserializer() throws Exception
+         verifyException(e, "Cannot deserialize value of type `org.w3c.dom.Node`");
+     }
+ 
++    // [databind#6120]: each reconstructible node type now resolves to its own
++    // deserializer, so it may also be used as the declared type directly
++    @Test
++    public void readAsElement() throws Exception
++    {
++        Element el = MAPPER.readValue(q("<leaf>Rock &amp; Roll!</leaf>"), Element.class);
++        _assertNodeType(Node.ELEMENT_NODE, Element.class, el);
++        assertEquals("leaf", el.getTagName());
++        assertEquals("Rock & Roll!", el.getTextContent());
++    }
++
++    @Test
++    public void readAsText() throws Exception
++    {
++        Text text = MAPPER.readValue(q("Rock &amp; Roll!"), Text.class);
++        _assertNodeType(Node.TEXT_NODE, Text.class, text);
++        assertEquals("Rock & Roll!", text.getData());
++    }
++
++    @Test
++    public void readAsComment() throws Exception
++    {
++        Comment c = MAPPER.readValue(q("<!--comment-->"), Comment.class);
++        _assertNodeType(Node.COMMENT_NODE, Comment.class, c);
++        assertEquals("comment", c.getData());
++    }
++
++    // ... and failure to reconstruct expected node type is reported as usual
++    @Test
++    public void readAsCommentFailsForNonComment() throws Exception
++    {
++        InvalidFormatException e = assertThrows(InvalidFormatException.class,
++                () -> MAPPER.readValue(q("<elem/>"), Comment.class));
++        verifyException(e, "Failed to parse JSON String as XML `org.w3c.dom.Comment` node");
++    }
++
+     /*
+     /**********************************************************
+     /* Polymorphic (`@JsonTypeInfo`) tests
+@@ -193,12 +244,8 @@ public void polymorphicNodeFieldWithDocument() throws Exception
+         assertEquals(SIMPLE_XML, _asXml(result.value));
+     }
+ 
+-    // [databind#6113]: `Element` value gets `Node` Type Id (not `Element`), since
+-    // `NodeDeserializer` is the only handler that can accept it.
+-    // NOTE: read side is asymmetric -- `DOMDeserializer` always parses a full
+-    // `Document` -- so an `Element` written comes back as `Document`. That is
+-    // pre-existing `DOMDeserializer` behavior, not something #6113 changed;
+-    // see [databind#6120] for possible per-node-type handling.
++    // [databind#6120]: `Element` value now gets an `Element` Type Id and is
++    // reconstructed as an `Element` (before, it came back as a `Document`)
+     @Test
+     public void polymorphicNodeFieldWithElement() throws Exception
+     {
+@@ -207,22 +254,39 @@ public void polymorphicNodeFieldWithElement() throws Exception
+         _assertNodeType(Node.ELEMENT_NODE, Element.class, leaf);
+ 
+         String json = MAPPER.writeValueAsString(new NodeWrapper(leaf));
+-        assertEquals(Node.class.getName(), _typeIdOf(json));
++        assertEquals(Element.class.getName(), _typeIdOf(json));
+         assertEquals("<leaf>Rock &amp; Roll!</leaf>", _valueOf(json));
+ 
+         NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
+-        // Exactly a Document -- NOT the Element that was written
+-        _assertNodeType(Node.DOCUMENT_NODE, Document.class, result.value);
+-        Element rootOfResult = ((Document) result.value).getDocumentElement();
+-        _assertNodeType(Node.ELEMENT_NODE, Element.class, rootOfResult);
+-        assertEquals("leaf", rootOfResult.getTagName());
+-        assertEquals("Rock & Roll!", rootOfResult.getTextContent());
++        _assertNodeType(Node.ELEMENT_NODE, Element.class, result.value);
++        Element resultLeaf = (Element) result.value;
++        assertEquals("leaf", resultLeaf.getTagName());
++        assertEquals("Rock & Roll!", resultLeaf.getTextContent());
++    }
++
++    // [databind#6120]: namespaces survive subtree serialization -- the Transformer
++    // hoists the ancestor declaration into the subtree it writes
++    @Test
++    public void polymorphicNodeFieldWithNamespacedElement() throws Exception
++    {
++        Document doc = _parse("<root xmlns:ns='http://foo'><ns:leaf ns:a='1'>text</ns:leaf></root>");
++        Element leaf = (Element) doc.getDocumentElement().getFirstChild();
++        _assertNodeType(Node.ELEMENT_NODE, Element.class, leaf);
++
++        String json = MAPPER.writeValueAsString(new NodeWrapper(leaf));
++        assertEquals(Element.class.getName(), _typeIdOf(json));
++
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        _assertNodeType(Node.ELEMENT_NODE, Element.class, result.value);
++        Element resultLeaf = (Element) result.value;
++        assertEquals("http://foo", resultLeaf.getNamespaceURI());
++        assertEquals("leaf", resultLeaf.getLocalName());
++        assertEquals("1", resultLeaf.getAttributeNS("http://foo", "a"));
++        assertEquals("text", resultLeaf.getTextContent());
+     }
+ 
+-    // [databind#6113]: `Text` ("String") node also gets `Node` Type Id, and write
+-    // side works. Read side, however, cannot work: bare text is not a legal XML
+-    // document. Again pre-existing `DOMDeserializer` limitation, verified here so
+-    // that a change in behavior is caught; see [databind#6120].
++    // [databind#6120]: `Text` node gets a `Text` Type Id, and is rebuilt by wrapping
++    // the (escaped) text in a throw-away root element before parsing
+     @Test
+     public void polymorphicNodeFieldWithText() throws Exception
+     {
+@@ -231,12 +295,202 @@ public void polymorphicNodeFieldWithText() throws Exception
+         _assertNodeType(Node.TEXT_NODE, Text.class, text);
+ 
+         String json = MAPPER.writeValueAsString(new NodeWrapper(text));
+-        assertEquals(Node.class.getName(), _typeIdOf(json));
++        assertEquals(Text.class.getName(), _typeIdOf(json));
+         assertEquals("Rock &amp; Roll!", _valueOf(json));
+ 
+-        InvalidFormatException e = assertThrows(InvalidFormatException.class,
+-                () -> MAPPER.readValue(json, NodeWrapper.class));
+-        verifyException(e, "Failed to parse JSON String as XML");
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        _assertNodeType(Node.TEXT_NODE, Text.class, result.value);
++        // Escaping round-trips exactly
++        assertEquals("Rock & Roll!", ((Text) result.value).getData());
++    }
++
++    // [databind#6120]: `CDATASection` is a subtype of `Text` but must keep its own
++    // Type Id, or it would come back as a plain `Text` node
++    @Test
++    public void polymorphicNodeFieldWithCDATA() throws Exception
++    {
++        CDATASection cdata = (CDATASection) _parse(MIXED_XML).getDocumentElement()
++                .getFirstChild();
++        _assertNodeType(Node.CDATA_SECTION_NODE, CDATASection.class, cdata);
++
++        String json = MAPPER.writeValueAsString(new NodeWrapper(cdata));
++        assertEquals(CDATASection.class.getName(), _typeIdOf(json));
++        assertEquals("<![CDATA[cd & data]]>", _valueOf(json));
++
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        _assertNodeType(Node.CDATA_SECTION_NODE, CDATASection.class, result.value);
++        assertEquals("cd & data", ((CDATASection) result.value).getData());
++    }
++
++    @Test
++    public void polymorphicNodeFieldWithComment() throws Exception
++    {
++        Comment comment = (Comment) _parse(MIXED_XML).getDocumentElement()
++                .getLastChild();
++        _assertNodeType(Node.COMMENT_NODE, Comment.class, comment);
++
++        String json = MAPPER.writeValueAsString(new NodeWrapper(comment));
++        assertEquals(Comment.class.getName(), _typeIdOf(json));
++        assertEquals("<!--comment-->", _valueOf(json));
++
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        _assertNodeType(Node.COMMENT_NODE, Comment.class, result.value);
++        assertEquals("comment", ((Comment) result.value).getData());
++    }
++
++    @Test
++    public void polymorphicNodeFieldWithProcessingInstruction() throws Exception
++    {
++        ProcessingInstruction pi = (ProcessingInstruction) _simpleDocument()
++                .getDocumentElement().getLastChild();
++        _assertNodeType(Node.PROCESSING_INSTRUCTION_NODE, ProcessingInstruction.class, pi);
++
++        String json = MAPPER.writeValueAsString(new NodeWrapper(pi));
++        assertEquals(ProcessingInstruction.class.getName(), _typeIdOf(json));
++        assertEquals("<?proc instr?>", _valueOf(json));
++
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        _assertNodeType(Node.PROCESSING_INSTRUCTION_NODE, ProcessingInstruction.class, result.value);
++        assertEquals("proc", ((ProcessingInstruction) result.value).getTarget());
++        assertEquals("instr", ((ProcessingInstruction) result.value).getData());
++    }
++
++    @Test
++    public void polymorphicNodeFieldWithDocumentFragment() throws Exception
++    {
++        Document doc = _parse(SIMPLE_XML);
++        DocumentFragment frag = doc.createDocumentFragment();
++        frag.appendChild(doc.createElement("a"));
++        frag.appendChild(doc.createElement("b"));
++
++        String json = MAPPER.writeValueAsString(new NodeWrapper(frag));
++        assertEquals(DocumentFragment.class.getName(), _typeIdOf(json));
++        assertEquals("<a/><b/>", _valueOf(json));
++
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        _assertNodeType(Node.DOCUMENT_FRAGMENT_NODE, DocumentFragment.class, result.value);
++        NodeList children = result.value.getChildNodes();
++        assertEquals(2, children.getLength());
++        assertEquals("a", ((Element) children.item(0)).getTagName());
++        assertEquals("b", ((Element) children.item(1)).getTagName());
++    }
++
++    // ... and namespaces must survive the wrap-and-parse path too, not just the
++    // single-Element one
++    @Test
++    public void polymorphicNodeFieldWithNamespacedDocumentFragment() throws Exception
++    {
++        Document doc = _parse("<root xmlns:ns='http://foo'><ns:a/><ns:b>x</ns:b></root>");
++        DocumentFragment frag = doc.createDocumentFragment();
++        NodeList roots = doc.getDocumentElement().getChildNodes();
++        while (roots.getLength() > 0) {
++            frag.appendChild(roots.item(0));
++        }
++
++        String json = MAPPER.writeValueAsString(new NodeWrapper(frag));
++        assertEquals(DocumentFragment.class.getName(), _typeIdOf(json));
++
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        _assertNodeType(Node.DOCUMENT_FRAGMENT_NODE, DocumentFragment.class, result.value);
++        NodeList children = result.value.getChildNodes();
++        assertEquals(2, children.getLength());
++        for (int i = 0; i < 2; ++i) {
++            Element el = (Element) children.item(i);
++            assertEquals("http://foo", el.getNamespaceURI(), "Wrong ns for child #"+i);
++        }
++        assertEquals("a", ((Element) children.item(0)).getLocalName());
++        assertEquals("b", ((Element) children.item(1)).getLocalName());
++    }
++
++    // [databind#6120]: `Attr` remains unsupported -- the `Transformer` emits an empty
++    // String for it, so name and value are gone before the read side is reached.
++    // Verified here so that a change in behavior is caught.
++    @Test
++    public void polymorphicNodeFieldWithAttr() throws Exception
++    {
++        Attr attr = _simpleDocument().getDocumentElement().getAttributeNode("attr");
++        _assertNodeType(Node.ATTRIBUTE_NODE, Attr.class, attr);
++
++        String json = MAPPER.writeValueAsString(new NodeWrapper(attr));
++        // No usable content written, so no point in a more specific Type Id
++        assertEquals(Node.class.getName(), _typeIdOf(json));
++        assertEquals("", _valueOf(json));
++
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        assertNull(result.value);
++    }
++
++    /*
++    /**********************************************************
++    /* Whitespace handling in `Text` values
++    /**********************************************************
++     */
++
++    // [databind#6120]: a `Text` node is written as its bare (escaped) content, with no
++    // delimiters, so `FromStringDeserializer`s default trimming would silently eat
++    // leading/trailing whitespace
++    @Test
++    public void textKeepsSurroundingWhitespace() throws Exception {
++        _assertDataRoundTrip("<a>hello <b/>world</a>", Node.TEXT_NODE, Text.class, "hello ");
++    }
++
++    // ... and a whitespace-only `Text` node (indentation in any pretty-printed
++    // document) must not trim down to an empty String, and thereby `null`
++    @Test
++    public void whitespaceOnlyTextRoundTrips() throws Exception {
++        _assertDataRoundTrip("<a>\n  <b/>\n</a>", Node.TEXT_NODE, Text.class, "\n  ");
++    }
++
++    // ... nor may empty content, which is a legal `Text` node
++    @Test
++    public void emptyTextRoundTrips() throws Exception
++    {
++        Text text = _parse("<a/>").createTextNode("");
++
++        String json = MAPPER.writeValueAsString(new NodeWrapper(text));
++        assertEquals("", _valueOf(json));
++
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        _assertNodeType(Node.TEXT_NODE, Text.class, result.value);
++        assertEquals("", ((Text) result.value).getData());
++    }
++
++    // ... and the empty `Text` node must be reachable as the "empty value" proper, not
++    // just on the default path: `CoercionAction.AsEmpty` consults `getEmptyValue()`
++    @Test
++    public void emptyTextViaAsEmptyCoercion() throws Exception
++    {
++        ObjectMapper mapper = jsonMapperBuilder()
++                .withCoercionConfigDefaults(cfg ->
++                    cfg.setCoercion(CoercionInputShape.EmptyString, CoercionAction.AsEmpty))
++                .build();
++        Text text = mapper.readValue(q(""), Text.class);
++        _assertNodeType(Node.TEXT_NODE, Text.class, text);
++        assertEquals("", text.getData());
++    }
++
++    // ... but the empty `Text` node is a fresh mutable DOM node, so it must NOT be
++    // shared: `AccessPattern.CONSTANT` (inherited from `StdScalarDeserializer`, whose
++    // scalars are immutable) would have `NullsConstantProvider` hand every null the
++    // same instance -- and `appendChild()` reparents, so adding it to one document
++    // would silently remove it from another
++    @Test
++    public void emptyTextNodesAreNotShared() throws Exception
++    {
++        TextListWrapper result = MAPPER.readValue("{\"values\":[null,null]}",
++                TextListWrapper.class);
++        assertEquals(2, result.values.size());
++        _assertNodeType(Node.TEXT_NODE, Text.class, result.values.get(0));
++        assertNotSame(result.values.get(0), result.values.get(1),
++                "Empty `Text` nodes must not be shared between values");
++    }
++
++    // `CDATASection`, by contrast, is delimited by its "<![CDATA[" / "]]>" markers,
++    // so trimming cannot reach its content -- verify that stays true
++    @Test
++    public void cdataKeepsSurroundingWhitespace() throws Exception {
++        _assertDataRoundTrip("<a><![CDATA[  padded  ]]></a>", Node.CDATA_SECTION_NODE,
++                CDATASection.class, "  padded  ");
+     }
+ 
+     /*
+@@ -283,8 +537,28 @@ protected static String normalizeOutput(String output)
+     }
+ 
+     private Document _simpleDocument() throws Exception {
+-        return DocumentBuilderFactory.newInstance().newDocumentBuilder()
+-                .parse(new InputSource(new StringReader(SIMPLE_XML)));
++        return _parse(SIMPLE_XML);
++    }
++
++    // Round-trip the first child of given XML document, verifying both that it keeps
++    // its node type and that its character data survives verbatim
++    private void _assertDataRoundTrip(String xml, short expNodeType,
++            Class<? extends CharacterData> expType, String expData) throws Exception
++    {
++        CharacterData node = (CharacterData) _parse(xml).getDocumentElement().getFirstChild();
++        _assertNodeType(expNodeType, expType, node);
++        assertEquals(expData, node.getData(), "Bad test setup: wrong input data");
++
++        String json = MAPPER.writeValueAsString(new NodeWrapper(node));
++        NodeWrapper result = MAPPER.readValue(json, NodeWrapper.class);
++        _assertNodeType(expNodeType, expType, result.value);
++        assertEquals(expData, ((CharacterData) result.value).getData());
++    }
++
++    private Document _parse(String xml) throws Exception {
++        DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
++        f.setNamespaceAware(true);
++        return f.newDocumentBuilder().parse(new InputSource(new StringReader(xml)));
+     }
+ 
+     // Serialize given Node with non-polymorphic mapper, to get comparable XML text

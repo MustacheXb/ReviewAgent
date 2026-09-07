@@ -1,0 +1,106 @@
+diff --git a/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/SysProps.java b/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/SysProps.java
+index 8a09132bea4..7a716b23e93 100644
+--- a/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/SysProps.java
++++ b/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/SysProps.java
+@@ -27,6 +27,9 @@ public class SysProps {
+     private static Map<String, String> map = new LinkedHashMap<String, String>();
+ 
+     public static void reset() {
++        for (String key : map.keySet()) {
++            System.clearProperty(key);
++        }
+         map.clear();
+     }
+ 
+@@ -36,9 +39,6 @@ public static void setProperty(String key, String value) {
+     }
+ 
+     public static void clear() {
+-        for (String key : map.keySet()) {
+-            System.clearProperty(key);
+-        }
+         reset();
+     }
+ }
+diff --git a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/SysProps.java b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/SysProps.java
+index cb4b4d88e1b..9d450d7673d 100644
+--- a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/SysProps.java
++++ b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/SysProps.java
+@@ -27,6 +27,9 @@ public class SysProps {
+     private static Map<String, String> map = new LinkedHashMap<String, String>();
+ 
+     public static void reset() {
++        for (String key : map.keySet()) {
++            System.clearProperty(key);
++        }
+         map.clear();
+     }
+ 
+@@ -36,9 +39,6 @@ public static void setProperty(String key, String value) {
+     }
+ 
+     public static void clear() {
+-        for (String key : map.keySet()) {
+-            System.clearProperty(key);
+-        }
+         reset();
+     }
+ }
+diff --git a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/boot/configprops/SpringBootConfigPropsTest.java b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/boot/configprops/SpringBootConfigPropsTest.java
+index cf42633507f..b26b7844cda 100644
+--- a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/boot/configprops/SpringBootConfigPropsTest.java
++++ b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/boot/configprops/SpringBootConfigPropsTest.java
+@@ -79,6 +79,12 @@ class SpringBootConfigPropsTest {
+ 
+     @BeforeAll
+     public static void beforeAll() {
++        // Clear JVM System properties that other tests in the same JVM may have left set to
++        // disable metrics. Dubbo resolves dubbo.metrics.* from the System properties with the
++        // highest precedence, which would otherwise override this test's @SpringBootTest
++        // property dubbo.metrics.protocol=prometheus and fail the assertion below.
++        System.clearProperty("dubbo.metrics.protocol");
++        System.clearProperty("dubbo.metrics.enabled");
+         DubboBootstrap.reset();
+     }
+ 
+diff --git a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/boot/configprops/SpringBootMultipleConfigPropsTest.java b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/boot/configprops/SpringBootMultipleConfigPropsTest.java
+index a8022071e67..c15d75cd56a 100644
+--- a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/boot/configprops/SpringBootMultipleConfigPropsTest.java
++++ b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/boot/configprops/SpringBootMultipleConfigPropsTest.java
+@@ -80,6 +80,12 @@ class SpringBootMultipleConfigPropsTest {
+ 
+     @BeforeAll
+     public static void beforeAll() {
++        // Clear JVM System properties that other tests in the same JVM may have left set to
++        // disable metrics. Dubbo resolves dubbo.metrics.* from the System properties with the
++        // highest precedence, which would otherwise override the prometheus setting expected
++        // by this test.
++        System.clearProperty("dubbo.metrics.protocol");
++        System.clearProperty("dubbo.metrics.enabled");
+         DubboBootstrap.reset();
+     }
+ 
+diff --git a/dubbo-test/dubbo-test-common/src/main/java/org/apache/dubbo/test/common/SysProps.java b/dubbo-test/dubbo-test-common/src/main/java/org/apache/dubbo/test/common/SysProps.java
+index 6c9f5c1001a..6b5e5fdff8e 100644
+--- a/dubbo-test/dubbo-test-common/src/main/java/org/apache/dubbo/test/common/SysProps.java
++++ b/dubbo-test/dubbo-test-common/src/main/java/org/apache/dubbo/test/common/SysProps.java
+@@ -27,6 +27,9 @@ public class SysProps {
+     private static Map<String, String> map = new LinkedHashMap<>();
+ 
+     public static void reset() {
++        for (String key : map.keySet()) {
++            System.clearProperty(key);
++        }
+         map.clear();
+     }
+ 
+@@ -36,9 +39,6 @@ public static void setProperty(String key, String value) {
+     }
+ 
+     public static void clear() {
+-        for (String key : map.keySet()) {
+-            System.clearProperty(key);
+-        }
+         reset();
+     }
+ }

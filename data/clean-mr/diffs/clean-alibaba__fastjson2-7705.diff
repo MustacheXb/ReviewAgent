@@ -1,0 +1,217 @@
+diff --git a/core/src/main/java/com/alibaba/fastjson2/JSONReaderJSONB.java b/core/src/main/java/com/alibaba/fastjson2/JSONReaderJSONB.java
+index 09c9d38a71..ad06b9b026 100644
+--- a/core/src/main/java/com/alibaba/fastjson2/JSONReaderJSONB.java
++++ b/core/src/main/java/com/alibaba/fastjson2/JSONReaderJSONB.java
+@@ -580,9 +580,7 @@ public Object readAny() {
+             }
+             case BC_BIGINT: {
+                 int len = readInt32Value();
+-                if (len < 0 || len > end - offset) {
+-                    throw new JSONException("BC_BIGINT length out of range: " + len);
+-                }
++                checkBigintLen(len, offset, end);
+                 byte[] buf = new byte[len];
+                 System.arraycopy(bytes, offset, buf, 0, len);
+                 offset += len;
+@@ -697,6 +695,9 @@ public Object readAny() {
+             }
+             case BC_BINARY: {
+                 int len = readLength();
++                if (len < 0 || len > end - offset) {
++                    throw new JSONException("BC_BINARY length out of range: " + len);
++                }
+                 byte[] binary = Arrays.copyOfRange(this.bytes, offset, offset + len);
+                 offset += len;
+                 return binary;
+@@ -3256,9 +3257,7 @@ private String readStringTypeNotMatch() {
+                 return Long.toString(int64Value);
+             case BC_BIGINT: {
+                 int len = readInt32Value();
+-                if (len < 0 || len > end - offset) {
+-                    throw new JSONException("BC_BIGINT length out of range: " + len);
+-                }
++                checkBigintLen(len, offset, end);
+                 byte[] bytes = new byte[len];
+                 System.arraycopy(this.bytes, offset, bytes, 0, len);
+                 offset += len;
+@@ -3708,6 +3707,9 @@ public byte[] readBinary() {
+         }
+ 
+         int len = readLength();
++        if (len < 0 || len > end - offset) {
++            throw new JSONException("BC_BINARY length out of range: " + len);
++        }
+         byte[] bytes = new byte[len];
+         System.arraycopy(this.bytes, offset, bytes, 0, len);
+         offset += len;
+@@ -4186,9 +4188,7 @@ public Number readNumber() {
+             }
+             case BC_BIGINT: {
+                 int len = readInt32Value();
+-                if (len < 0 || len > end - offset) {
+-                    throw new JSONException("BC_BIGINT length out of range: " + len);
+-                }
++                checkBigintLen(len, offset, end);
+                 byte[] bytes = new byte[len];
+                 System.arraycopy(this.bytes, offset, bytes, 0, len);
+                 offset += len;
+@@ -4418,9 +4418,7 @@ public BigInteger readBigInteger() {
+             );
+         } else if (type == BC_BIGINT) {
+             int len = readInt32Value();
+-            if (len < 0 || len > end - offset) {
+-                throw new JSONException("BC_BIGINT length out of range: " + len);
+-            }
++            checkBigintLen(len, offset, end);
+             byte[] bytes = new byte[len];
+             System.arraycopy(this.bytes, offset, bytes, 0, len);
+             offset += len;
+@@ -4483,6 +4481,9 @@ private BigInteger readBigInteger0(byte type) {
+             }
+             case BC_BINARY: {
+                 int len = readInt32Value();
++                if (len < 0 || len > end - offset) {
++                    throw new JSONException("BC_BINARY length out of range: " + len);
++                }
+                 byte[] buf = new byte[len];
+                 System.arraycopy(this.bytes, offset, buf, 0, len);
+                 offset += len;
+@@ -6302,6 +6303,12 @@ static int check7(int off, int end) {
+         return off;
+     }
+ 
++    static void checkBigintLen(int len, int offset, int end) {
++        if (len < 0 || len > end - offset) {
++            throw new JSONException("BC_BIGINT length out of range: " + len + ", available: " + (end - offset));
++        }
++    }
++
+     static JSONException outOfBoundsCheckFromToIndex(int offset, int end) {
+         return new JSONException("offset overflow, offset " + offset + ", end " + end);
+     }
+diff --git a/core/src/test/java/com/alibaba/fastjson2/issues/Issue7669.java b/core/src/test/java/com/alibaba/fastjson2/issues/Issue7669.java
+index 0d51429f10..66d96250a2 100644
+--- a/core/src/test/java/com/alibaba/fastjson2/issues/Issue7669.java
++++ b/core/src/test/java/com/alibaba/fastjson2/issues/Issue7669.java
+@@ -2,42 +2,103 @@
+ 
+ import com.alibaba.fastjson2.JSONB;
+ import com.alibaba.fastjson2.JSONException;
++import com.alibaba.fastjson2.JSONReader;
+ import org.junit.jupiter.api.Tag;
+ import org.junit.jupiter.api.Test;
+ 
++import java.math.BigInteger;
++
++import static org.junit.jupiter.api.Assertions.assertArrayEquals;
++import static org.junit.jupiter.api.Assertions.assertEquals;
+ import static org.junit.jupiter.api.Assertions.assertThrows;
+ 
+ @Tag("regression")
+ @Tag("jsonb")
+ public class Issue7669 {
++    // 0xBB = BC_BIGINT, 0x48 = BC_INT32, 0x7FFFFFFF = Integer.MAX_VALUE
++    static final byte[] PAYLOAD_MAX_LEN = {
++            (byte) 0xBB,
++            (byte) 0x48,
++            (byte) 0x7F, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF
++    };
++
++    // 0xBB = BC_BIGINT, 0x48 = BC_INT32, 0xFFFFFFFF = -1
++    static final byte[] PAYLOAD_NEG_LEN = {
++            (byte) 0xBB,
++            (byte) 0x48,
++            (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF
++    };
++
++    // 0x91 = BC_BINARY, 0x48 = BC_INT32, 0x0FFFFFFF = 256MB-1 (passes readLength cap, exceeds buffer)
++    static final byte[] BINARY_PAYLOAD_MAX_LEN = {
++            (byte) 0x91,
++            (byte) 0x48,
++            (byte) 0x0F, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF
++    };
++
++    // 0x91 = BC_BINARY, 0x48 = BC_INT32, 0xFFFFFFFF = -1
++    static final byte[] BINARY_PAYLOAD_NEG_LEN = {
++            (byte) 0x91,
++            (byte) 0x48,
++            (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF
++    };
++
+     @Test
+     public void testBigIntDeclaredLengthOOM() {
+-        // 0xBB = BC_BIGINT, 0x48 = BC_INT32, 0x7FFFFFFF = Integer.MAX_VALUE
+-        byte[] payload = {
+-                (byte) 0xBB,
+-                (byte) 0x48,
+-                (byte) 0x7F, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF
+-        };
+-        assertThrows(JSONException.class, () -> JSONB.parse(payload));
++        assertThrows(JSONException.class, () -> JSONB.parse(PAYLOAD_MAX_LEN));
+     }
+ 
+     @Test
+     public void testBigIntNegativeLength() {
+-        // 0xBB = BC_BIGINT, 0x48 = BC_INT32, 0xFFFFFFFF = -1
+-        byte[] payload = {
+-                (byte) 0xBB,
+-                (byte) 0x48,
+-                (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF
+-        };
+-        assertThrows(JSONException.class, () -> JSONB.parse(payload));
++        assertThrows(JSONException.class, () -> JSONB.parse(PAYLOAD_NEG_LEN));
++    }
++
++    @Test
++    public void testBigIntDeclaredLengthOOM_readBigInteger() {
++        assertThrows(JSONException.class, () -> JSONB.parseObject(PAYLOAD_MAX_LEN, BigInteger.class));
++    }
++
++    @Test
++    public void testBigIntDeclaredLengthOOM_readString() {
++        assertThrows(JSONException.class, () -> JSONB.parseObject(PAYLOAD_MAX_LEN, String.class));
++    }
++
++    @Test
++    public void testBigIntDeclaredLengthOOM_readNumber() {
++        assertThrows(JSONException.class, () -> JSONB.parseObject(PAYLOAD_MAX_LEN, Number.class));
+     }
+ 
+     @Test
+     public void testBigIntValidPayloadStillWorks() {
+-        // Verify legitimate BigInteger values still round-trip correctly
+-        java.math.BigInteger value = java.math.BigInteger.valueOf(Long.MAX_VALUE).multiply(java.math.BigInteger.TEN);
++        BigInteger value = BigInteger.valueOf(Long.MAX_VALUE).multiply(BigInteger.TEN);
++        byte[] jsonbBytes = JSONB.toBytes(value);
++        BigInteger result = (BigInteger) JSONB.parse(jsonbBytes);
++        assertEquals(value, result);
++    }
++
++    @Test
++    public void testBinaryDeclaredLengthOOM() {
++        assertThrows(JSONException.class, () -> JSONB.parse(BINARY_PAYLOAD_MAX_LEN));
++    }
++
++    @Test
++    public void testBinaryNegativeLength() {
++        assertThrows(JSONException.class, () -> JSONB.parse(BINARY_PAYLOAD_NEG_LEN));
++    }
++
++    @Test
++    public void testReadBinaryDeclaredLengthOOM() {
++        // Explicit readBinary() path
++        try (JSONReader reader = JSONReader.ofJSONB(BINARY_PAYLOAD_MAX_LEN)) {
++            assertThrows(JSONException.class, reader::readBinary);
++        }
++    }
++
++    @Test
++    public void testBinaryValidPayloadStillWorks() {
++        byte[] value = {1, 2, 3, 4, 5};
+         byte[] jsonbBytes = JSONB.toBytes(value);
+-        java.math.BigInteger result = (java.math.BigInteger) JSONB.parse(jsonbBytes);
+-        org.junit.jupiter.api.Assertions.assertEquals(value, result);
++        byte[] result = (byte[]) JSONB.parse(jsonbBytes);
++        assertArrayEquals(value, result);
+     }
+ }

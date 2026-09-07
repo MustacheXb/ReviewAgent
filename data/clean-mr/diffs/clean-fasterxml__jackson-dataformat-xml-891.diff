@@ -1,0 +1,252 @@
+diff --git a/release-notes/CREDITS b/release-notes/CREDITS
+index 83b453678..545610775 100644
+--- a/release-notes/CREDITS
++++ b/release-notes/CREDITS
+@@ -22,3 +22,9 @@ PJ Fanning (@pjfanning)
+ * Fixed #793: `XmlSerializationContext`: NPE _writeCapabilities not set for
+   `SerializationContext`
+  (3.0.4)
++
++Sahana (@Sahana2524)
++
++* Contributed #891: Enforce `StreamReadConstraints.maxNestingDepth` in
++  `FromXmlParser`
++ (3.1.6)
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index b70900669..9e4bf4081 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -9,6 +9,11 @@ Version: 3.x (for earlier see VERSION-2.x)
+ 
+ No changes since 3.1
+ 
++3.1.6 (not yet released)
++
++#891: Enforce `StreamReadConstraints.maxNestingDepth` in `FromXmlParser`
++ (contributed by @Sahana2524)
++
+ 3.1.5 (07-Jul-2026)
+ 
+ No changes since 3.1.4
+diff --git a/src/main/java/tools/jackson/dataformat/xml/deser/FromXmlParser.java b/src/main/java/tools/jackson/dataformat/xml/deser/FromXmlParser.java
+index 82e239580..ea40e3544 100644
+--- a/src/main/java/tools/jackson/dataformat/xml/deser/FromXmlParser.java
++++ b/src/main/java/tools/jackson/dataformat/xml/deser/FromXmlParser.java
+@@ -521,10 +521,10 @@ public JsonToken nextToken() throws JacksonException
+ 
+             switch (t) {
+             case START_OBJECT:
+-                _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++                _createChildObjectContext();
+                 break;
+             case START_ARRAY:
+-                _streamReadContext = _streamReadContext.createChildArrayContext(-1, -1);
++                _createChildArrayContext();
+                 break;
+             case END_OBJECT:
+             case END_ARRAY:
+@@ -557,7 +557,7 @@ public JsonToken nextToken() throws JacksonException
+             if (_mayBeLeaf) {
+                 // leave _mayBeLeaf set, as we start a new context
+                 _nextToken = JsonToken.PROPERTY_NAME;
+-                _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++                _createChildObjectContext();
+                 return _updateToken(JsonToken.START_OBJECT);
+             }
+             if (_streamReadContext.inArray()) {
+@@ -593,7 +593,7 @@ public JsonToken nextToken() throws JacksonException
+                         // 06-Jan-2015, tatu: as per [dataformat-xml#180], need to
+                         //    expose as empty Object, not null
+                         _nextToken = JsonToken.END_OBJECT;
+-                        _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++                        _createChildObjectContext();
+                         return _updateToken(JsonToken.START_OBJECT);
+                     }
+                     // 07-Sep-2019, tatu: for [dataformat-xml#353], must NOT return second null
+@@ -613,7 +613,7 @@ public JsonToken nextToken() throws JacksonException
+                     _mayBeLeaf = false;
+                     _nextToken = JsonToken.PROPERTY_NAME;
+                     _currText = _xmlTokens.getText();
+-                    _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++                    _createChildObjectContext();
+                     return _updateToken(JsonToken.START_OBJECT);
+                 }
+                 _streamReadContext.setCurrentName(_xmlTokens.getLocalName());
+@@ -643,7 +643,7 @@ public JsonToken nextToken() throws JacksonException
+                                 //    expose as empty Object, not null (or, worse, as used to
+                                 //    be done, by swallowing the token)
+                                 _nextToken = JsonToken.END_OBJECT;
+-                                _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++                                _createChildObjectContext();
+                                 return _updateToken(JsonToken.START_OBJECT);
+                             }
+                         }
+@@ -657,7 +657,7 @@ public JsonToken nextToken() throws JacksonException
+                     // fall-through, except must create new context AND push back
+                     // START_ELEMENT we just saw:
+                     _xmlTokens.pushbackCurrentToken();
+-                    _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++                    _createChildObjectContext();
+                 }
+                 // [dataformat-xml#177]: empty text may also need to be skipped
+                 // but... [dataformat-xml#191]: looks like we can't short-cut, must
+@@ -752,7 +752,7 @@ public String nextStringValue() throws JacksonException
+         while (token == XmlTokenStream.XML_START_ELEMENT) {
+             if (_mayBeLeaf) {
+                 _nextToken = JsonToken.PROPERTY_NAME;
+-                _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++                _createChildObjectContext();
+                 _updateToken(JsonToken.START_OBJECT);
+                 return null;
+             }
+@@ -796,7 +796,7 @@ public String nextStringValue() throws JacksonException
+                 _mayBeLeaf = false;
+                 _nextToken = JsonToken.PROPERTY_NAME;
+                 _currText = _xmlTokens.getText();
+-                _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++                _createChildObjectContext();
+                 _updateToken(JsonToken.START_OBJECT);
+             } else {
+                 _streamReadContext.setCurrentName(_xmlTokens.getLocalName());
+@@ -838,10 +838,10 @@ private void _updateState(JsonToken t)
+     {
+         switch (t) {
+         case START_OBJECT:
+-            _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++            _createChildObjectContext();
+             break;
+         case START_ARRAY:
+-            _streamReadContext = _streamReadContext.createChildArrayContext(-1, -1);
++            _createChildArrayContext();
+             break;
+         case END_OBJECT:
+         case END_ARRAY:
+@@ -855,6 +855,21 @@ private void _updateState(JsonToken t)
+         }
+     }
+ 
++    // Enter a nested Object/Array scope, honoring the configured
++    // StreamReadConstraints.maxNestingDepth(). XmlReadContext has always
++    // tracked the depth but the read path never checked it, so a configured
++    // limit had no effect on XML input; ToXmlGenerator already does the
++    // equivalent check on the write side.
++    private void _createChildObjectContext() {
++        _streamReadContext = _streamReadContext.createChildObjectContext(-1, -1);
++        streamReadConstraints().validateNestingDepth(_streamReadContext.getNestingDepth());
++    }
++
++    private void _createChildArrayContext() {
++        _streamReadContext = _streamReadContext.createChildArrayContext(-1, -1);
++        streamReadConstraints().validateNestingDepth(_streamReadContext.getNestingDepth());
++    }
++
+     /*
+     /**********************************************************************
+     /* Public API, access to token information, text
+diff --git a/src/test/java/tools/jackson/dataformat/xml/dos/DeepNestingParserTest.java b/src/test/java/tools/jackson/dataformat/xml/dos/DeepNestingParserTest.java
+index 0567ac3d9..290ead454 100644
+--- a/src/test/java/tools/jackson/dataformat/xml/dos/DeepNestingParserTest.java
++++ b/src/test/java/tools/jackson/dataformat/xml/dos/DeepNestingParserTest.java
+@@ -3,28 +3,53 @@
+ import org.junit.jupiter.api.Test;
+ 
+ import tools.jackson.core.JsonParser;
+-import tools.jackson.core.exc.StreamReadException;
++import tools.jackson.core.StreamReadConstraints;
++import tools.jackson.core.exc.StreamConstraintsException;
+ 
++import tools.jackson.dataformat.xml.XmlFactory;
+ import tools.jackson.dataformat.xml.XmlMapper;
+ import tools.jackson.dataformat.xml.XmlTestUtil;
+ 
+ import static org.junit.jupiter.api.Assertions.*;
+ 
+-import static org.junit.jupiter.api.Assertions.assertTrue;
+-import static org.junit.jupiter.api.Assertions.fail;
+-
+ public class DeepNestingParserTest extends XmlTestUtil
+ {
++    // Default StreamReadConstraints.maxNestingDepth (500) is now enforced by
++    // FromXmlParser itself, before the underlying Stax implementation's own
++    // element-depth limit would kick in. Depth chosen just past 500 (rather
++    // than e.g. 1050) so the test pins the actual enforced boundary instead
++    // of merely confirming failure somewhere past both limits.
+     @Test
+     public void testDeepDoc() throws Exception
+     {
+         final XmlMapper xmlMapper = newMapper();
+-        final String XML = createDeepNestedDoc(1050);
++        final String XML = createDeepNestedDoc(510);
++        try (JsonParser p = xmlMapper.createParser(XML)) {
++            while (p.nextToken() != null) { }
++            fail("expected StreamConstraintsException");
++        } catch (StreamConstraintsException e) {
++            assertTrue(e.getMessage().contains("nesting depth"),
++                    "Unexpected message: " + e.getMessage());
++        }
++    }
++
++    // jackson-core's StreamReadConstraints.maxNestingDepth is enforced on the XML
++    // read path, so a document nested past the configured limit is rejected even
++    // when it stays well within the Stax element-depth limit.
++    @Test
++    public void testDeepDocWithLowNestingLimit() throws Exception
++    {
++        final XmlMapper xmlMapper = mapperBuilder(XmlFactory.builder()
++                .streamReadConstraints(StreamReadConstraints.builder()
++                        .maxNestingDepth(10).build())
++                .build()).build();
++        final String XML = createDeepNestedDoc(50);
+         try (JsonParser p = xmlMapper.createParser(XML)) {
+             while (p.nextToken() != null) { }
+-            fail("expected StreamReadException");
+-        } catch (StreamReadException e) {
+-            assertTrue(e.getMessage().contains("Maximum Element Depth limit (1000) Exceeded"));
++            fail("expected StreamConstraintsException");
++        } catch (StreamConstraintsException e) {
++            assertTrue(e.getMessage().contains("nesting depth"),
++                    "Unexpected message: " + e.getMessage());
+         }
+     }
+ 
+diff --git a/src/test/java/tools/jackson/dataformat/xml/dos/TokenCountTest.java b/src/test/java/tools/jackson/dataformat/xml/dos/TokenCountTest.java
+index 2de3e13b2..ee8c5051b 100644
+--- a/src/test/java/tools/jackson/dataformat/xml/dos/TokenCountTest.java
++++ b/src/test/java/tools/jackson/dataformat/xml/dos/TokenCountTest.java
+@@ -15,9 +15,12 @@ public class TokenCountTest extends XmlTestUtil
+     final XmlMapper XML_MAPPER;
+     {
+         final XmlFactory factory = XmlFactory.builder()
+-                // token count is only checked when maxTokenCount is set
++                // token count is only checked when maxTokenCount is set;
++                // raise nesting limit so the deep-doc case hits the token-count
++                // limit rather than the (now enforced) nesting-depth limit
+                 .streamReadConstraints(StreamReadConstraints.builder()
+                         .maxTokenCount(1000)
++                        .maxNestingDepth(2000)
+                         .build())
+                 .build();
+         XML_MAPPER = mapperBuilder(factory).build();
+diff --git a/src/test/java/tools/jackson/dataformat/xml/woodstox/DeepNestingWoodstoxParserTest.java b/src/test/java/tools/jackson/dataformat/xml/woodstox/DeepNestingWoodstoxParserTest.java
+index cf93aa3d1..650e50a29 100644
+--- a/src/test/java/tools/jackson/dataformat/xml/woodstox/DeepNestingWoodstoxParserTest.java
++++ b/src/test/java/tools/jackson/dataformat/xml/woodstox/DeepNestingWoodstoxParserTest.java
+@@ -4,6 +4,7 @@
+ import org.junit.jupiter.api.Test;
+ 
+ import tools.jackson.core.JsonParser;
++import tools.jackson.core.StreamReadConstraints;
+ 
+ import tools.jackson.dataformat.xml.*;
+ 
+@@ -19,6 +20,10 @@ public void testDeepDocWithWoodstoxLimits() throws Exception
+         XmlMapper xmlMapper = new XmlMapper(
+                 XmlFactory.builder()
+                 .xmlInputFactory(wstxInputFactory)
++                // match the raised Stax element-depth limit so the jackson-core
++                // nesting-depth limit does not reject this deliberately deep doc
++                .streamReadConstraints(StreamReadConstraints.builder()
++                        .maxNestingDepth(2000).build())
+                 .build());
+         final String XML = createDeepNestedDoc(1050);
+         try (JsonParser p = xmlMapper.createParser(XML)) {

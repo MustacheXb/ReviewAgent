@@ -1,0 +1,167 @@
+diff --git a/release-notes/CREDITS b/release-notes/CREDITS
+index ac8dfdf116..07d522e3e6 100644
+--- a/release-notes/CREDITS
++++ b/release-notes/CREDITS
+@@ -670,8 +670,15 @@ DongNyoung Lee (@Dongnyoung)
+  * Reported, fixed #6142: Invalidate read-only lookup snapshot in `SerializerCache`
+    when a typed serializer entry is replaced
+   [3.3.0]
++ * Contributed #3182: Add `StringCanonicalizingConverter` for opt-in canonicalization
++   ("de-duplication") of low-cardinality `String` values
++  [3.3.0]
+ 
+ @prvazsahnazarov
+  * Reported #6156: Add `java.lang.Comparable` in set of "unsafe" polymorphic
+    base types
+   [3.2.2]
++
++Fabian Lange (@CodingFabian)
++ * Requested #3182: Support value deduplication for enumeration like values
++  [3.3.0]
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index 73697b9b80..0ce77a8601 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -14,6 +14,10 @@ Versions: 3.x (for earlier see VERSION-2.x)
+  (fix by @cowtowncoder, w/ Claude code)
+ #1803: `TreeTraversingParser` should allow passing of parent context
+  (fix by @cowtowncoder, w/ Claude code)
++#3182: Add `StringCanonicalizingConverter` for opt-in canonicalization
++  ("de-duplication") of low-cardinality `String` values
++ (requested by Fabian L)
++ (contributed by DongNyoung L)
+ #3947: Multiple suitable annotated Creator factory methods to be used as the
+   Key deserializer when using record als key in Map
+  (reported by @toonborgers)
+diff --git a/src/main/java/tools/jackson/databind/util/StringCanonicalizingConverter.java b/src/main/java/tools/jackson/databind/util/StringCanonicalizingConverter.java
+new file mode 100644
+index 0000000000..b1ea07f29d
+--- /dev/null
++++ b/src/main/java/tools/jackson/databind/util/StringCanonicalizingConverter.java
+@@ -0,0 +1,60 @@
++package tools.jackson.databind.util;
++
++import tools.jackson.databind.DeserializationContext;
++import tools.jackson.databind.SerializationContext;
++
++/**
++ * Converter that canonicalizes {@link String} values using databind's default
++ * String canonicalization method.
++ *<p>
++ * Can be used with {@link tools.jackson.databind.annotation.JsonDeserialize#converter()}
++ * or {@link tools.jackson.databind.annotation.JsonDeserialize#contentConverter()}
++ * to canonicalize low-cardinality String values during deserialization.
++ * Canonicalization only makes sense on deserialization, so if used on the
++ * serialization side (via {@link tools.jackson.databind.annotation.JsonSerialize#converter()})
++ * values are passed through as-is.
++ *<p>
++ * WARNING: the default canonicalization is implemented using {@link String#intern()},
++ * the effects of which are JVM-wide and not limited to the on-going read.
++ * Because of this, this Converter should only be applied to properties known to
++ * have low cardinality (enumeration-like values, identifiers from a fixed set):
++ * applying it to unbounded, caller-provided content (free-form text) allows a
++ * malicious payload to degrade performance of the whole JVM.
++ *
++ * @since 3.3
++ */
++public class StringCanonicalizingConverter
++    extends StdConverter<String, String>
++{
++    @Override
++    public String convert(DeserializationContext ctxt, String value) {
++        return ctxt.canonicalizeString(value);
++    }
++
++    /**
++     * Serialization-side canonicalization is a no-op: the value returned is written
++     * out and immediately discarded, so canonicalizing it would only add the cost
++     * of {@link String#intern()} without any of the memory savings this Converter
++     * exists for. Value is hence returned as-is.
++     */
++    @Override
++    public String convert(SerializationContext ctxt, String value) {
++        return value;
++    }
++
++    /**
++     * Context-less conversion is not supported: canonicalization is always done
++     * via {@link tools.jackson.databind.DatabindContext#canonicalizeString(String)}
++     * so that the context-specific canonicalization method is used.
++     * Both context-taking variants are overridden, so databind itself never calls
++     * this method.
++     *
++     * @throws IllegalStateException Always
++     */
++    @Override
++    public String convert(String value) {
++        throw new IllegalStateException(String.format(
++                "Should never be called (%s.convert(String)): must use context-taking variant",
++                getClass().getName()));
++    }
++}
+diff --git a/src/test/java/tools/jackson/databind/convert/StringConversionsTest.java b/src/test/java/tools/jackson/databind/convert/StringConversionsTest.java
+index 2f8026b40a..4bf002dd15 100644
+--- a/src/test/java/tools/jackson/databind/convert/StringConversionsTest.java
++++ b/src/test/java/tools/jackson/databind/convert/StringConversionsTest.java
+@@ -9,11 +9,14 @@
+ import tools.jackson.databind.annotation.JsonDeserialize;
+ import tools.jackson.databind.annotation.JsonSerialize;
+ import tools.jackson.databind.json.JsonMapper;
++import tools.jackson.databind.testutil.DatabindTestUtil;
++import tools.jackson.databind.util.StringCanonicalizingConverter;
+ import tools.jackson.databind.util.StdConverter;
+ 
+ import static org.junit.jupiter.api.Assertions.*;
+ 
+ public class StringConversionsTest
++    extends DatabindTestUtil
+ {
+     static class LCConverter extends StdConverter<String,String>
+     {
+@@ -32,6 +35,18 @@ protected StringWrapperWithConvert() { }
+         public StringWrapperWithConvert(String v) { value = v; }
+     }
+ 
++    static class CanonicalizedStringWrapper
++    {
++        @JsonDeserialize(converter=StringCanonicalizingConverter.class)
++        public String value;
++    }
++
++    static class CanonicalizedStringListWrapper
++    {
++        @JsonDeserialize(contentConverter=StringCanonicalizingConverter.class)
++        public List<String> values;
++    }
++
+     private final ObjectMapper MAPPER = new JsonMapper();
+ 
+     @Test
+@@ -99,4 +114,27 @@ public void testLowerCasingDeserializer() throws Exception
+                 StringWrapperWithConvert.class);
+         assertEquals("xyz", value.value);
+     }
++
++    @Test
++    public void stringCanonicalizingConverterForProperty() throws Exception
++    {
++        String raw = new String("canonical-property".toCharArray());
++        CanonicalizedStringWrapper value = MAPPER.readValue(a2q("{'value':'canonical-property'}"),
++                CanonicalizedStringWrapper.class);
++
++        assertSame(raw.intern(), value.value);
++    }
++
++    @Test
++    public void stringCanonicalizingConverterForContents() throws Exception
++    {
++        String raw = new String("canonical-content".toCharArray());
++        CanonicalizedStringListWrapper value = MAPPER.readValue(
++                a2q("{'values':['canonical-content','canonical-content']}"),
++                CanonicalizedStringListWrapper.class);
++
++        assertEquals(2, value.values.size());
++        assertSame(raw.intern(), value.values.get(0));
++        assertSame(value.values.get(0), value.values.get(1));
++    }
+ }

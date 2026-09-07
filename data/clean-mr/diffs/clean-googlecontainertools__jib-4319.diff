@@ -1,0 +1,103 @@
+diff --git a/jib-core/src/main/java/com/google/cloud/tools/jib/docker/CliDockerClient.java b/jib-core/src/main/java/com/google/cloud/tools/jib/docker/CliDockerClient.java
+index d3dcecd883..035c9316f3 100644
+--- a/jib-core/src/main/java/com/google/cloud/tools/jib/docker/CliDockerClient.java
++++ b/jib-core/src/main/java/com/google/cloud/tools/jib/docker/CliDockerClient.java
+@@ -47,6 +47,12 @@
+ import java.util.Collections;
+ import java.util.List;
+ import java.util.Map;
++import java.util.concurrent.ExecutionException;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.TimeoutException;
+ import java.util.function.Consumer;
+ import java.util.function.Function;
+ 
+@@ -103,6 +109,12 @@ public List<DescriptorDigest> getDiffIds() throws DigestException {
+   /** Default path to the docker executable. */
+   public static final Path DEFAULT_DOCKER_CLIENT = Paths.get("docker");
+ 
++  /**
++   * 10 minute timeout to ensure that Jib doesn't get stuck indefinitely when expecting a docker
++   * output.
++   */
++  public static final Long DOCKER_OUTPUT_TIMEOUT = (long) 10 * 60 * 1000;
++
+   /**
+    * Checks if Docker is installed on the user's system by running the `docker` command.
+    *
+@@ -188,13 +200,19 @@ public boolean supported(Map<String, String> parameters) {
+   @Override
+   public DockerInfoDetails info() throws IOException, InterruptedException {
+     // Runs 'docker info'.
+-    Process infoProcess = docker("info", "-f", "{{json .}}");
+-    InputStream inputStream = infoProcess.getInputStream();
+-    if (infoProcess.waitFor() != 0) {
+-      throw new IOException(
+-          "'docker info' command failed with error: " + getStderrOutput(infoProcess));
++    ExecutorService executor = Executors.newSingleThreadExecutor();
++    Future<DockerInfoDetails> readerFuture = executor.submit(this::fetchInfoDetails);
++    try {
++      DockerInfoDetails details = readerFuture.get(DOCKER_OUTPUT_TIMEOUT, TimeUnit.MILLISECONDS);
++      return details;
++    } catch (TimeoutException e) {
++      readerFuture.cancel(true); // Interrupt the reader thread
++      throw new IOException("Timeout reached while waiting for 'docker info' output");
++    } catch (ExecutionException e) {
++      throw new IOException("Failed to read output of 'docker info': " + e.getMessage());
++    } finally {
++      executor.shutdownNow();
+     }
+-    return JsonTemplateMapper.readJson(inputStream, DockerInfoDetails.class);
+   }
+ 
+   @Override
+@@ -270,4 +288,14 @@ public DockerImageDetails inspect(ImageReference imageReference)
+   private Process docker(String... subCommand) throws IOException {
+     return processBuilderFactory.apply(Arrays.asList(subCommand)).start();
+   }
++
++  private DockerInfoDetails fetchInfoDetails() throws IOException, InterruptedException {
++    Process infoProcess = docker("info", "-f", "{{json .}}");
++    InputStream inputStream = infoProcess.getInputStream();
++    if (infoProcess.waitFor() != 0) {
++      throw new IOException(
++          "'docker info' command failed with error: " + getStderrOutput(infoProcess));
++    }
++    return JsonTemplateMapper.readJson(inputStream, DockerInfoDetails.class);
++  }
+ }
+diff --git a/jib-gradle-plugin/src/integration-test/resources/gradle/projects/simple/mock-docker.sh b/jib-gradle-plugin/src/integration-test/resources/gradle/projects/simple/mock-docker.sh
+index e4b78a0f4c..84eafa19a8 100755
+--- a/jib-gradle-plugin/src/integration-test/resources/gradle/projects/simple/mock-docker.sh
++++ b/jib-gradle-plugin/src/integration-test/resources/gradle/projects/simple/mock-docker.sh
+@@ -1,5 +1,11 @@
+ #!/bin/bash
+ 
++if [[ "$1" == "info" ]]; then
++  # Output the JSON string
++  echo "{\"OSType\":\"linux\",\"Architecture\":\"x86_64\"}"
++  exit 0
++fi
++
+ # Read stdin to avoid broken pipe
+ cat > /dev/null
+ 
+diff --git a/jib-maven-plugin/src/test/resources/maven/projects/simple/mock-docker.sh b/jib-maven-plugin/src/test/resources/maven/projects/simple/mock-docker.sh
+index e4b78a0f4c..84eafa19a8 100755
+--- a/jib-maven-plugin/src/test/resources/maven/projects/simple/mock-docker.sh
++++ b/jib-maven-plugin/src/test/resources/maven/projects/simple/mock-docker.sh
+@@ -1,5 +1,11 @@
+ #!/bin/bash
+ 
++if [[ "$1" == "info" ]]; then
++  # Output the JSON string
++  echo "{\"OSType\":\"linux\",\"Architecture\":\"x86_64\"}"
++  exit 0
++fi
++
+ # Read stdin to avoid broken pipe
+ cat > /dev/null
+ 

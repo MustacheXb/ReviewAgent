@@ -1,0 +1,258 @@
+diff --git a/release-notes/CREDITS b/release-notes/CREDITS
+index a1a6cd5df5..f1354264a5 100644
+--- a/release-notes/CREDITS
++++ b/release-notes/CREDITS
+@@ -55,12 +55,18 @@ Revanth Meesala (@revanthmeesala)
+    [GHSA-649p-m576-vr99]
+   (3.1.6)
+ 
+-Lee Dongnyoung (@DongNyoung)
++DongNyoung Lee (@Dongnyoung)
+  * Contributed #1651: Fix object context handling for buffered `INCLUDE_NON_NULL` tokens
+   (3.1.6)
+  * Contributed #1667: `JsonParser.willInternPropertyNames()` returns `true` even when
+    `CANONICALIZE_PROPERTY_NAMES` is disabled
+   (3.2.3)
++ * Reported, fixed #1646: Non-blocking ByteBuffer parser `releaseBuffered()` can write
++   already-consumed bytes
++  (3.3.0)
++ * Reported, fixed #1664: UTF-8 byte-backed parsers report raw byte instead of
++   decoded character for invalid root-value separator
++  (3.3.0)
+ 
+ seonwoojung (@seonwooj0810)
+  * Contributed #707: Add `JsonReadFeature.ALLOW_HEXADECIMAL_NUMBERS`
+@@ -80,8 +86,3 @@ Scott Lewis (@scottslewis)
+  * Contributed #1637: Add `JsonPointer.startsWith(JsonPointer)` to check
+    prefix match
+   (3.3.0)
+-
+-DongNyoung Lee (@Dongnyoung)
+- * Reported, fixed #1646: Non-blocking ByteBuffer parser `releaseBuffered()` can write
+-   already-consumed bytes
+-  (3.3.0)
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index b51d4e1500..cf6781216d 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -22,6 +22,9 @@ JSON library.
+ #1646: Non-blocking ByteBuffer parser `releaseBuffered()` can write
+   already-consumed bytes
+  (reported, fix by DongNyoung L)
++#1664: UTF-8 byte-backed parsers report raw byte instead of decoded character
++  for invalid root-value separator
++ (reported, fix by DongNyoung L)
+ 
+ 3.2.3 (not yet released)
+ 
+diff --git a/src/main/java/tools/jackson/core/json/UTF8DataInputJsonParser.java b/src/main/java/tools/jackson/core/json/UTF8DataInputJsonParser.java
+index 778342b049..90f5136d5c 100644
+--- a/src/main/java/tools/jackson/core/json/UTF8DataInputJsonParser.java
++++ b/src/main/java/tools/jackson/core/json/UTF8DataInputJsonParser.java
+@@ -1342,6 +1342,18 @@ private final void _verifyRootSpace() throws JacksonException
+             }
+             return;
+         }
++        if (ch > 0x7F) {
++            // 19-Aug-2026, tatu: [core#1664] Decode multi-byte character for better
++            //   error message; but if input ends mid-sequence, report lead byte as-is
++            //   (content is malformed here regardless of what would follow)
++            try {
++                ch = _decodeCharForError(ch);
++            } catch (EOFException e) {
++                ; // fine, fall through to report lead byte
++            } catch (IOException e) {
++                throw _wrapIOFailure(e);
++            }
++        }
+         _reportMissingRootWS(ch);
+     }
+ 
+diff --git a/src/main/java/tools/jackson/core/json/UTF8StreamJsonParser.java b/src/main/java/tools/jackson/core/json/UTF8StreamJsonParser.java
+index 5d08ecb42f..a54beadac8 100644
+--- a/src/main/java/tools/jackson/core/json/UTF8StreamJsonParser.java
++++ b/src/main/java/tools/jackson/core/json/UTF8StreamJsonParser.java
+@@ -5,6 +5,7 @@
+ import tools.jackson.core.*;
+ import tools.jackson.core.exc.JacksonIOException;
+ import tools.jackson.core.exc.StreamReadException;
++import tools.jackson.core.exc.UnexpectedEndOfInputException;
+ import tools.jackson.core.io.CharTypes;
+ import tools.jackson.core.io.IOContext;
+ import tools.jackson.core.sym.ByteQuadsCanonicalizer;
+@@ -2187,7 +2188,6 @@ private final void _verifyRootSpace(int ch) throws JacksonException
+     {
+         // caller had pushed it back, before calling; reset
+         ++_inputPtr;
+-        // TODO? Handle UTF-8 char decoding for error reporting
+         switch (ch) {
+         case ' ':
+         case '\t':
+@@ -2203,6 +2203,15 @@ private final void _verifyRootSpace(int ch) throws JacksonException
+             _currInputRowStart = _inputPtr;
+             return;
+         }
++
++        if (ch > 0x7F) {
++            // 19-Aug-2026, tatu: [core#1664] Decode multi-byte character for better
++            //   error message; but if input ends mid-sequence, report lead byte as-is
++            //   (content is malformed here regardless of what would follow)
++            try {
++                ch = _decodeCharForError(ch);
++            } catch (UnexpectedEndOfInputException e) { }
++        }
+         _reportMissingRootWS(ch);
+     }
+ 
+diff --git a/src/main/java/tools/jackson/core/json/async/NonBlockingUtf8JsonParserBase.java b/src/main/java/tools/jackson/core/json/async/NonBlockingUtf8JsonParserBase.java
+index 1e777b0452..87c7ca69b1 100644
+--- a/src/main/java/tools/jackson/core/json/async/NonBlockingUtf8JsonParserBase.java
++++ b/src/main/java/tools/jackson/core/json/async/NonBlockingUtf8JsonParserBase.java
+@@ -3341,9 +3341,53 @@ private final void _verifyRootSpace(int ch) throws JacksonException
+             _currInputRowStart = _inputPtr;
+             return;
+         }
++        if (ch > 0x7F) {
++            ch = _decodeCharForError(ch);
++        }
+         _reportMissingRootWS(ch);
+     }
+ 
++    /**
++     * Helper method for decoding multi-byte UTF-8 character for error reporting
++     * purposes only: caller has already detected a problem, so this method is
++     * strictly best-effort and will never fail -- lead byte is returned as-is if
++     * the full sequence is not (yet) buffered, or is not valid UTF-8. Also note
++     * that unlike blocking parsers we cannot wait for more input just to build a
++     * better error message.
++     *
++     * @param firstByte Lead byte of the character; input pointer is past it
++     *
++     * @return Decoded character (code point) if decodable; lead byte if not
++     */
++    // 21-Aug-2026, tatu: [core#1664]
++    private final int _decodeCharForError(int firstByte)
++    {
++        final int c = firstByte & 0xFF;
++        final int needed;
++
++        if ((c & 0xE0) == 0xC0) { // 2 bytes (0x0080 - 0x07FF)
++            needed = 1;
++        } else if ((c & 0xF0) == 0xE0) { // 3 bytes (0x0800 - 0xFFFF)
++            needed = 2;
++        } else if ((c & 0xF8) == 0xF0) { // 4 bytes; double-char with surrogates and all...
++            needed = 3;
++        } else { // invalid lead byte; report as-is
++            return c;
++        }
++        if ((_inputPtr + needed) > _inputEnd) { // not (yet) buffered; report as-is
++            return c;
++        }
++        int value = c & (0x3F >> needed); // 0x1F, 0x0F or 0x07
++        for (int i = 0; i < needed; ++i) {
++            final int d = getByteFromBuffer(_inputPtr + i) & 0xFF;
++            if ((d & 0xC0) != 0x080) { // invalid continuation byte; report lead byte as-is
++                return c;
++            }
++            value = (value << 6) | (d & 0x3F);
++        }
++        return value;
++    }
++
+     /*
+     /**********************************************************************
+     /* Internal methods, other
+diff --git a/src/test/java/tools/jackson/core/unittest/json/TestRootValues.java b/src/test/java/tools/jackson/core/unittest/json/TestRootValues.java
+index 0e6663907c..5cb3fa451d 100644
+--- a/src/test/java/tools/jackson/core/unittest/json/TestRootValues.java
++++ b/src/test/java/tools/jackson/core/unittest/json/TestRootValues.java
+@@ -127,6 +127,33 @@ private void _testBrokenNumber(int mode)
+         p.close();
+     }
+ 
++    // [core#1664]: byte-backed parsers must decode multi-byte UTF-8 character
++    // before reporting missing root-level separator
++    @Test
++    void missingRootSeparatorUTF8() throws Exception
++    {
++        // 2-byte sequence: NBSP (U+00A0)
++        _testMissingRootSeparatorUTF8(new byte[] { '1', (byte) 0xC2, (byte) 0xA0 }, "code 160");
++        // 3-byte sequence: LINE SEPARATOR (U+2028)
++        _testMissingRootSeparatorUTF8(new byte[] { '1', (byte) 0xE2, (byte) 0x80, (byte) 0xA8 },
++                "code 8232");
++        // and if input ends mid-sequence, lead byte is reported as-is (not EOF failure)
++        _testMissingRootSeparatorUTF8(new byte[] { '1', (byte) 0xC2 }, "code 194");
++    }
++
++    private void _testMissingRootSeparatorUTF8(byte[] doc, String expCode) throws Exception
++    {
++        for (int mode : ALL_BINARY_MODES) {
++            try (JsonParser p = createParser(mode, doc)) {
++                p.nextToken();
++                fail("Should not pass");
++            } catch (StreamReadException e) {
++                verifyException(e, expCode);
++                verifyException(e, "Expected space separating root-level values");
++            }
++        }
++    }
++
+     @Test
+     void simpleBooleans() throws Exception {
+         // can't do DataInput so
+diff --git a/src/test/java/tools/jackson/core/unittest/json/async/AsyncRootValuesTest.java b/src/test/java/tools/jackson/core/unittest/json/async/AsyncRootValuesTest.java
+index d7a4695841..13e8bc338b 100644
+--- a/src/test/java/tools/jackson/core/unittest/json/async/AsyncRootValuesTest.java
++++ b/src/test/java/tools/jackson/core/unittest/json/async/AsyncRootValuesTest.java
+@@ -6,6 +6,7 @@
+ import org.junit.jupiter.api.Test;
+ 
+ import tools.jackson.core.JsonToken;
++import tools.jackson.core.exc.StreamReadException;
+ import tools.jackson.core.json.JsonFactory;
+ import tools.jackson.core.unittest.async.AsyncTestBase;
+ import tools.jackson.core.unittest.testutil.AsyncReaderWrapper;
+@@ -22,6 +23,43 @@ class AsyncRootValuesTest extends AsyncTestBase
+     /**********************************************************************
+      */
+ 
++    // [core#1664]: multi-byte UTF-8 character must be decoded before reporting
++    // missing root-level separator (when whole sequence is in the buffer)
++    @Test
++    void missingRootSeparatorUTF8() throws Exception {
++        // 2-byte sequence: NBSP (U+00A0)
++        _testMissingRootSeparatorUTF8(new byte[] { '1', '.', '5', (byte) 0xC2, (byte) 0xA0 },
++                90, "code 160");
++        // 3-byte sequence: LINE SEPARATOR (U+2028)
++        _testMissingRootSeparatorUTF8(new byte[] { '1', '.', '5', (byte) 0xE2, (byte) 0x80, (byte) 0xA8 },
++                90, "code 8232");
++        // ... but decoding is strictly best-effort: if sequence is not (yet) fully
++        // available, lead byte is reported as-is (non-blocking parser cannot wait
++        // for more input just to build a message)
++        _testMissingRootSeparatorUTF8(new byte[] { '1', '.', '5', (byte) 0xC2, (byte) 0xA0 },
++                4, "code 194");
++        _testMissingRootSeparatorUTF8(new byte[] { '1', '.', '5', (byte) 0xC2 },
++                90, "code 194");
++        // ... and malformed UTF-8 must not replace the error caller asked for
++        _testMissingRootSeparatorUTF8(new byte[] { '1', '.', '5', (byte) 0xC2, (byte) 0x41 },
++                90, "code 194"); // invalid continuation byte
++        _testMissingRootSeparatorUTF8(new byte[] { '1', '.', '5', (byte) 0xFF },
++                90, "code 255"); // invalid lead byte
++    }
++
++    private void _testMissingRootSeparatorUTF8(byte[] doc, int readSize, String expCode)
++        throws Exception
++    {
++        try (AsyncReaderWrapper r = asyncForBytes(JSON_F, readSize, doc, 0)) {
++            r.nextToken();
++            r.nextToken();
++            fail("Should not pass");
++        } catch (StreamReadException e) {
++            verifyException(e, expCode);
++            verifyException(e, "Expected space separating root-level values");
++        }
++    }
++
+     @Test
+     void tokenRootTokens() throws Exception {
+         _testTokenRootTokens(JsonToken.VALUE_TRUE, "true");

@@ -1,0 +1,56 @@
+diff --git a/mockito-core/src/main/java/org/mockito/internal/util/MockUtil.java b/mockito-core/src/main/java/org/mockito/internal/util/MockUtil.java
+index 792fe40898..861fcb01d0 100644
+--- a/mockito-core/src/main/java/org/mockito/internal/util/MockUtil.java
++++ b/mockito-core/src/main/java/org/mockito/internal/util/MockUtil.java
+@@ -157,8 +157,10 @@ private static MockHandler<?> getMockHandlerOrNull(Object mock) {
+         for (MockMaker mockMaker : mockMakers.values()) {
+             MockHandler<?> handler = mockMaker.getHandler(mock);
+             if (handler != null) {
+-                assert getMockMaker(handler.getMockSettings().getMockMaker()) == mockMaker;
+-                return handler;
++                String mockMakerName = handler.getMockSettings().getMockMaker();
++                if (getMockMaker(mockMakerName) == mockMaker) {
++                    return handler;
++                }
+             }
+         }
+         return null;
+diff --git a/mockito-integration-tests/programmatic-tests/src/test/java/org/mockito/ProgrammaticMockMakerTest.java b/mockito-integration-tests/programmatic-tests/src/test/java/org/mockito/ProgrammaticMockMakerTest.java
+index f03555d0e5..8b016886ec 100644
+--- a/mockito-integration-tests/programmatic-tests/src/test/java/org/mockito/ProgrammaticMockMakerTest.java
++++ b/mockito-integration-tests/programmatic-tests/src/test/java/org/mockito/ProgrammaticMockMakerTest.java
+@@ -157,6 +157,17 @@ class InvalidMockMaker extends SubclassByteBuddyMockMaker {
+                 .hasMessageContaining(InvalidMockMaker.class.getName());
+     }
+ 
++    @Test
++    public void test_interface_after_subclass_mock_maker() {
++        NonFinalClass subClassMock = Mockito.mock(NonFinalClass.class, Mockito.withSettings().mockMaker(MockMakers.SUBCLASS));
++        Mockito.when(subClassMock.someMethod()).thenReturn("1");
++        assertEquals("1", subClassMock.someMethod());
++
++        SomeInterface interfaceMock = Mockito.mock(SomeInterface.class);
++        Mockito.when(interfaceMock.someMethod()).thenReturn("2");
++        assertEquals("2", interfaceMock.someMethod());
++    }
++
+     private static final class FinalClass {
+         String someMethod() {
+             return "ORIGINAL";
+@@ -192,6 +203,16 @@ Container subContainer() {
+         }
+     }
+ 
++    private static class NonFinalClass {
++        String someMethod() {
++            return "ORIGINAL";
++        }
++    }
++
++    private interface SomeInterface {
++        String someMethod();
++    }
++
+     public static class CustomMockMaker extends SubclassByteBuddyMockMaker {
+         @Override
+         public <T> T createMock(MockCreationSettings<T> settings, MockHandler handler) {

@@ -1,0 +1,83 @@
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index 13717ccc74..9b46cc56df 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -34,6 +34,8 @@ No changes since 3.1
+   deserialization [CVE-2026-19032]
+  (reported by @waydeshi)
+  (fix by @pjfanning)
++#6133: Limit number sizes allowed in `java.time.Instant` deserializer
++ (fix by @pjfanning)
+ #6137: `DefaultCacheProvider.Builder` does not preserve default cache sizes
+   for unspecified values
+  (reported, fixed by DongNyoung L)
+diff --git a/src/main/java/tools/jackson/databind/ext/javatime/deser/InstantDeserializer.java b/src/main/java/tools/jackson/databind/ext/javatime/deser/InstantDeserializer.java
+index 337612a466..10da05d89e 100644
+--- a/src/main/java/tools/jackson/databind/ext/javatime/deser/InstantDeserializer.java
++++ b/src/main/java/tools/jackson/databind/ext/javatime/deser/InstantDeserializer.java
+@@ -366,9 +366,11 @@ protected T _fromString(JsonParser p, DeserializationContext ctxt,
+             if (dots >= 0) { // negative if not simple number
+                 try {
+                     if (dots == 0) {
++                        _validateTimestampLength(ctxt, string);
+                         return _fromLong(ctxt, NumberInput.parseLong(string));
+                     }
+                     if (dots == 1) {
++                        _validateTimestampLength(ctxt, string);
+                         return _fromDecimal(ctxt, NumberInput.parseBigDecimal(string, false));
+                     }
+                 } catch (NumberFormatException e) {
+diff --git a/src/test/java/tools/jackson/databind/ext/javatime/deser/InstantDeserTest.java b/src/test/java/tools/jackson/databind/ext/javatime/deser/InstantDeserTest.java
+index f7f231a7eb..eba0982ae2 100644
+--- a/src/test/java/tools/jackson/databind/ext/javatime/deser/InstantDeserTest.java
++++ b/src/test/java/tools/jackson/databind/ext/javatime/deser/InstantDeserTest.java
+@@ -13,6 +13,8 @@
+ 
+ import com.fasterxml.jackson.annotation.JsonFormat;
+ 
++import tools.jackson.core.StreamReadConstraints;
++import tools.jackson.core.exc.StreamConstraintsException;
+ import tools.jackson.core.type.TypeReference;
+ 
+ import tools.jackson.databind.ObjectMapper;
+@@ -670,4 +672,40 @@ public void testISO8601ColonlessRegexDoesNotAffectNegativeYearsWithColonless() {
+         assertTrue(matcher.find(), "Matcher finds +0100 as an colonless offset");
+         assertEquals(matcher.group(), "+0100", "Matcher groups +0100 as an colonless offset");
+     }
++
++    // [databind#6133]: StreamReadConstraints should limit numeric string lengths
++    // parsed via _fromString to prevent excessive BigDecimal construction.
++    // NOTE: values MUST be quoted -- unquoted ones are Number tokens, limits for
++    // which are enforced by the streaming parser and not by this deserializer.
++    @Test
++    public void testNumericStringRespectsStreamReadConstraints() throws Exception
++    {
++        final int MAX_ALLOWED_LEN = StreamReadConstraints.DEFAULT_MAX_NUM_LEN;
++
++        // Normal epoch seconds as integer should work
++        assertNotNull(MAPPER.readValue(q("1234567890"), Instant.class));
++
++        // Normal epoch seconds with decimal should work
++        assertNotNull(MAPPER.readValue(q("1234567890.123456789"), Instant.class));
++
++        // A very long integer string (exceeding default 1000-digit limit) should fail
++        String longInt = "1".repeat(MAX_ALLOWED_LEN + 1);
++        try {
++            MAPPER.readValue(q(longInt), Instant.class);
++            fail("Should not pass with excessively long integer string");
++        } catch (StreamConstraintsException e) {
++            verifyException(e, "Date/time value length");
++            verifyException(e, "exceeds the maximum allowed");
++        }
++
++        // A very long decimal string (exceeding default 1000-char limit) should fail
++        String longDecimal = "1234." + "9".repeat(MAX_ALLOWED_LEN);
++        try {
++            MAPPER.readValue(q(longDecimal), Instant.class);
++            fail("Should not pass with excessively long decimal string");
++        } catch (StreamConstraintsException e) {
++            verifyException(e, "Date/time value length");
++            verifyException(e, "exceeds the maximum allowed");
++        }
++    }
+ }

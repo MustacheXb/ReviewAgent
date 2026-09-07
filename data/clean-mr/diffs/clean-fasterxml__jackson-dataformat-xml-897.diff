@@ -1,0 +1,42 @@
+diff --git a/src/test/java/tools/jackson/dataformat/xml/lists/RootListHandlingTest.java b/src/test/java/tools/jackson/dataformat/xml/lists/RootListHandlingTest.java
+index 82e92165..798ce609 100644
+--- a/src/test/java/tools/jackson/dataformat/xml/lists/RootListHandlingTest.java
++++ b/src/test/java/tools/jackson/dataformat/xml/lists/RootListHandlingTest.java
+@@ -135,8 +135,7 @@ private void _testListSerialization(boolean useWrapping) throws Exception
+ 
+ //      System.err.println("XML -> "+xmlMapper.writerWithDefaultPrettyPrinter().writeValueAsString(ob));
+         
+-        assertTrue(ob instanceof List);
+-        List<?> resultList = (List<?>) ob;
++        List<?> resultList = assertInstanceOf(List.class, ob);
+         assertEquals(2, resultList.size());
+         assertEquals(SampleResource.class, resultList.get(0).getClass());
+         assertEquals(SampleResource.class, resultList.get(1).getClass());
+diff --git a/src/test/java/tools/jackson/dataformat/xml/ser/AnySetterNestedXml629Test.java b/src/test/java/tools/jackson/dataformat/xml/ser/AnySetterNestedXml629Test.java
+index dd95935c..917f8a1b 100644
+--- a/src/test/java/tools/jackson/dataformat/xml/ser/AnySetterNestedXml629Test.java
++++ b/src/test/java/tools/jackson/dataformat/xml/ser/AnySetterNestedXml629Test.java
+@@ -56,9 +56,8 @@ public void testAnySetterNestedElementsRoundTrip() throws Exception
+ 
+         Object unmapped = pojo.others.get("unmapped");
+         assertNotNull(unmapped, "unmapped should be captured by @JsonAnySetter");
+-        assertTrue(unmapped instanceof Map, "Expected Map but got: " + unmapped.getClass());
+         @SuppressWarnings("unchecked")
+-        Map<String, Object> nested = (Map<String, Object>) unmapped;
++        Map<String, Object> nested = (Map<String, Object>) assertInstanceOf(Map.class, unmapped);
+         assertEquals("1", nested.get("a"));
+         assertEquals("2", nested.get("b"));
+ 
+diff --git a/src/test/java/tools/jackson/dataformat/xml/ser/XmlPrettyPrinterTest.java b/src/test/java/tools/jackson/dataformat/xml/ser/XmlPrettyPrinterTest.java
+index a3d69566..ef320093 100644
+--- a/src/test/java/tools/jackson/dataformat/xml/ser/XmlPrettyPrinterTest.java
++++ b/src/test/java/tools/jackson/dataformat/xml/ser/XmlPrettyPrinterTest.java
+@@ -305,7 +305,7 @@ void accessToPrettyPrinter() {
+                 .enable(SerializationFeature.INDENT_OUTPUT)
+                 .build();
+         try (JsonGenerator g = indentingMapper.createGenerator(new StringWriter())) {
+-            assertTrue(g.getPrettyPrinter() instanceof DefaultXmlPrettyPrinter);
++            assertInstanceOf(DefaultXmlPrettyPrinter.class, g.getPrettyPrinter());
+             _writeDoc(g);
+         }
+     }

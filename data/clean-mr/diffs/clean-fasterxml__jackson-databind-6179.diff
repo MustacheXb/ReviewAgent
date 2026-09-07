@@ -1,0 +1,138 @@
+diff --git a/release-notes/CREDITS b/release-notes/CREDITS
+index 09776863bd..e8f333360b 100644
+--- a/release-notes/CREDITS
++++ b/release-notes/CREDITS
+@@ -397,6 +397,9 @@ Aysha Afrah Ziya (@aysha-afrah26)
+   [3.1.6]
+  * Fixed #6165: Apply number length limits to `BigDecimal`/`BigInteger`/`Double`/`Float` Map keys
+    [3.1.6]
++ * Fixed #6179: Apply `StreamReadConstraints` number length limit when coercing
++   String to `double`
++  [3.1.7]
+ 
+ @waydeshi
+  * Reported #6127: Add `StreamReadConstraints` number len constraint to
+diff --git a/release-notes/VERSION b/release-notes/VERSION
+index fb43d63bad..3676d0923a 100644
+--- a/release-notes/VERSION
++++ b/release-notes/VERSION
+@@ -9,6 +9,14 @@ Versions: 3.x (for earlier see VERSION-2.x)
+ 
+ No changes since 3.1
+ 
++3.1.7 (not yet released)
++
++#6179: Apply `StreamReadConstraints` number length limit when coercing String
++  to `double`
++ (fix by Aysha A-Z)
++ - NOTE: also makes String-to-`double` coercion reject input the JDK parser
++   accepted (like "1.0d", "0x1p3"), matching existing `float`/`Double` behavior
++
+ 3.1.6 (14-Aug-2026)
+ 
+ #6096: Honor `@JsonView` in `BeanAsArrayDeserializer` update path
+diff --git a/src/main/java/tools/jackson/databind/deser/std/StdDeserializer.java b/src/main/java/tools/jackson/databind/deser/std/StdDeserializer.java
+index 9acef045ff..1a9a468d2f 100644
+--- a/src/main/java/tools/jackson/databind/deser/std/StdDeserializer.java
++++ b/src/main/java/tools/jackson/databind/deser/std/StdDeserializer.java
+@@ -1204,9 +1204,14 @@ protected final double _parseDoublePrimitive(JsonParser p, DeserializationContex
+     protected final double _parseDoublePrimitive(JsonParser p, DeserializationContext ctxt, String text)
+         throws JacksonException
+     {
+-        try {
+-            return _parseDouble(text, p.isEnabled(StreamReadFeature.USE_FAST_DOUBLE_PARSER));
+-        } catch (IllegalArgumentException iae) { }
++        // Pre-validate before parsing, same as `_parseFloatPrimitive` above, so the
++        // configured `StreamReadConstraints` number-length limit is enforced here too:
++        if (NumberInput.looksLikeValidNumber(text)) {
++            p.streamReadConstraints().validateFPLength(text.length());
++            try {
++                return _parseDouble(text, p.isEnabled(StreamReadFeature.USE_FAST_DOUBLE_PARSER));
++            } catch (IllegalArgumentException iae) { }
++        }
+         Number v = (Number) ctxt.handleWeirdStringValue(Double.TYPE, text,
+                 "not a valid `double` value (as String to convert)");
+         return _nonNullNumber(v).doubleValue();
+diff --git a/src/test/java/tools/jackson/databind/deser/dos/DoubleFPLengthConstraintTest.java b/src/test/java/tools/jackson/databind/deser/dos/DoubleFPLengthConstraintTest.java
+new file mode 100644
+index 0000000000..1c2112f1d1
+--- /dev/null
++++ b/src/test/java/tools/jackson/databind/deser/dos/DoubleFPLengthConstraintTest.java
+@@ -0,0 +1,77 @@
++package tools.jackson.databind.deser.dos;
++
++import org.junit.jupiter.api.Test;
++
++import tools.jackson.core.StreamReadConstraints;
++import tools.jackson.core.exc.StreamConstraintsException;
++import tools.jackson.core.json.JsonFactory;
++import tools.jackson.databind.ObjectMapper;
++import tools.jackson.databind.json.JsonMapper;
++
++import static org.junit.jupiter.api.Assertions.assertArrayEquals;
++import static org.junit.jupiter.api.Assertions.fail;
++
++import static tools.jackson.databind.testutil.DatabindTestUtil.verifyException;
++
++// Number-length constraint (StreamReadConstraints.maxNumberLength) must be enforced
++// when coercing a String to `double` the same way it already is for `float`.
++public class DoubleFPLengthConstraintTest
++{
++    // Deliberately NOT the default (1000), so that these tests actually depend on
++    // the configured constraint being applied
++    private final static int MAX_NUMBER_LEN = 100;
++
++    private final static int OVER_LONG_LEN = MAX_NUMBER_LEN + 50;
++
++    private final static String OVER_LONG_NUMBER = "9".repeat(OVER_LONG_LEN);
++
++    private ObjectMapper mapperWithNumberLen(int maxLen) {
++        JsonFactory f = JsonFactory.builder()
++                .streamReadConstraints(StreamReadConstraints.builder().maxNumberLength(maxLen).build())
++                .build();
++        return JsonMapper.builder(f).build();
++    }
++
++    private String jsonArrayWith(String value) {
++        return """
++                ["%s"]
++                """.formatted(value);
++    }
++
++    @Test
++    public void doubleArrayFromStringRespectsNumberLength() throws Exception
++    {
++        ObjectMapper mapper = mapperWithNumberLen(MAX_NUMBER_LEN);
++        try {
++            mapper.readValue(jsonArrayWith(OVER_LONG_NUMBER), double[].class);
++            fail("Should not pass: number length exceeds configured maximum");
++        } catch (StreamConstraintsException e) {
++            verifyException(e, "Number value length ("+OVER_LONG_LEN+")");
++            verifyException(e, "exceeds the maximum allowed ("+MAX_NUMBER_LEN);
++        }
++    }
++
++    // Parity check: `float[]` already enforces the same limit; both should behave alike.
++    @Test
++    public void floatArrayFromStringRespectsNumberLength() throws Exception
++    {
++        ObjectMapper mapper = mapperWithNumberLen(MAX_NUMBER_LEN);
++        try {
++            mapper.readValue(jsonArrayWith(OVER_LONG_NUMBER), float[].class);
++            fail("Should not pass: number length exceeds configured maximum");
++        } catch (StreamConstraintsException e) {
++            verifyException(e, "Number value length ("+OVER_LONG_LEN+")");
++            verifyException(e, "exceeds the maximum allowed ("+MAX_NUMBER_LEN);
++        }
++    }
++
++    // And verify the input itself is otherwise acceptable: it is only the lowered
++    // limit above that rejects it, not the value being unparseable
++    @Test
++    public void overLongNumberAcceptedWithDefaultConstraints() throws Exception
++    {
++        ObjectMapper mapper = JsonMapper.builder().build();
++        assertArrayEquals(new double[] { Double.parseDouble(OVER_LONG_NUMBER) },
++                mapper.readValue(jsonArrayWith(OVER_LONG_NUMBER), double[].class));
++    }
++}

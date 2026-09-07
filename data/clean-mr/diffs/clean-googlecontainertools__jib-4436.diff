@@ -1,0 +1,211 @@
+diff --git a/docs/google-cloud-build.md b/docs/google-cloud-build.md
+index 71d779bdaa..d3996ce82c 100644
+--- a/docs/google-cloud-build.md
++++ b/docs/google-cloud-build.md
+@@ -13,7 +13,7 @@ Any Java container can be used for building, not only the `gcr.io/cloud-builders
+ 
+ ```yaml
+ steps:
+-  - name: 'docker.io/library/eclipse-temurin:21'
++  - name: 'docker.io/library/eclipse-temurin:25'
+     entrypoint: './gradlew'
+     args: ['--console=plain', '--no-daemon', ':server:jib', '-Djib.to.image=gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA']
+ ```
+diff --git a/jib-cli/src/main/java/com/google/cloud/tools/jib/cli/jar/JarFiles.java b/jib-cli/src/main/java/com/google/cloud/tools/jib/cli/jar/JarFiles.java
+index ca06fdc273..090dad8a20 100644
+--- a/jib-cli/src/main/java/com/google/cloud/tools/jib/cli/jar/JarFiles.java
++++ b/jib-cli/src/main/java/com/google/cloud/tools/jib/cli/jar/JarFiles.java
+@@ -92,6 +92,9 @@ private static String getDefaultBaseImage(ArtifactProcessor processor) {
+     if (processor.getJavaVersion() <= 17) {
+       return "eclipse-temurin:17-jre";
+     }
+-    return "eclipse-temurin:21-jre";
++    if (processor.getJavaVersion() <= 21) {
++      return "eclipse-temurin:21-jre";
++    }
++    return "eclipse-temurin:25-jre";
+   }
+ }
+diff --git a/jib-cli/src/test/java/com/google/cloud/tools/jib/cli/jar/JarFilesTest.java b/jib-cli/src/test/java/com/google/cloud/tools/jib/cli/jar/JarFilesTest.java
+index 225d242ca0..7e7a597ef0 100644
+--- a/jib-cli/src/test/java/com/google/cloud/tools/jib/cli/jar/JarFilesTest.java
++++ b/jib-cli/src/test/java/com/google/cloud/tools/jib/cli/jar/JarFilesTest.java
+@@ -73,6 +73,7 @@ public class JarFilesTest {
+         "13, eclipse-temurin:17-jre",
+         "17, eclipse-temurin:17-jre",
+         "21, eclipse-temurin:21-jre",
++        "25, eclipse-temurin:25-jre",
+       })
+   public void testToJibContainer_defaultBaseImage(int javaVersion, String expectedBaseImage)
+       throws IOException, InvalidImageReferenceException {
+diff --git a/jib-core/src/integration-test/java/com/google/cloud/tools/jib/api/ContainerizerIntegrationTest.java b/jib-core/src/integration-test/java/com/google/cloud/tools/jib/api/ContainerizerIntegrationTest.java
+index 8715ffb784..1fae4f37e1 100644
+--- a/jib-core/src/integration-test/java/com/google/cloud/tools/jib/api/ContainerizerIntegrationTest.java
++++ b/jib-core/src/integration-test/java/com/google/cloud/tools/jib/api/ContainerizerIntegrationTest.java
+@@ -278,8 +278,10 @@ public void testSteps_forBuildToDockerRegistry_skipExistingDigest()
+   public void testBuildToDockerRegistry_dockerHubBaseImage()
+       throws InvalidImageReferenceException, IOException, InterruptedException, ExecutionException,
+           RegistryException, CacheDirectoryCreationException {
++    // We use eclipse-temurin instead of openjdk due to its deprecation
++    // see https://hub.docker.com/_/openjdk#deprecation-notice
+     buildImage(
+-        ImageReference.parse("openjdk:8-jre-slim"),
++        ImageReference.parse("eclipse-temurin:8-jre-alpine"),
+         Containerizer.to(RegistryImage.named(dockerHost + ":5000/testimage:testtag")),
+         Collections.emptyList());
+ 
+diff --git a/jib-gradle-plugin/README.md b/jib-gradle-plugin/README.md
+index 7ae6237045..38eb71ddef 100644
+--- a/jib-gradle-plugin/README.md
++++ b/jib-gradle-plugin/README.md
+@@ -210,12 +210,12 @@ Field | Type | Default | Description
+ 
+ <a name="from-closure"></a>`from` is a closure with the following properties:
+ 
+-Property | Type | Default | Description
+---- | --- | --- | ---
+-`image` | `String` | `eclipse-temurin:{8,11,17,21}-jre` (or `jetty` for WAR) | The image reference for the base image. The source type can be specified using a [special type prefix](#setting-the-base-image).
+-`auth` | [`auth`](#auth-closure) | *None* | Specifies credentials directly (alternative to `credHelper`).
+-`credHelper` | `String` | *None* | Specifies a credential helper that can authenticate pulling the base image. This parameter can either be configured as an absolute path to the credential helper executable or as a credential helper suffix (following `docker-credential-`).
+-`platforms` | [`platforms`](#platforms-closure) | See [`platforms`](#platforms-closure) | Configures platforms of base images to select from a manifest list.
++Property | Type | Default                                                    | Description
++--- | --- |------------------------------------------------------------| ---
++`image` | `String` | `eclipse-temurin:{8,11,17,21,25}-jre` (or `jetty` for WAR) | The image reference for the base image. The source type can be specified using a [special type prefix](#setting-the-base-image).
++`auth` | [`auth`](#auth-closure) | *None*                                                     | Specifies credentials directly (alternative to `credHelper`).
++`credHelper` | `String` | *None*                                                     | Specifies a credential helper that can authenticate pulling the base image. This parameter can either be configured as an absolute path to the credential helper executable or as a credential helper suffix (following `docker-credential-`).
++`platforms` | [`platforms`](#platforms-closure) | See [`platforms`](#platforms-closure)                      | Configures platforms of base images to select from a manifest list.
+ 
+ <a name="to-closure"></a>`to` is a closure with the following properties:
+ 
+diff --git a/jib-maven-plugin/README.md b/jib-maven-plugin/README.md
+index f489befef5..8e2e059e49 100644
+--- a/jib-maven-plugin/README.md
++++ b/jib-maven-plugin/README.md
+@@ -259,12 +259,12 @@ Field | Type | Default | Description
+ 
+ <a name="from-object"></a>`from` is an object with the following properties:
+ 
+-Property | Type | Default | Description
+---- | --- | --- | ---
+-`image` | string | `eclipse-temurin:{8,11,17,21}-jre` (or `jetty` for WAR) | The image reference for the base image. The source type can be specified using a [special type prefix](#setting-the-base-image).
+-`auth` | [`auth`](#auth-object) | *None* | Specifies credentials directly (alternative to `credHelper`).
+-`credHelper` | string | *None* | Specifies a credential helper that can authenticate pulling the base image. This parameter can either be configured as an absolute path to the credential helper executable or as a credential helper suffix (following `docker-credential-`).
+-`platforms` | list | See [`platform`](#platform-object) | Configures platforms of base images to select from a manifest list.
++Property | Type | Default                                                   | Description
++--- | --- |-----------------------------------------------------------| ---
++`image` | string | `eclipse-temurin:{8,11,17,21,25}-jre` (or `jetty` for WAR) | The image reference for the base image. The source type can be specified using a [special type prefix](#setting-the-base-image).
++`auth` | [`auth`](#auth-object) | *None*                                                    | Specifies credentials directly (alternative to `credHelper`).
++`credHelper` | string | *None*                                                    | Specifies a credential helper that can authenticate pulling the base image. This parameter can either be configured as an absolute path to the credential helper executable or as a credential helper suffix (following `docker-credential-`).
++`platforms` | list | See [`platform`](#platform-object)                        | Configures platforms of base images to select from a manifest list.
+ 
+ <a name="to-object"></a>`to` is an object with the following properties:
+ 
+diff --git a/jib-plugins-common/src/main/java/com/google/cloud/tools/jib/plugins/common/PluginConfigurationProcessor.java b/jib-plugins-common/src/main/java/com/google/cloud/tools/jib/plugins/common/PluginConfigurationProcessor.java
+index 8ac4001db5..007784607a 100644
+--- a/jib-plugins-common/src/main/java/com/google/cloud/tools/jib/plugins/common/PluginConfigurationProcessor.java
++++ b/jib-plugins-common/src/main/java/com/google/cloud/tools/jib/plugins/common/PluginConfigurationProcessor.java
+@@ -533,6 +533,9 @@ static JavaContainerBuilder getJavaContainerBuilderWithBaseImage(
+     if (isKnownJava21Image(prefixRemoved) && javaVersion > 21) {
+       throw new IncompatibleBaseImageJavaVersionException(21, javaVersion);
+     }
++    if (isKnownJava25Image(prefixRemoved) && javaVersion > 25) {
++      throw new IncompatibleBaseImageJavaVersionException(25, javaVersion);
++    }
+ 
+     ImageReference baseImageReference = ImageReference.parse(prefixRemoved);
+     if (baseImageConfig.startsWith(Jib.DOCKER_DAEMON_IMAGE_PREFIX)) {
+@@ -778,8 +781,10 @@ static String getDefaultBaseImage(ProjectProperties projectProperties)
+       return "eclipse-temurin:17-jre";
+     } else if (javaVersion <= 21) {
+       return "eclipse-temurin:21-jre";
++    } else if (javaVersion <= 25) {
++      return "eclipse-temurin:25-jre";
+     }
+-    throw new IncompatibleBaseImageJavaVersionException(21, javaVersion);
++    throw new IncompatibleBaseImageJavaVersionException(25, javaVersion);
+   }
+ 
+   /**
+@@ -1113,4 +1118,14 @@ private static boolean isKnownJava17Image(String imageReference) {
+   private static boolean isKnownJava21Image(String imageReference) {
+     return imageReference.startsWith("eclipse-temurin:21");
+   }
++
++  /**
++   * Checks if the given image is a known Java 25 image. May return false negative.
++   *
++   * @param imageReference the image reference
++   * @return {@code true} if the image is a known Java 25 image
++   */
++  private static boolean isKnownJava25Image(String imageReference) {
++    return imageReference.startsWith("eclipse-temurin:25");
++  }
+ }
+diff --git a/jib-plugins-common/src/test/java/com/google/cloud/tools/jib/plugins/common/PluginConfigurationProcessorTest.java b/jib-plugins-common/src/test/java/com/google/cloud/tools/jib/plugins/common/PluginConfigurationProcessorTest.java
+index 51404d1351..74b68dea47 100644
+--- a/jib-plugins-common/src/test/java/com/google/cloud/tools/jib/plugins/common/PluginConfigurationProcessorTest.java
++++ b/jib-plugins-common/src/test/java/com/google/cloud/tools/jib/plugins/common/PluginConfigurationProcessorTest.java
+@@ -904,7 +904,8 @@ public void testGetDefaultBaseImage_warProject()
+         "11, eclipse-temurin:11-jre",
+         "13, eclipse-temurin:17-jre",
+         "17, eclipse-temurin:17-jre",
+-        "21, eclipse-temurin:21-jre"
++        "21, eclipse-temurin:21-jre",
++        "25, eclipse-temurin:25-jre"
+       })
+   public void testGetDefaultBaseImage_defaultJavaBaseImage(
+       int javaVersion, String expectedBaseImage) throws IncompatibleBaseImageJavaVersionException {
+@@ -914,16 +915,16 @@ public void testGetDefaultBaseImage_defaultJavaBaseImage(
+   }
+ 
+   @Test
+-  public void testGetDefaultBaseImage_projectHigherThanJava21() {
+-    when(projectProperties.getMajorJavaVersion()).thenReturn(22);
++  public void testGetDefaultBaseImage_projectHigherThanJava25() {
++    when(projectProperties.getMajorJavaVersion()).thenReturn(26);
+ 
+     IncompatibleBaseImageJavaVersionException exception =
+         assertThrows(
+             IncompatibleBaseImageJavaVersionException.class,
+             () -> PluginConfigurationProcessor.getDefaultBaseImage(projectProperties));
+ 
+-    assertThat(exception.getBaseImageMajorJavaVersion()).isEqualTo(21);
+-    assertThat(exception.getProjectMajorJavaVersion()).isEqualTo(22);
++    assertThat(exception.getBaseImageMajorJavaVersion()).isEqualTo(25);
++    assertThat(exception.getProjectMajorJavaVersion()).isEqualTo(26);
+   }
+ 
+   @Test
+@@ -983,7 +984,9 @@ public void testGetJavaContainerBuilderWithBaseImage_registryWithPrefix()
+         "eclipse-temurin:17, 17, 19",
+         "eclipse-temurin:17-jre, 17, 19",
+         "eclipse-temurin:21, 21, 22",
+-        "eclipse-temurin:21-jre, 21, 22"
++        "eclipse-temurin:21-jre, 21, 22",
++        "eclipse-temurin:25, 25, 26",
++        "eclipse-temurin:25-jre, 25, 26"
+       })
+   public void testGetJavaContainerBuilderWithBaseImage_incompatibleJavaBaseImage(
+       String baseImage, int baseImageJavaVersion, int appJavaVersion) {
+@@ -1013,8 +1016,8 @@ public void testGetJavaContainerBuilderWithBaseImage_java12BaseImage()
+   }
+ 
+   @Test
+-  public void testGetJavaContainerBuilderWithBaseImage_java22NoBaseImage() {
+-    when(projectProperties.getMajorJavaVersion()).thenReturn(22);
++  public void testGetJavaContainerBuilderWithBaseImage_java26NoBaseImage() {
++    when(projectProperties.getMajorJavaVersion()).thenReturn(26);
+     when(rawConfiguration.getFromImage()).thenReturn(Optional.empty());
+     IncompatibleBaseImageJavaVersionException exception =
+         assertThrows(
+@@ -1022,8 +1025,8 @@ public void testGetJavaContainerBuilderWithBaseImage_java22NoBaseImage() {
+             () ->
+                 PluginConfigurationProcessor.getJavaContainerBuilderWithBaseImage(
+                     rawConfiguration, projectProperties, inferredAuthProvider));
+-    assertThat(exception.getBaseImageMajorJavaVersion()).isEqualTo(21);
+-    assertThat(exception.getProjectMajorJavaVersion()).isEqualTo(22);
++    assertThat(exception.getBaseImageMajorJavaVersion()).isEqualTo(25);
++    assertThat(exception.getProjectMajorJavaVersion()).isEqualTo(26);
+   }
+ 
+   @Test

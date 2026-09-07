@@ -1,0 +1,95 @@
+diff --git a/README.md b/README.md
+index 90026e44a7..45dc13f814 100644
+--- a/README.md
++++ b/README.md
+@@ -69,6 +69,7 @@ see [`GsonBuilder.disableJdkUnsafe()`](https://javadoc.io/doc/com.google.code.gs
+ 
+ #### Minimum Android API level
+ 
++- Gson 2.15.0 and newer: API level 24
+ - Gson 2.11.0 and newer: API level 21
+ - Gson 2.10.1 and older: API level 19
+ 
+diff --git a/gson/src/main/java/com/google/gson/internal/NonNullElementWrapperList.java b/gson/src/main/java/com/google/gson/internal/NonNullElementWrapperList.java
+index 45a9c2905b..a683c5da02 100644
+--- a/gson/src/main/java/com/google/gson/internal/NonNullElementWrapperList.java
++++ b/gson/src/main/java/com/google/gson/internal/NonNullElementWrapperList.java
+@@ -19,9 +19,11 @@
+ import java.util.AbstractList;
+ import java.util.ArrayList;
+ import java.util.Collection;
++import java.util.Comparator;
+ import java.util.List;
+ import java.util.Objects;
+ import java.util.RandomAccess;
++import java.util.Spliterator;
+ 
+ /**
+  * {@link List} which wraps another {@code List} but prevents insertion of {@code null} elements.
+@@ -117,6 +119,16 @@ public <T> T[] toArray(T[] a) {
+     return delegate.toArray(a);
+   }
+ 
++  @Override
++  public void sort(Comparator<? super E> c) {
++    delegate.sort(c);
++  }
++
++  @Override
++  public Spliterator<E> spliterator() {
++    return delegate.spliterator();
++  }
++
+   @Override
+   public boolean equals(Object o) {
+     return delegate.equals(o);
+@@ -126,7 +138,4 @@ public boolean equals(Object o) {
+   public int hashCode() {
+     return delegate.hashCode();
+   }
+-
+-  // Maybe also delegate List#sort and List#spliterator in the future, but that
+-  // requires Android API level 24
+ }
+diff --git a/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java b/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java
+index b20e93aca6..54582e2a27 100644
+--- a/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java
++++ b/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java
+@@ -16,6 +16,8 @@
+ 
+ package com.google.gson.internal.bind;
+ 
++import static java.lang.Math.toIntExact;
++
+ import com.google.gson.Gson;
+ import com.google.gson.JsonElement;
+ import com.google.gson.JsonIOException;
+@@ -903,15 +905,6 @@ long[] integerValues(Calendar calendar) {
+         }
+       };
+ 
+-  // TODO: update this when we are on at least Android API Level 24.
+-  private static int toIntExact(long x) {
+-    int i = (int) x;
+-    if (i != x) {
+-      throw new IllegalArgumentException("Too big for an int: " + x);
+-    }
+-    return i;
+-  }
+-
+   public static final TypeAdapterFactory CALENDAR_FACTORY =
+       newFactoryForMultipleTypes(Calendar.class, GregorianCalendar.class, CALENDAR);
+ 
+diff --git a/pom.xml b/pom.xml
+index 3098b9120f..fe4327a97c 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -523,7 +523,7 @@
+               <configuration>
+                 <skip>${gson.isTestModule}</skip>
+                 <signature>
+-                  <!-- Google's internal use currently requires API Level 23 without desugaring. -->
++                  <!-- Don't use https://github.com/open-toast/gummy-bears; Google's internal use currently does not support desugaring. -->
+                   <groupId>net.sf.androidscents.signature</groupId>
+                   <artifactId>android-api-level-24</artifactId>
+                   <version>7.0_r2</version>

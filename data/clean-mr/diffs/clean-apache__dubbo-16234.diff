@@ -1,0 +1,22 @@
+diff --git a/dubbo-registry/dubbo-registry-api/src/test/java/org/apache/dubbo/registry/client/AbstractServiceDiscoveryFactoryTest.java b/dubbo-registry/dubbo-registry-api/src/test/java/org/apache/dubbo/registry/client/AbstractServiceDiscoveryFactoryTest.java
+index 99f72eeb2c2..e958af36f40 100644
+--- a/dubbo-registry/dubbo-registry-api/src/test/java/org/apache/dubbo/registry/client/AbstractServiceDiscoveryFactoryTest.java
++++ b/dubbo-registry/dubbo-registry-api/src/test/java/org/apache/dubbo/registry/client/AbstractServiceDiscoveryFactoryTest.java
+@@ -22,6 +22,7 @@
+ 
+ import java.util.List;
+ 
++import org.junit.jupiter.api.AfterAll;
+ import org.junit.jupiter.api.Assertions;
+ import org.junit.jupiter.api.Test;
+ 
+@@ -51,4 +52,9 @@ void testGetServiceDiscoveryWithCache() {
+         Assertions.assertTrue(allServiceDiscoveries.contains(serviceDiscovery1));
+         Assertions.assertTrue(allServiceDiscoveries.contains(serviceDiscovery3));
+     }
++
++    @AfterAll
++    public static void clearUp() {
++        ApplicationModel.reset();
++    }
+ }

@@ -7,3 +7,24 @@ reference_project/
 # .claude/skills 是指向 .agents/skills 的 NTFS junction（本机链接，不入库；
 # 真实的 skills 存储在 .agents/skills/，随仓库提交）
 .claude/skills
+
+# Node 工程产物
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# 检视运行审计痕迹（runReview 默认落盘目录）
+runs/
+
+# clean MR 采集 API 快照缓存（断点续采用；清单与 diff 为交付物，正常入库）
+data/clean-mr/.cache/
+
+# 脚本编译临时目录（T02/T09 采集脚本的 tsc outDir）
+.tmp-gen/
+
+# /implement-spec 子代理 worktree 临时目录
+.claude/worktrees/
+
+# 数据集清单生成脚本下载缓存（scripts/generate-*-manifest.ts）
+.cache/

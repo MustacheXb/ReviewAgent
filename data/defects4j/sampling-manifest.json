@@ -1,0 +1,213 @@
+{
+  "seed": "poc1-d4j-2026",
+  "targetTotal": 100,
+  "minPerStratum": 3,
+  "stratification": "proportional-to-bug-count (largest remainder), min 3 per project, cap at project bug count",
+  "bugCountsVerified": true,
+  "bugIdPoolsVerified": false,
+  "projects": [
+    {
+      "project": "Chart",
+      "bugCount": 26,
+      "sampledBugIds": [
+        3,
+        4,
+        17,
+        26
+      ]
+    },
+    {
+      "project": "Cli",
+      "bugCount": 39,
+      "sampledBugIds": [
+        4,
+        5,
+        15,
+        17,
+        33
+      ]
+    },
+    {
+      "project": "Closure",
+      "bugCount": 174,
+      "sampledBugIds": [
+        15,
+        22,
+        30,
+        55,
+        66,
+        69,
+        87,
+        93,
+        115,
+        133,
+        142,
+        143,
+        157
+      ]
+    },
+    {
+      "project": "Codec",
+      "bugCount": 18,
+      "sampledBugIds": [
+        2,
+        10,
+        11,
+        13
+      ]
+    },
+    {
+      "project": "Collections",
+      "bugCount": 28,
+      "sampledBugIds": [
+        1,
+        7,
+        8,
+        15,
+        25
+      ]
+    },
+    {
+      "project": "Compress",
+      "bugCount": 47,
+      "sampledBugIds": [
+        6,
+        7,
+        9,
+        11,
+        23,
+        31
+      ]
+    },
+    {
+      "project": "Csv",
+      "bugCount": 16,
+      "sampledBugIds": [
+        6,
+        10,
+        11,
+        14
+      ]
+    },
+    {
+      "project": "Gson",
+      "bugCount": 18,
+      "sampledBugIds": [
+        1,
+        5,
+        9,
+        16
+      ]
+    },
+    {
+      "project": "JacksonCore",
+      "bugCount": 26,
+      "sampledBugIds": [
+        5,
+        8,
+        24,
+        25
+      ]
+    },
+    {
+      "project": "JacksonDatabind",
+      "bugCount": 110,
+      "sampledBugIds": [
+        8,
+        11,
+        30,
+        35,
+        43,
+        79,
+        81,
+        87,
+        96,
+        100
+      ]
+    },
+    {
+      "project": "JacksonXml",
+      "bugCount": 6,
+      "sampledBugIds": [
+        1,
+        4,
+        5
+      ]
+    },
+    {
+      "project": "Jsoup",
+      "bugCount": 93,
+      "sampledBugIds": [
+        7,
+        13,
+        33,
+        50,
+        53,
+        66,
+        67,
+        88,
+        89
+      ]
+    },
+    {
+      "project": "JxPath",
+      "bugCount": 22,
+      "sampledBugIds": [
+        8,
+        13,
+        16,
+        18
+      ]
+    },
+    {
+      "project": "Lang",
+      "bugCount": 61,
+      "sampledBugIds": [
+        5,
+        9,
+        11,
+        12,
+        14,
+        37,
+        46
+      ]
+    },
+    {
+      "project": "Math",
+      "bugCount": 106,
+      "sampledBugIds": [
+        10,
+        45,
+        56,
+        58,
+        82,
+        86,
+        94,
+        95,
+        103
+      ]
+    },
+    {
+      "project": "Mockito",
+      "bugCount": 38,
+      "sampledBugIds": [
+        6,
+        8,
+        10,
+        14,
+        29
+      ]
+    },
+    {
+      "project": "Time",
+      "bugCount": 26,
+      "sampledBugIds": [
+        15,
+        16,
+        17,
+        25
+      ]
+    }
+  ],
+  "total": 100
+}
