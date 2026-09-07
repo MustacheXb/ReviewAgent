@@ -15,12 +15,14 @@ import type {
 import { DEFAULT_VERDICT_THRESHOLDS } from "./types.js";
 
 /**
- * S/A/B 自动判定（质量主锚 = 配置 C，spec #1 user story 29，主文档第 7 章 POC 成功标准）。
- * 判据输入取 rep2+（热稳定）主口径；Cache Hit 阈值为绝对值，Recall/Token 为相对锚 C 的倍乘：
- * - S：Recall ≥ C×90% ∧ Token ≤ C×30% ∧ Cache Hit ≥ 85%
+ * S/A/B 自动判定（质量主锚 = 配置 C，spec #1 user story 29 + 主文档第 7 章；S 级 Precision 判据 = ADR-0004）。
+ * 判据输入取 rep2+（热稳定）主口径；Cache Hit 阈值为绝对值，Recall/Precision/Token 为相对锚 C 的倍乘：
+ * - S：Recall ≥ C×90% ∧ Precision ≥ C×100% ∧ Token ≤ C×30% ∧ Cache Hit ≥ 85%
  * - A：Recall ≥ C×80% ∧ Token ≤ C×30% ∧ Cache Hit ≥ 80%
  * - B：Recall ≥ C×70% ∧ Token ≤ C×50%（无缓存判据）
  * 档位取全部判据通过的最高档；无档通过 → BELOW_B；锚不可用 → NOT_EVALUABLE。
+ * 锚可用性以 Recall/Token 为准（A/B 档无 Precision 判据）；锚 Precision 缺失时
+ * S 级 Precision 判据按未通过处理（保守判定），不升级为 NOT_EVALUABLE。
  * 比较带 ε（1e-9）容差，消除比率乘法的浮点噪声（如 0.8×0.9 = 0.7200000000000001）。
  */
 
@@ -30,13 +32,15 @@ export const VERDICT_EPSILON = 1e-9;
 const GRADE_ORDER: readonly VerdictGrade[] = ["S", "A", "B"];
 const CONFIG_IDS: readonly ConfigId[] = Object.keys(CONFIGS) as ConfigId[];
 
-/** 从热口径统计中提取判定输入（三判据指标取均值） */
+/** 从热口径统计中提取判定输入（判据指标取均值） */
 export function verdictMetricsFrom(stats: MetricsStats): VerdictMetrics {
   const recall = stats.values.lineRecall;
+  const precision = stats.values.linePrecision;
   const totalTokens = stats.values.totalTokens;
   const cacheHitRate = stats.values.cacheHitRate;
   return {
     recall: recall === null || recall === undefined ? null : recall.mean,
+    precision: precision === null || precision === undefined ? null : precision.mean,
     totalTokens: totalTokens === null || totalTokens === undefined ? null : totalTokens.mean,
     cacheHitRate: cacheHitRate === null || cacheHitRate === undefined ? null : cacheHitRate.mean,
   };
@@ -112,6 +116,7 @@ export function judgeAllVerdicts(
 
 const NULL_VERDICT_METRICS: VerdictMetrics = {
   recall: null,
+  precision: null,
   totalTokens: null,
   cacheHitRate: null,
 };
@@ -138,6 +143,11 @@ function criteriaForGrade(
       threshold: recallThreshold,
       note: nullValueNote(target.recall),
     },
+  ];
+  if (threshold.precisionRatio !== null) {
+    criteria.push(precisionCriterion(grade, target, anchor, threshold.precisionRatio));
+  }
+  criteria.push(
     {
       grade,
       metric: "TOTAL_TOKENS",
@@ -150,9 +160,35 @@ function criteriaForGrade(
       threshold: tokenThreshold,
       note: nullValueNote(target.totalTokens),
     },
-  ];
-  criteria.push(cacheCriterion(grade, target, threshold.cacheHitRate));
+    cacheCriterion(grade, target, threshold.cacheHitRate),
+  );
   return criteria;
+}
+
+/** Precision 判据（ADR-0004：仅 S 级，Precision ≥ C × precisionRatio；锚 Precision 缺失按未通过处理） */
+function precisionCriterion(
+  grade: VerdictGrade,
+  target: VerdictMetrics,
+  anchor: VerdictMetrics,
+  precisionRatio: number,
+): CriterionResult {
+  const precisionThreshold =
+    anchor.precision === null ? null : anchor.precision * precisionRatio;
+  return {
+    grade,
+    metric: "PRECISION",
+    comparison: "AT_LEAST",
+    pass:
+      target.precision !== null &&
+      precisionThreshold !== null &&
+      target.precision >= precisionThreshold - VERDICT_EPSILON,
+    value: target.precision,
+    threshold: precisionThreshold,
+    note:
+      anchor.precision === null
+        ? "anchor precision unavailable (null); criterion counted as failed"
+        : nullValueNote(target.precision),
+  };
 }
 
 function cacheCriterion(
@@ -224,7 +260,7 @@ function buildBasis(
   if (outcome === "NOT_EVALUABLE") {
     return "Not evaluable: anchor config C metrics are unavailable.";
   }
-  const summary = `line Recall ${formatMetric(target.recall)} vs anchor ${formatMetric(anchor.recall)}; Total Tokens ${formatMetric(target.totalTokens)} vs anchor ${formatMetric(anchor.totalTokens)}; Cache Hit ${formatMetric(target.cacheHitRate)}`;
+  const summary = `line Recall ${formatMetric(target.recall)} vs anchor ${formatMetric(anchor.recall)}; line Precision ${formatMetric(target.precision)} vs anchor ${formatMetric(anchor.precision)}; Total Tokens ${formatMetric(target.totalTokens)} vs anchor ${formatMetric(anchor.totalTokens)}; Cache Hit ${formatMetric(target.cacheHitRate)}`;
   if (grade !== null) {
     return `Grade ${grade} achieved: all ${grade}-level criteria passed (${summary}).`;
   }
@@ -247,6 +283,7 @@ function validateVerdictMetrics(metrics: VerdictMetrics, name: string): void {
     throw new Error(`${name} must be a VerdictMetrics object`);
   }
   requireRatio(metrics.recall, `${name}.recall`);
+  requireRatio(metrics.precision, `${name}.precision`);
   requireRatio(metrics.cacheHitRate, `${name}.cacheHitRate`);
   requireNonNegative(metrics.totalTokens, `${name}.totalTokens`);
 }
@@ -258,6 +295,7 @@ function validateThresholds(thresholds: Readonly<Record<VerdictGrade, VerdictThr
       throw new Error(`thresholds.${grade} must be a VerdictThresholds object`);
     }
     requireNonNegative(threshold.recallRatio, `thresholds.${grade}.recallRatio`);
+    requireNonNegative(threshold.precisionRatio, `thresholds.${grade}.precisionRatio`);
     requireNonNegative(threshold.tokenRatio, `thresholds.${grade}.tokenRatio`);
     if (threshold.cacheHitRate !== null) {
       requireRatio(threshold.cacheHitRate, `thresholds.${grade}.cacheHitRate`);

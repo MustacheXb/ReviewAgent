@@ -316,10 +316,12 @@ export interface MetricsReport {
 export type VerdictGrade = "S" | "A" | "B";
 export type VerdictOutcome = VerdictGrade | "BELOW_B" | "NOT_EVALUABLE";
 
-/** 一个档位的判定阈值（Recall/Token 相对锚 C 倍乘，Cache Hit 为绝对阈值） */
+/** 一个档位的判定阈值（Recall/Precision/Token 相对锚 C 倍乘，Cache Hit 为绝对阈值） */
 export interface VerdictThresholds {
   /** Recall ≥ C.lineRecall × recallRatio */
   readonly recallRatio: number;
+  /** Precision ≥ C.linePrecision × precisionRatio；null = 该档无 Precision 判据（A/B 默认无） */
+  readonly precisionRatio: number | null;
   /** Total Tokens ≤ C.totalTokens × tokenRatio */
   readonly tokenRatio: number;
   /** Cache Hit Rate ≥ 该绝对值；null = 该档无缓存判据（B 级默认无） */
@@ -327,23 +329,27 @@ export interface VerdictThresholds {
 }
 
 /**
- * S/A/B 默认阈值（与 spec #1 user story 29 一字不差）：
- * S：Recall ≥ C×90% ∧ Token ≤ C×30% ∧ Cache Hit ≥ 85%（rep2+ 热口径）
+ * S/A/B 默认阈值（S 级 Precision 判据 = ADR-0004 裁决：质量侧完整性入 S、Tool Calls 不设档位门槛）：
+ * S：Recall ≥ C×90% ∧ Precision ≥ C×100% ∧ Token ≤ C×30% ∧ Cache Hit ≥ 85%（rep2+ 热口径）
  * A：Recall ≥ C×80% ∧ Token ≤ C×30% ∧ Cache Hit ≥ 80%
  * B：Recall ≥ C×70% ∧ Token ≤ C×50%（无缓存判据）
- * 注：设计文档 v2.0 第 7 章的 S 级另含 Precision ≥ C 与 Tool Calls ≤ C×30%，
- * spec 判定公式未纳入，此处按 spec 实现（阈值可经 options 覆盖）。
+ * 注：设计文档 v2.0 第 7 章的 S 级另含 Tool Calls ≤ C×30%，ADR-0004 裁决不采纳——
+ * Token 判据（总 token 口径）已覆盖工具成本，且锚 C 全仓注入下工具调用基数低、
+ * ×30% 存在结构性不可达风险；Tool Calls 仍在 Agent Efficiency 指标组报告。
+ * 阈值可经 options 覆盖。
  */
 export const DEFAULT_VERDICT_THRESHOLDS: Readonly<Record<VerdictGrade, VerdictThresholds>> = {
-  S: { recallRatio: 0.9, tokenRatio: 0.3, cacheHitRate: 0.85 },
-  A: { recallRatio: 0.8, tokenRatio: 0.3, cacheHitRate: 0.8 },
-  B: { recallRatio: 0.7, tokenRatio: 0.5, cacheHitRate: null },
+  S: { recallRatio: 0.9, precisionRatio: 1, tokenRatio: 0.3, cacheHitRate: 0.85 },
+  A: { recallRatio: 0.8, precisionRatio: null, tokenRatio: 0.3, cacheHitRate: 0.8 },
+  B: { recallRatio: 0.7, precisionRatio: null, tokenRatio: 0.5, cacheHitRate: null },
 };
 
-/** 判定输入：一个 config 的三个判据指标（取 rep2+ 热口径均值） */
+/** 判定输入：一个 config 的判据指标（取 rep2+ 热口径均值） */
 export interface VerdictMetrics {
   /** line-level Recall（热口径均值）；null = 无有效样本 */
   readonly recall: number | null;
+  /** line-level Precision（热口径均值）；null = 无有效样本（零 finding） */
+  readonly precision: number | null;
   /** Total Tokens（热口径均值） */
   readonly totalTokens: number | null;
   /** Cache Hit Rate（热口径均值） */
@@ -353,7 +359,7 @@ export interface VerdictMetrics {
 /** 单条判据的判定明细 */
 export interface CriterionResult {
   readonly grade: VerdictGrade;
-  readonly metric: "RECALL" | "TOTAL_TOKENS" | "CACHE_HIT_RATE";
+  readonly metric: "RECALL" | "PRECISION" | "TOTAL_TOKENS" | "CACHE_HIT_RATE";
   /** AT_LEAST：相对锚倍乘下限；AT_MOST：相对锚倍乘上限；AT_LEAST_ABSOLUTE：绝对下限 */
   readonly comparison: "AT_LEAST" | "AT_MOST" | "AT_LEAST_ABSOLUTE";
   readonly pass: boolean;

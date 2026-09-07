@@ -121,7 +121,7 @@ code-review 修复轮（收尾质量门）另计：11 提交，41 文件，+2,95
 ## 8. 遗留事项与下一步
 
 1. **小样本 Benchmark 试跑**（未执行，PR Test Plan 未勾项）——产出分层缓存报告 + S/A/B 判定 + 预热曲线，即论文的第一批实验数据。属下一阶段执行项，不阻塞平台代码验收。
-2. **S/A/B 判据分歧待裁决**——spec #1 与《总体架构设计方案》对 S/A/B 三档判据的表述存在分歧，已上报未裁决；裁决后如需调整，改动收敛在 `verdict.ts` 判据表。
+2. **S/A/B 判据分歧已裁决**（ADR-0004）：S 级纳入 **Precision ≥ C**（补全质量侧完整性，防靠少报降本冲线）、不设 Tool Calls 档位门槛（Token 总账已含工具成本，锚 C 全仓注入下工具调用基数低、×30% 有结构性不可达风险）；A/B 两档维持不变。已落地 `verdict.ts` 判据表（S 级四判据），判定测试同步扩展。
 3. **T13 e2e 实测注记**——本机 claude CLI 经代理后端，actualModel 回报 MiniMax-M3（与 DeepSeek 异源，满足「外部参照不进主判定」的隔离要求，但非工单预期的 Claude 系模型）；已在外部参照报告的 runtime 留档中如实记录。
 4. **Phase 1：DSH 迁移**——实验结论（A–E 胜出配置）决定 DSH Runtime 实现深度；harness 的 Context Engine / Ledger / 消息构造 TypeScript 代码届时直接复用（ADR-0001）。
 
