@@ -1,6 +1,9 @@
 # 参考项目：外部克隆的仓库，不属于本项目源码
 reference_project/
 
+# API key 本机注入（Benchmark 试跑：DEEPSEEK_API_KEY / OPENAI_API_KEY，绝不入库）
+.env.local
+
 # Claude Code 本机配置（每台机器不同，不入库）
 .claude/settings.local.json
 
