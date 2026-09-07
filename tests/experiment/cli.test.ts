@@ -79,6 +79,15 @@ describe("parseExperimentArgs — 取值形式", () => {
     expect(parseFail(["--id="]).message).toBe("--id is required");
   });
 
+  it("裸 -- 分隔符被跳过（pnpm run 透传场景：pnpm experiment -- --id …）", () => {
+    const parsed = parseOk(["--", "--id", "poc1", "--judge"]);
+    if (!parsed.ok) throw new Error("unreachable");
+    expect(parsed.options.experimentId).toBe("poc1");
+    expect(parsed.options.judge).toBe(true);
+    // 尾部孤立 -- 同样无害（无位置参数 CLI 的约定语义）
+    expect(parseOk(["--id", "poc1", "--"]).ok).toBe(true);
+  });
+
   it("未知 flag 报错（消息内嵌 usage）", () => {
     const { message } = parseFail(["--id", "a", "--bogus"]);
     expect(message).toContain('unknown flag "--bogus"');

@@ -2,7 +2,8 @@
  * CLI 参数解析共享骨架（experiment / reference 双 CLI 去重）。
  *
  * 表驱动：布尔 flag 表 + 值参数表 + 收尾装配；取值形式统一支持
- * --flag value 与 --flag=value；跨 CLI 错误消息语义一致（--help requested /
+ * --flag value 与 --flag=value；裸 --（end-of-options）跳过；
+ * 跨 CLI 错误消息语义一致（--help requested /
  * flag requires a value / unknown flag + usage 附文）。
  *
  * 各 CLI 只声明：缺省值、两张 flag 表、收尾校验与只读装配。
@@ -48,6 +49,12 @@ export function parseCliArgs<V, O>(argv: readonly string[], spec: CliArgSpec<V, 
     }
     if (token === "--help" || token === "-h") {
       return fail("--help requested");
+    }
+    // 裸 --（end-of-options 分隔符）跳过：pnpm run 会把 `pnpm experiment -- --id …`
+    // 的 -- 原样透传给脚本，而两 CLI 均无位置参数，跳过即文档化用法的预期语义
+    if (token === "--") {
+      index += 1;
+      continue;
     }
     const [name, inlineValue] = splitFlag(token);
     const booleanPatch = spec.booleanFlags[name];
