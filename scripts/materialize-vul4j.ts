@@ -21,7 +21,8 @@
  * 缓存存在即复用（可离线重跑）；tarball 下载走 Node fetch（已实测 api.github.com 直连可达）。
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { rename as renameAsync } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { MRCase } from "../src/contracts/mr-case.js";
 import type { SourceSnapshot } from "../src/dataset/diff/apply-unified-diff.js";
@@ -29,10 +30,17 @@ import { parseUnifiedDiff } from "../src/dataset/diff/parse-unified-diff.js";
 import { stripTestSections, vul4jToMrCases, type Vul4jExportInput } from "../src/dataset/vul4j/adapter.js";
 import type { Vul4jPoolEntry } from "../src/dataset/vul4j/sampling.js";
 
-/** tarball 下载超时：实测弱网 ~2MB/105s，留足余量；小文本（.diff）60s */
-const TARBALL_TIMEOUT_MS = 600_000;
+/**
+ * tarball 下载超时：实测弱网单连接 ~0.02MB/s（codeload 无 Range 分片，单文件
+ * 无法多连接加速），长尾大仓库（100MB+ 级 git size）单连接需数十分钟——留足余量；
+ * 小文本（.diff）60s。
+ */
+const TARBALL_TIMEOUT_MS = 3_600_000;
 const TEXT_TIMEOUT_MS = 60_000;
 const TAR_TIMEOUT_MS = 120_000;
+
+/** tarball 并发预取连接数：实测并行连接聚合吞吐线性提升（单连接限速非总带宽瓶颈） */
+const PREFETCH_CONCURRENCY = 10;
 
 interface CliArgs {
   readonly vulIds: readonly string[];
@@ -141,22 +149,36 @@ function selectEntries(manifest: Vul4jManifest, vulIds: readonly string[]): read
   });
 }
 
-async function fetchText(url: string, timeoutMs: number): Promise<string> {
-  const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} for ${url}`);
-  }
-  return await response.text();
-}
-
-/** 修复 diff：本地缓存优先，缺失时下载回填（与 manifest 脚本同源 `<url>.diff`） */
+/**
+ * 修复 diff：本地缓存优先，缺失时经 api.github.com commit endpoint 下载回填
+ * （`Accept: application/vnd.github.diff`）。github.com 网页端点 `<url>.diff`
+ * 在封锁网络下不可直连（Connect Timeout），api.github.com 与 tarball 下载同路可达。
+ */
 async function loadFixDiff(entry: Vul4jPoolEntry, diffsDir: string): Promise<string> {
   const cached = resolve(diffsDir, `${entry.vulId}.diff`);
   if (existsSync(cached)) {
     return readFileSync(cached, "utf8");
   }
-  console.log(`  ${entry.vulId}: 本地 diff 缺失，经 ${entry.fixCommitUrl}.diff 下载`);
-  const text = await fetchText(`${entry.fixCommitUrl}.diff`, TEXT_TIMEOUT_MS);
+  const urlMatch = COMMIT_URL_RE.exec(entry.fixCommitUrl);
+  if (urlMatch === null) {
+    throw new Error(`${entry.vulId}: fixCommitUrl 非 commit 直链，无法经 api.github.com 取 diff: ${entry.fixCommitUrl}`);
+  }
+  const [, owner, repo, sha] = urlMatch;
+  const url = `https://api.github.com/repos/${owner}/${repo}/commits/${sha}`;
+  console.log(`  ${entry.vulId}: 本地 diff 缓存缺失，经 ${url} 下载（Accept: application/vnd.github.diff）`);
+  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? null;
+  const headers: Record<string, string> = {
+    "User-Agent": "review-agent-materialize-vul4j",
+    Accept: "application/vnd.github.diff",
+  };
+  if (token !== null) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const response = await fetch(url, { headers, redirect: "follow", signal: AbortSignal.timeout(TEXT_TIMEOUT_MS) });
+  if (!response.ok) {
+    throw new Error(`${entry.vulId}: diff 下载失败 HTTP ${response.status}（token 注入: ${token !== null}）`);
+  }
+  const text = await response.text();
   mkdirSync(diffsDir, { recursive: true });
   writeFileSync(cached, text, "utf8");
   return text;
@@ -185,6 +207,92 @@ function tarCommand(): string {
   return systemTar;
 }
 
+/** tarball 缓存路径（cacheDir/vul4j-tarballs/<vulId>-<短sha>.tar.gz） */
+function tarPathOf(entry: Vul4jPoolEntry, cacheDir: string): string {
+  return resolve(cacheDir, "vul4j-tarballs", `${entry.vulId}-${entry.fixSha.slice(0, 10)}.tar.gz`);
+}
+
+/** tarball 下载（api.github.com，token 可选）→ 缓存落盘；已缓存即 no-op */
+async function downloadTarball(entry: Vul4jPoolEntry, cacheDir: string): Promise<void> {
+  const tarPath = tarPathOf(entry, cacheDir);
+  if (existsSync(tarPath)) {
+    return;
+  }
+  const urlMatch = COMMIT_URL_RE.exec(entry.fixCommitUrl);
+  if (urlMatch === null) {
+    throw new Error(`${entry.vulId}: fixCommitUrl 非 commit 直链（compare 区间暂不支持 tarball 物化）: ${entry.fixCommitUrl}`);
+  }
+  const [, owner, repo] = urlMatch;
+  const url = `https://api.github.com/repos/${owner}/${repo}/tarball/${entry.fixSha}`;
+  console.log(`  ${entry.vulId}: 下载 ${url}`);
+  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? null;
+  const headers: Record<string, string> = { "User-Agent": "review-agent-materialize-vul4j" };
+  if (token !== null) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const response = await fetch(url, { headers, redirect: "follow", signal: AbortSignal.timeout(TARBALL_TIMEOUT_MS) });
+  if (!response.ok) {
+    throw new Error(`${entry.vulId}: tarball 下载失败 HTTP ${response.status}（token 注入: ${token !== null}）`);
+  }
+  mkdirSync(resolve(tarPath, ".."), { recursive: true });
+  const bytes = Buffer.from(await response.arrayBuffer());
+  writeFileSync(tarPath, bytes);
+  console.log(`  ${entry.vulId}: tarball ${bytes.length.toLocaleString()} 字节`);
+}
+
+/** 并发池：逐项执行 worker；单项失败收集不中断其余，返回失败清单（不抛） */
+async function runConcurrent(
+  entries: readonly Vul4jPoolEntry[],
+  concurrency: number,
+  worker: (entry: Vul4jPoolEntry) => Promise<void>,
+): Promise<readonly string[]> {
+  const failures: string[] = [];
+  let next = 0;
+  const runners = Array.from({ length: Math.min(concurrency, entries.length) }, async () => {
+    while (true) {
+      const index = next;
+      next += 1;
+      const entry = entries[index];
+      if (entry === undefined) {
+        return;
+      }
+      try {
+        await worker(entry);
+      } catch (error) {
+        failures.push(`${entry.vulId}: ${String((error as Error)?.message ?? error)}`);
+      }
+    }
+  });
+  await Promise.all(runners);
+  return failures;
+}
+
+/**
+ * 弱网优化：tarball 串行下载是整条管线的主要瓶颈（单连接限速 ~0.02MB/s）。
+ * 主循环前把缺失 tarball 并发预取到缓存；预取单项失败不中断（主循环
+ * materializeRepo 对缺失缓存会串行重试兜底，真失败在那里中止并保留缓存进度）。
+ */
+async function prefetchTarballs(entries: readonly Vul4jPoolEntry[], cacheDir: string, reposDir: string): Promise<void> {
+  const pending = entries.filter((entry) => {
+    const repoDir = repoDirOf(entry, reposDir);
+    if (existsSync(repoDir) && readdirSync(repoDir).length > 0) {
+      return false;
+    }
+    return !existsSync(tarPathOf(entry, cacheDir));
+  });
+  if (pending.length === 0) {
+    console.log("tarball 预取：全部已缓存/已物化，跳过");
+    return;
+  }
+  console.log(`tarball 预取：${pending.length} 个缺失，并发 ${PREFETCH_CONCURRENCY} 下载`);
+  const failures = await runConcurrent(pending, PREFETCH_CONCURRENCY, async (entry) => {
+    await downloadTarball(entry, cacheDir);
+  });
+  if (failures.length > 0) {
+    console.log(`tarball 预取：${failures.length}/${pending.length} 个失败（主循环将串行重试）：\n  ${failures.join("\n  ")}`);
+  }
+}
+
 /**
  * 物化修复版本仓库：tarball（api.github.com，token 可选）→ tar 解压展平。
  * 已物化（目录存在）即复用；解压先落临时目录再原子改名，中断残留不产生半成品缓存。
@@ -194,29 +302,8 @@ async function materializeRepo(entry: Vul4jPoolEntry, cacheDir: string, repoDir:
     console.log(`  ${entry.vulId}: 仓库快照已物化，复用 ${repoDir}`);
     return;
   }
-  const urlMatch = COMMIT_URL_RE.exec(entry.fixCommitUrl);
-  if (urlMatch === null) {
-    throw new Error(`${entry.vulId}: fixCommitUrl 非 commit 直链（compare 区间暂不支持 tarball 物化）: ${entry.fixCommitUrl}`);
-  }
-  const [, owner, repo] = urlMatch;
-  const tarPath = resolve(cacheDir, "vul4j-tarballs", `${entry.vulId}-${entry.fixSha.slice(0, 10)}.tar.gz`);
-  if (!existsSync(tarPath)) {
-    const url = `https://api.github.com/repos/${owner}/${repo}/tarball/${entry.fixSha}`;
-    console.log(`  ${entry.vulId}: 下载 ${url}`);
-    const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? null;
-    const headers: Record<string, string> = { "User-Agent": "review-agent-materialize-vul4j" };
-    if (token !== null) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    const response = await fetch(url, { headers, redirect: "follow", signal: AbortSignal.timeout(TARBALL_TIMEOUT_MS) });
-    if (!response.ok) {
-      throw new Error(`${entry.vulId}: tarball 下载失败 HTTP ${response.status}（token 注入: ${token !== null}）`);
-    }
-    mkdirSync(resolve(tarPath, ".."), { recursive: true });
-    const bytes = Buffer.from(await response.arrayBuffer());
-    writeFileSync(tarPath, bytes);
-    console.log(`  ${entry.vulId}: tarball ${bytes.length.toLocaleString()} 字节`);
-  }
+  await downloadTarball(entry, cacheDir);
+  const tarPath = tarPathOf(entry, cacheDir);
   const tmpDir = `${repoDir}.tmp`;
   rmSync(tmpDir, { recursive: true, force: true });
   mkdirSync(tmpDir, { recursive: true });
@@ -232,8 +319,32 @@ async function materializeRepo(entry: Vul4jPoolEntry, cacheDir: string, repoDir:
     rmSync(tmpDir, { recursive: true, force: true });
     throw new Error(`${entry.vulId}: tarball 解压后为空目录`);
   }
-  renameSync(tmpDir, repoDir);
+  await renameDirWithRetry(tmpDir, repoDir);
   console.log(`  ${entry.vulId}: 仓库快照解压至 ${repoDir}`);
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 目录改名：Windows 下刚解压的目录可能被杀毒/索引器短暂占用（EPERM/EACCES/
+ * EBUSY）——指数退避重试；重试耗尽才抛出（保留 tmp 供下次重跑清理重建）。
+ */
+async function renameDirWithRetry(from: string, to: string, attempts = 5): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await renameAsync(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if ((code === "EPERM" || code === "EACCES" || code === "EBUSY") && attempt < attempts) {
+        const backoffMs = 250 * 2 ** (attempt - 1);
+        console.log(`  目录改名暂时被占用（${code}），${backoffMs}ms 后重试（${attempt}/${attempts - 1}）`);
+        await sleep(backoffMs);
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 /**
@@ -292,6 +403,7 @@ async function main(): Promise<void> {
   console.log(`物化 ${args.vulIds.length} 个 Vul4J case: ${args.vulIds.join(", ")}`);
   const entries = selectEntries(loadManifest(args.manifestPath), args.vulIds);
   mkdirSync(args.reposDir, { recursive: true });
+  await prefetchTarballs(entries, args.cacheDir, args.reposDir);
 
   const inputs: Vul4jExportInput[] = [];
   const repoPathByVulId = new Map<string, string>();
