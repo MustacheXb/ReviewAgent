@@ -42,17 +42,16 @@ export function analyzeDiff(diff: string): DiffAnalysis {
       currentFile = pickChangedPath(aPath, bPath);
       continue;
     }
-    if (line.startsWith("--- a/")) {
-      // --- 与 +++ 成对出现：先记 a 侧，随后 +++ b/ 覆盖（删除文件时 +++ 为 /dev/null，保留 a 侧）
-      currentFile = line.slice("--- a/".length);
+    if (line.startsWith("--- ")) {
+      // --- a/<path>（git 风格）与裸 --- <path>（逆补丁构造器，Vul4J/d4j 数据集）同记 a 侧；
+      // /dev/null（新增文件）不定文件，等 +++ 侧
+      currentFile = stripHeaderPrefix(line, "--- ") ?? currentFile;
       continue;
     }
-    if (line.startsWith("+++ b/")) {
-      currentFile = line.slice("+++ b/".length);
+    if (line.startsWith("+++ ")) {
+      // +++ b/<path> 与裸 +++ <path> 覆盖为 b 侧；+++ /dev/null（删除文件）保持 a 侧
+      currentFile = stripHeaderPrefix(line, "+++ ") ?? currentFile;
       continue;
-    }
-    if (line.startsWith("+++ /dev/null")) {
-      continue; // currentFile 保持 a 侧路径
     }
     const hunk = HUNK_HEADER.exec(line);
     if (hunk !== null) {
@@ -97,6 +96,15 @@ function pickChangedPath(aPath: string | undefined, bPath: string | undefined): 
     return aPath;
   }
   throw new Error("diff --git header carries no usable path");
+}
+
+/** 文件头行 → 路径；剥可选 a/ b/ 前缀与时间戳；/dev/null 返回 undefined（不定文件） */
+function stripHeaderPrefix(line: string, marker: "--- " | "+++ "): string | undefined {
+  let path = line.slice(marker.length);
+  if (path.startsWith("a/") || path.startsWith("b/")) {
+    path = path.slice(2);
+  }
+  return path === "/dev/null" ? undefined : path;
 }
 
 function stripTrailingTimestamp(line: string): string {
