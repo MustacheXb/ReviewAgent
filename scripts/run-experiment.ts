@@ -10,8 +10,10 @@
  * 或经 package.json 脚本（自动编译后执行，参数经 `pnpm experiment -- <args>` 透传）：
  *   pnpm experiment -- --id smoke --cases-file dataset.json --configs A --reps 2
  *
- * key 只经环境变量注入（DEEPSEEK_API_KEY 恒需；--judge 另需 OPENAI_API_KEY）；
- * 缺失时启动即报错并给清单，绝不回显 key 值。
+ * key 只经环境变量注入（DEEPSEEK_API_KEY 恒需；--judge 另需 OPENAI_API_KEY）；本机
+ * 注入首选仓库根 .env.local（已被 gitignore，启动时自动装载；已存在的环境变量优先
+ * 不覆盖）。接入点可经 DEEPSEEK_URL / OPENAI_URL 环境变量覆盖（中转/代理端点，
+ * 尾斜杠自动归一）；缺失时启动即报错并给清单，绝不回显 key 值。
  */
 import { main } from "../src/experiment/cli.js";
 

@@ -40,6 +40,8 @@ import { defaultSleep } from "../shared/openai-http-kernel.js";
 
 export const DEEPSEEK_API_BASE_URL = "https://api.deepseek.com";
 export const DEEPSEEK_API_KEY_ENV_VAR = "DEEPSEEK_API_KEY";
+/** 接入点覆盖环境变量（中转/代理端点；显式 baseUrl 选项优先于它） */
+export const DEEPSEEK_URL_ENV_VAR = "DEEPSEEK_URL";
 export const DEFAULT_DEEPSEEK_TIMEOUT_MS = 600_000;
 export const DEFAULT_DEEPSEEK_MAX_RETRIES = 3;
 export const DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS = 1_000;
@@ -59,7 +61,7 @@ const KERNEL_ERROR_FACTORIES: HttpKernelErrorFactories = {
 export interface DeepSeekClientOptions {
   /** API key；缺省读环境变量 DEEPSEEK_API_KEY（启动即校验，缺失 fail fast） */
   readonly apiKey?: string;
-  /** API base URL；缺省 https://api.deepseek.com（测试可注入本地地址） */
+  /** API base URL；显式选项 > DEEPSEEK_URL 环境变量 > 缺省 https://api.deepseek.com（中转/代理端点用；测试可注入本地地址） */
   readonly baseUrl?: string;
   /** 单次请求超时（毫秒）；缺省 600_000（thinking 模式长思考，超时给足） */
   readonly timeoutMs?: number;
@@ -85,7 +87,7 @@ export class DeepSeekClient implements LlmClient {
     this.kernel = new OpenAiHttpKernel({
       serviceLabel: SERVICE_LABEL,
       apiKey: resolveApiKey(options.apiKey, DEEPSEEK_API_KEY_ENV_VAR, SERVICE_LABEL, clientError),
-      endpointUrl: resolveEndpointUrl(options.baseUrl, DEEPSEEK_API_BASE_URL, clientError),
+      endpointUrl: resolveEndpointUrl(options.baseUrl, DEEPSEEK_API_BASE_URL, clientError, DEEPSEEK_URL_ENV_VAR),
       timeoutMs: positiveIntOption(options.timeoutMs, DEFAULT_DEEPSEEK_TIMEOUT_MS, "timeoutMs", clientError),
       fetchFn: options.fetchFn ?? fetch,
       errors: KERNEL_ERROR_FACTORIES,

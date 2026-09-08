@@ -8,6 +8,7 @@ import {
   DEEPSEEK_API_KEY_ENV_VAR,
   DeepSeekClient,
   DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
+  DEEPSEEK_URL_ENV_VAR,
 } from "../../src/deepseek/deepseek-client.js";
 import {
   DeepSeekHttpError,
@@ -48,9 +49,11 @@ function okResponse(usage?: WireUsageFields | undefined): Response {
 
 /** 环境变量隔离：每个用例从干净环境出发，结束恢复原始值 */
 const originalEnvKey = process.env[DEEPSEEK_API_KEY_ENV_VAR];
+const originalEnvUrl = process.env[DEEPSEEK_URL_ENV_VAR];
 
 beforeEach(() => {
   delete process.env[DEEPSEEK_API_KEY_ENV_VAR];
+  delete process.env[DEEPSEEK_URL_ENV_VAR];
 });
 
 afterEach(() => {
@@ -58,6 +61,11 @@ afterEach(() => {
     delete process.env[DEEPSEEK_API_KEY_ENV_VAR];
   } else {
     process.env[DEEPSEEK_API_KEY_ENV_VAR] = originalEnvKey;
+  }
+  if (originalEnvUrl === undefined) {
+    delete process.env[DEEPSEEK_URL_ENV_VAR];
+  } else {
+    process.env[DEEPSEEK_URL_ENV_VAR] = originalEnvUrl;
   }
 });
 
@@ -108,6 +116,43 @@ describe("DeepSeekClient — constructor option validation", () => {
     const client = new DeepSeekClient({ apiKey: "test-key-001", baseUrl: "https://api.deepseek.com/", fetchFn: stub.fetch });
     await client.complete(baseRequest());
     expect(stub.requests[0]?.url).toBe("https://api.deepseek.com/chat/completions");
+  });
+});
+
+describe("DeepSeekClient — DEEPSEEK_URL 接入点覆盖（中转/代理端点）", () => {
+  it("无显式 baseUrl 时 DEEPSEEK_URL 环境变量生效", async () => {
+    process.env[DEEPSEEK_URL_ENV_VAR] = "https://relay.example.com";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.url).toBe("https://relay.example.com/chat/completions");
+  });
+
+  it("显式 baseUrl 优先于 DEEPSEEK_URL（尾斜杠归一化同样适用）", async () => {
+    process.env[DEEPSEEK_URL_ENV_VAR] = "https://env.example.com";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({
+      apiKey: "test-key-001",
+      baseUrl: "https://option.example.com/",
+      fetchFn: stub.fetch,
+    });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.url).toBe("https://option.example.com/chat/completions");
+  });
+
+  it("空白 DEEPSEEK_URL 视为未设置（回落缺省端点）", async () => {
+    process.env[DEEPSEEK_URL_ENV_VAR] = "   ";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.url).toBe("https://api.deepseek.com/chat/completions");
+  });
+
+  it("DEEPSEEK_URL 非法协议报错并注明来源（环境变量）", () => {
+    process.env[DEEPSEEK_URL_ENV_VAR] = "ftp://relay.example.com";
+    expect(() => new DeepSeekClient({ apiKey: "test-key-001" })).toThrowError(
+      /baseUrl must start with http:\/\/ or https:\/\/ \(from DEEPSEEK_URL environment variable/,
+    );
   });
 });
 

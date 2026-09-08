@@ -4,6 +4,7 @@ import {
   DEFAULT_GPT_JUDGE_RETRY_BASE_DELAY_MS,
   GptJudgeClient,
   OPENAI_API_KEY_ENV_VAR,
+  OPENAI_URL_ENV_VAR,
 } from "../../src/judge/gpt-judge-client.js";
 import {
   GptJudgeHttpError,
@@ -69,9 +70,11 @@ function makeClient(overrides: {
 }
 
 const originalEnvKey = process.env[OPENAI_API_KEY_ENV_VAR];
+const originalEnvUrl = process.env[OPENAI_URL_ENV_VAR];
 
 beforeEach(() => {
   delete process.env[OPENAI_API_KEY_ENV_VAR];
+  delete process.env[OPENAI_URL_ENV_VAR];
 });
 
 afterEach(() => {
@@ -79,6 +82,11 @@ afterEach(() => {
     delete process.env[OPENAI_API_KEY_ENV_VAR];
   } else {
     process.env[OPENAI_API_KEY_ENV_VAR] = originalEnvKey;
+  }
+  if (originalEnvUrl === undefined) {
+    delete process.env[OPENAI_URL_ENV_VAR];
+  } else {
+    process.env[OPENAI_URL_ENV_VAR] = originalEnvUrl;
   }
 });
 
@@ -103,6 +111,39 @@ describe("GptJudgeClient — API key 纪律", () => {
     const client = new GptJudgeClient({ fetchFn: stub.fetch, sleepFn: async () => {} });
     await client.adjudicate(judgeRequest());
     expect(stub.requests[0]?.headers.Authorization).toBe("Bearer env-judge-key");
+  });
+});
+
+describe("GptJudgeClient — OPENAI_URL 接入点覆盖（中转/代理端点）", () => {
+  it("无显式 baseUrl 时 OPENAI_URL 环境变量生效", async () => {
+    process.env[OPENAI_URL_ENV_VAR] = "https://relay.example.com/v1";
+    const stub = createFetchStub(() => okJudgeResponse(happyAdjudication()));
+    const client = new GptJudgeClient({ apiKey: API_KEY, fetchFn: stub.fetch, sleepFn: async () => {} });
+    await client.adjudicate(judgeRequest());
+    expect(stub.requests[0]?.url).toBe("https://relay.example.com/v1/chat/completions");
+  });
+
+  it("显式 baseUrl 优先于 OPENAI_URL（尾斜杠归一化同样适用）", async () => {
+    process.env[OPENAI_URL_ENV_VAR] = "https://env.example.com/v1";
+    const { client, stub } = makeClient({
+      handler: () => okJudgeResponse(happyAdjudication()),
+      baseUrl: "https://option.example.com/v1/",
+    });
+    await client.adjudicate(judgeRequest());
+    expect(stub.requests[0]?.url).toBe("https://option.example.com/v1/chat/completions");
+  });
+
+  it("空白 OPENAI_URL 视为未设置（回落缺省端点）；非法协议报错注明来源", async () => {
+    process.env[OPENAI_URL_ENV_VAR] = "   ";
+    const stub = createFetchStub(() => okJudgeResponse(happyAdjudication()));
+    const client = new GptJudgeClient({ apiKey: API_KEY, fetchFn: stub.fetch, sleepFn: async () => {} });
+    await client.adjudicate(judgeRequest());
+    expect(stub.requests[0]?.url).toBe("https://api.openai.com/v1/chat/completions");
+
+    process.env[OPENAI_URL_ENV_VAR] = "ftp://relay.example.com";
+    expect(() => new GptJudgeClient({ apiKey: API_KEY })).toThrowError(
+      /baseUrl must start with http:\/\/ or https:\/\/ \(from OPENAI_URL environment variable/,
+    );
   });
 });
 
