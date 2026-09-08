@@ -17,8 +17,11 @@ dist/
 coverage/
 *.tsbuildinfo
 
-# 检视运行审计痕迹（runReview 默认落盘目录）
-runs/
+# 检视运行审计痕迹（runReview 默认落盘目录；数据/记录不入库，
+# 但目录本身保持可扫描——评测报告 REPORT.md 作为结论文档例外入库）
+runs/**
+!runs/**/
+!runs/**/REPORT.md
 
 # clean MR 采集 API 快照缓存（断点续采用；清单与 diff 为交付物，正常入库）
 data/clean-mr/.cache/
