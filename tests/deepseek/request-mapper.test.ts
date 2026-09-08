@@ -89,7 +89,7 @@ describe("buildChatCompletionsBody — messages serialization", () => {
           {
             id: "call_0",
             type: "function",
-            function: { name: "review.get_symbol", arguments: '{"symbol":"MathUtils"}' },
+            function: { name: "review_get_symbol", arguments: '{"symbol":"MathUtils"}' },
           },
         ],
       },
@@ -108,7 +108,7 @@ describe("buildChatCompletionsBody — messages serialization", () => {
         role: "assistant",
         content: "checking",
         tool_calls: [
-          { id: "call_1", type: "function", function: { name: "review.get_file", arguments: "{}" } },
+          { id: "call_1", type: "function", function: { name: "review_get_file", arguments: "{}" } },
         ],
       },
     ]);
@@ -159,7 +159,7 @@ describe("buildChatCompletionsBody — tools serialization", () => {
       {
         type: "function",
         function: {
-          name: "review.get_symbol",
+          name: "review_get_symbol",
           description: "Get a symbol definition",
           parameters: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"] },
         },
@@ -189,6 +189,30 @@ describe("buildChatCompletionsBody — tools serialization", () => {
     );
     expect(() => buildChatCompletionsBody(baseRequest({ tools: [{ ...tool, parametersJson: "{oops" }] }))).toThrowError(
       /parametersJson must serialize to a JSON object/,
+    );
+  });
+
+  it("maps dotted tool names to underscored wire names in tool schemas (DeepSeek pattern ^[a-zA-Z0-9_-]+$)", () => {
+    const body = buildChatCompletionsBody(baseRequest({ tools: [tool] }));
+    const [wireTool] = body.tools ?? [];
+    expect(wireTool?.function.name).toBe("review_get_symbol");
+  });
+
+  it("leaves already wire-safe tool names unchanged", () => {
+    const body = buildChatCompletionsBody(baseRequest({ tools: [{ ...tool, name: "review_get_symbol" }] }));
+    const [wireTool] = body.tools ?? [];
+    expect(wireTool?.function.name).toBe("review_get_symbol");
+  });
+
+  it("fails fast when two tool names collide after dot-to-underscore mapping", () => {
+    expect(() =>
+      buildChatCompletionsBody(baseRequest({ tools: [tool, { ...tool, name: "review_get_symbol" }] })),
+    ).toThrowError(/both map to wire name/);
+  });
+
+  it("fails fast when a tool name cannot be mapped to a wire-safe name", () => {
+    expect(() => buildChatCompletionsBody(baseRequest({ tools: [{ ...tool, name: "review get symbol" }] }))).toThrowError(
+      /cannot be mapped to a wire-safe name/,
     );
   });
 });
