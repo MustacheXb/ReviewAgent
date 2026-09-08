@@ -54,6 +54,77 @@ describe("mapChatCompletionsResponse — usage accounting (miss / hit split)", (
   });
 });
 
+describe("mapChatCompletionsResponse — usage fallback (OpenAI-shaped gateways)", () => {
+  // 火山引擎网关（OpenAI 兼容）只给 prompt_tokens + prompt_tokens_details.cached_tokens，
+  // 不返回 DeepSeek 官方的 prompt_cache_hit_tokens / prompt_cache_miss_tokens。
+  // 回退口径保持 miss / hit 二分：miss = prompt_tokens − cached_tokens。
+  it("derives the miss/hit split from prompt_tokens and prompt_tokens_details.cached_tokens", () => {
+    const wire = wireChatCompletion({
+      content: "ok",
+      usage: {
+        prompt_tokens: 938,
+        prompt_tokens_details: { cached_tokens: 768 },
+        completion_tokens: 24,
+        total_tokens: 962,
+      },
+    });
+    const { response } = mapChatCompletionsResponse(wire);
+    expect(response.usage).toEqual({ inputTokens: 170, cacheReadTokens: 768, outputTokens: 24 });
+  });
+
+  it("treats a missing prompt_tokens_details as full miss (gateway without cache observability, e.g. deepseek-v4-pro)", () => {
+    const wire = wireChatCompletion({
+      usage: { prompt_tokens: 1658, completion_tokens: 39 },
+    });
+    const { response } = mapChatCompletionsResponse(wire);
+    expect(response.usage).toEqual({ inputTokens: 1658, cacheReadTokens: 0, outputTokens: 39 });
+  });
+
+  it("treats present-but-empty prompt_tokens_details as full miss", () => {
+    const wire = wireChatCompletion({
+      usage: { prompt_tokens: 100, prompt_tokens_details: {}, completion_tokens: 1 },
+    });
+    const { response } = mapChatCompletionsResponse(wire);
+    expect(response.usage).toEqual({ inputTokens: 100, cacheReadTokens: 0, outputTokens: 1 });
+  });
+
+  it("prefers DeepSeek-native fields when both field families are present", () => {
+    const wire = wireChatCompletion({
+      usage: {
+        prompt_tokens: 24,
+        prompt_tokens_details: { cached_tokens: 16 },
+        prompt_cache_hit_tokens: 16,
+        prompt_cache_miss_tokens: 8,
+        completion_tokens: 12,
+      },
+    });
+    const { response } = mapChatCompletionsResponse(wire);
+    expect(response.usage).toEqual({ inputTokens: 8, cacheReadTokens: 16, outputTokens: 12 });
+  });
+
+  it("keeps the miss/hit sum equal to prompt_tokens when gateway jitter reports cached_tokens above prompt_tokens", () => {
+    const wire = wireChatCompletion({
+      usage: { prompt_tokens: 938, prompt_tokens_details: { cached_tokens: 1017 }, completion_tokens: 5 },
+    });
+    const { response } = mapChatCompletionsResponse(wire);
+    expect(response.usage).toEqual({ inputTokens: 0, cacheReadTokens: 938, outputTokens: 5 });
+  });
+
+  it("rejects wrong-typed fallback usage fields", () => {
+    const stringPrompt = { choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: "938" } };
+    expect(() => mapChatCompletionsResponse(stringPrompt)).toThrowError(
+      /usage\.prompt_tokens must be a finite number/,
+    );
+    const stringCached = {
+      choices: [{ message: { content: "ok" } }],
+      usage: { prompt_tokens: 938, prompt_tokens_details: { cached_tokens: "768" } },
+    };
+    expect(() => mapChatCompletionsResponse(stringCached)).toThrowError(
+      /prompt_tokens_details\.cached_tokens must be a finite number/,
+    );
+  });
+});
+
 describe("mapChatCompletionsResponse — message and tool calls", () => {
   it("maps content, tool calls (arguments passed through byte-for-byte) and finish reason", () => {
     const wire = wireChatCompletion({

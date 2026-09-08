@@ -69,6 +69,8 @@ export interface WireUsageFields {
   readonly prompt_cache_miss_tokens?: number;
   readonly completion_tokens?: number;
   readonly total_tokens?: number;
+  /** OpenAI 形状网关（火山引擎等）的缓存命中细分 */
+  readonly prompt_tokens_details?: { readonly cached_tokens?: number };
 }
 
 /** 构造一条 DeepSeek Chat Completions 成功响应（线上形状） */
