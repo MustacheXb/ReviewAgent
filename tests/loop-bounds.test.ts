@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ReviewConfig } from "../src/contracts/config.js";
+import type { LlmMessage } from "../src/contracts/llm-client.js";
 import type { ToolCall, ToolSchema } from "../src/contracts/llm-client.js";
 import { FakeLlmClient } from "../src/fake/fake-llm-client.js";
 import { MAX_ROUNDS, MAX_TOOL_CALLS } from "../src/loop/constants.js";
@@ -32,6 +33,43 @@ const toolCall = (n: number): ToolCall => ({
   name: "review.get_symbol",
   argumentsJson: "{}",
 });
+
+/**
+ * 线上协议不变量（DeepSeek 400 防线）：assistant tool_calls 消息之后必须紧跟
+ * 覆盖全部 tool_call_id 的 tool 应答消息，且中间不得插入其他角色。
+ * 返回违规清单（空 = 全部请求结构合法）。
+ */
+function protocolViolations(requests: readonly { readonly messages: readonly LlmMessage[] }[]): string[] {
+  const violations: string[] = [];
+  requests.forEach((request, requestIndex) => {
+    const messages = request.messages;
+    messages.forEach((message, index) => {
+      if (message.role !== "assistant" || message.toolCalls === undefined || message.toolCalls.length === 0) {
+        return;
+      }
+      const unanswered = new Set(message.toolCalls.map((call) => call.id));
+      for (let cursor = index + 1; cursor < messages.length; cursor++) {
+        const next = messages[cursor];
+        if (next === undefined || next.role !== "tool") {
+          break;
+        }
+        const toolCallId = next.toolCallId;
+        if (toolCallId === undefined) {
+          violations.push(`request ${requestIndex}: tool message without toolCallId`);
+          break;
+        }
+        if (unanswered.delete(toolCallId)) {
+          continue;
+        }
+        violations.push(`request ${requestIndex}: tool response for unknown id ${toolCallId}`);
+      }
+      if (unanswered.size > 0) {
+        violations.push(`request ${requestIndex}: tool_call ids without responses: ${[...unanswered].join(", ")}`);
+      }
+    });
+  });
+  return violations;
+}
 
 let auditDir: string;
 
@@ -92,6 +130,8 @@ describe("loop hard bounds", () => {
     );
     expect(executedRecords).toHaveLength(MAX_TOOL_CALLS);
     expect(executedRecords.every((record) => record.resultSummary === "stub result for review.get_symbol")).toBe(true);
+    // 预算耗尽后跳过的调用仍逐 id 回 SKIPPED 应答：后续请求不得有悬空 tool_calls
+    expect(protocolViolations(result.audit.requests)).toEqual([]);
   });
 
   it("skips overflow tool calls beyond the budget within a single reply and still completes the run", async () => {
@@ -140,9 +180,15 @@ describe("loop hard bounds", () => {
     expect(result.audit.toolCallLog).toHaveLength(7);
     expect(result.audit.toolCallLog.filter((record) => record.resultSummary === "ok")).toHaveLength(6);
     expect(result.audit.toolCallLog.filter((record) => record.resultSummary.startsWith("SKIPPED:"))).toHaveLength(1);
-    // 工具结果以 tool 角色消息回填（append-only）
+    // 工具结果以 tool 角色消息回填（append-only）；溢出的第 7 个调用同样回 SKIPPED 应答
     const toolMessages = result.audit.requests[1]?.messages.filter((message) => message.role === "tool");
-    expect(toolMessages).toHaveLength(6);
+    expect(toolMessages).toHaveLength(7);
+    expect(toolMessages?.[6]).toEqual({
+      role: "tool",
+      content: "SKIPPED: tool call budget exhausted",
+      toolCallId: "call-7",
+    });
+    expect(protocolViolations(result.audit.requests)).toEqual([]);
     expect(result.findings).toHaveLength(1);
   });
 
@@ -200,6 +246,8 @@ describe("loop hard bounds", () => {
     for (const request of result.audit.requests) {
       expect(request.tools).toEqual([]);
     }
+    // 幻觉调用的每个 id 也回 SKIPPED 应答：请求历史结构始终合法
+    expect(protocolViolations(result.audit.requests)).toEqual([]);
   });
 
   it("stops a run whose completion lands exactly on the last round without truncation", async () => {
@@ -246,5 +294,7 @@ describe("loop hard bounds", () => {
     expect(result.audit.truncationReasons).toContain("TOOL_BUDGET_EXHAUSTED");
     expect(result.rounds).toBe(1);
     expect(result.audit.truncated).toBe(false);
+    // 跨相位预算归零 / 溢出跳过后，任何请求都不得有悬空 tool_calls（DeepSeek 400 防线）
+    expect(protocolViolations(result.audit.requests)).toEqual([]);
   });
 });
