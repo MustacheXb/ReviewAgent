@@ -1,6 +1,9 @@
 # 参考项目：外部克隆的仓库，不属于本项目源码
 reference_project/
 
+# API key 本机注入（Benchmark 试跑：DEEPSEEK_API_KEY / OPENAI_API_KEY，绝不入库）
+.env.local
+
 # Claude Code 本机配置（每台机器不同，不入库）
 .claude/settings.local.json
 
@@ -14,8 +17,11 @@ dist/
 coverage/
 *.tsbuildinfo
 
-# 检视运行审计痕迹（runReview 默认落盘目录）
-runs/
+# 检视运行审计痕迹（runReview 默认落盘目录；数据/记录不入库，
+# 但目录本身保持可扫描——评测报告 REPORT.md 作为结论文档例外入库）
+runs/**
+!runs/**/
+!runs/**/REPORT.md
 
 # clean MR 采集 API 快照缓存（断点续采用；清单与 diff 为交付物，正常入库）
 data/clean-mr/.cache/

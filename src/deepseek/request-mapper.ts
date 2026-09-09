@@ -29,11 +29,51 @@ export const LOCKED_THINKING = { type: "enabled" } as const;
 
 const VALID_ROLES: ReadonlySet<string> = new Set(["system", "user", "assistant", "tool"]);
 
+/** DeepSeek 线上 function name 校验（chat completions 拒绝其余字符，含点） */
+const WIRE_TOOL_NAME_RE = /^[a-zA-Z0-9_-]+$/;
+
+/**
+ * 内部工具名 → 线上合法名：点分命名空间分隔符替换为下划线
+ * （review.get_symbol → review_get_symbol；确定性转换，无随机性）。
+ * harness 契约层（LlmRequest/LlmResponse/tool 注册表）保持点分名不变，
+ * 适配收敛在 DeepSeek wire 层——fake client 不经过 wire，故不受影响。
+ */
+export function toWireToolName(name: string): string {
+  return name.split(".").join("_");
+}
+
+/**
+ * 工具名 wire 映射（wire 名 → 内部名），供响应 toolCalls 反解。
+ * 两个内部名映射到同一 wire 名时 fail fast——否则反解会静默选中其一，
+ * 工具调用会被派发到错误的执行器。转换后仍不匹配线上模式的名字同样
+ * fail fast（本地报错优于线上 400）。
+ */
+export function buildWireToolNameMap(tools: readonly ToolSchema[]): Map<string, string> {
+  const wireToInternal = new Map<string, string>();
+  for (const tool of tools) {
+    const wireName = toWireToolName(tool.name);
+    if (!WIRE_TOOL_NAME_RE.test(wireName)) {
+      throw new DeepSeekClientError(
+        `tool name ${JSON.stringify(tool.name)} cannot be mapped to a wire-safe name (got ${JSON.stringify(wireName)}; the DeepSeek API requires function names to match ^[a-zA-Z0-9_-]+$)`,
+      );
+    }
+    const existing = wireToInternal.get(wireName);
+    if (existing !== undefined && existing !== tool.name) {
+      throw new DeepSeekClientError(
+        `tool names ${JSON.stringify(existing)} and ${JSON.stringify(tool.name)} both map to wire name ${JSON.stringify(wireName)}: dotted tool names must stay unambiguous after "." → "_" replacement`,
+      );
+    }
+    wireToInternal.set(wireName, tool.name);
+  }
+  return wireToInternal;
+}
+
 export function buildChatCompletionsBody(request: LlmRequest): WireChatCompletionsRequest {
   validateModel(request.model);
   validateEffortLabel(request.effort);
   validateMessages(request.messages);
   validateTools(request.tools);
+  buildWireToolNameMap(request.tools);
   return {
     model: request.model,
     messages: request.messages.map(mapMessage),
@@ -175,7 +215,7 @@ function mapToolCall(call: ToolCall): WireRequestToolCall {
   return {
     id: call.id,
     type: "function",
-    function: { name: call.name, arguments: call.argumentsJson },
+    function: { name: toWireToolName(call.name), arguments: call.argumentsJson },
   };
 }
 
@@ -187,7 +227,7 @@ function mapTool(tool: ToolSchema): WireTool {
   return {
     type: "function",
     function: {
-      name: tool.name,
+      name: toWireToolName(tool.name),
       description: tool.description,
       parameters: parameters as Record<string, unknown>,
     },

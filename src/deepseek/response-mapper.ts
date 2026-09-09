@@ -9,6 +9,13 @@ import { DeepSeekResponseFormatError } from "./errors.js";
  * - cacheReadTokens ← prompt_cache_hit_tokens（命中缓存的输入 token）
  * - cacheWriteTokens：DeepSeek usage 无对应字段 → 保持缺省（不映射、不虚增）
  * - outputTokens  ← completion_tokens（含思考 token，与 CARC 输出口径一致）
+ *
+ * usage 回退链（miss / hit 二分在两种字段族下都成立）：
+ * 1. DeepSeek 官方字段（prompt_cache_miss_tokens / prompt_cache_hit_tokens）优先；
+ * 2. 缺失时回退 OpenAI 形状（火山引擎等 OpenAI 兼容网关）：
+ *    cacheReadTokens ← prompt_tokens_details.cached_tokens（缺省视为 0），
+ *    inputTokens ← prompt_tokens − cached_tokens（clamp 到非负，保持 miss+hit = prompt_tokens）；
+ * 3. 两族都缺失 → 全零（上游演进容忍）。
  */
 
 export interface MappedChatCompletions {
@@ -75,11 +82,30 @@ function mapUsage(value: unknown): LlmResponse["usage"] {
     return ZERO_USAGE;
   }
   const record = asRecord(value, "response.usage");
+  const outputTokens = optionalFiniteNumber(record.completion_tokens, "response.usage.completion_tokens") ?? 0;
+  const officialMiss = optionalFiniteNumber(record.prompt_cache_miss_tokens, "response.usage.prompt_cache_miss_tokens");
+  const officialHit = optionalFiniteNumber(record.prompt_cache_hit_tokens, "response.usage.prompt_cache_hit_tokens");
+  if (officialMiss !== undefined || officialHit !== undefined) {
+    return { inputTokens: officialMiss ?? 0, outputTokens, cacheReadTokens: officialHit ?? 0 };
+  }
+  const promptTokens = optionalFiniteNumber(record.prompt_tokens, "response.usage.prompt_tokens");
+  if (promptTokens === undefined) {
+    return { inputTokens: 0, outputTokens, cacheReadTokens: 0 };
+  }
+  const cached = mapCachedTokens(record.prompt_tokens_details);
   return {
-    inputTokens: optionalFiniteNumber(record.prompt_cache_miss_tokens, "response.usage.prompt_cache_miss_tokens") ?? 0,
-    outputTokens: optionalFiniteNumber(record.completion_tokens, "response.usage.completion_tokens") ?? 0,
-    cacheReadTokens: optionalFiniteNumber(record.prompt_cache_hit_tokens, "response.usage.prompt_cache_hit_tokens") ?? 0,
+    inputTokens: Math.max(0, promptTokens - cached),
+    outputTokens,
+    cacheReadTokens: Math.min(cached, promptTokens),
   };
+}
+
+function mapCachedTokens(value: unknown): number {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  const record = asRecord(value, "response.usage.prompt_tokens_details");
+  return optionalFiniteNumber(record.cached_tokens, "response.usage.prompt_tokens_details.cached_tokens") ?? 0;
 }
 
 function asRecord(value: unknown, path: string): Record<string, unknown> {

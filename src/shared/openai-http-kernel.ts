@@ -190,17 +190,30 @@ export function resolveApiKey(
   );
 }
 
-/** 端点解析：base URL + /chat/completions；协议校验（http/https） */
+/** 端点解析：base URL + /chat/completions；优先级镜像 resolveApiKey（显式非空选项 > 环境变量非空 > 缺省），协议校验（http/https）并注明取值来源 */
 export function resolveEndpointUrl(
   baseUrl: string | undefined,
   defaultBaseUrl: string,
   clientError: (message: string) => Error,
+  envVarName?: string,
 ): string {
-  const base = (baseUrl ?? defaultBaseUrl).trim();
-  if (!/^https?:\/\//.test(base)) {
-    throw clientError(`baseUrl must start with http:// or https:// (got ${JSON.stringify(baseUrl)})`);
+  const fromOptions = baseUrl?.trim();
+  if (fromOptions !== undefined && fromOptions.length > 0) {
+    return endpointOf(fromOptions, "baseUrl option", clientError);
   }
-  return `${base.replace(/\/+$/, "")}${CHAT_COMPLETIONS_PATH}`;
+  const fromEnv = envVarName === undefined ? undefined : process.env[envVarName]?.trim();
+  if (fromEnv !== undefined && fromEnv.length > 0) {
+    return endpointOf(fromEnv, `${envVarName} environment variable`, clientError);
+  }
+  return endpointOf(defaultBaseUrl, "default", clientError);
+}
+
+function endpointOf(base: string, source: string, clientError: (message: string) => Error): string {
+  const trimmed = base.trim();
+  if (!/^https?:\/\//.test(trimmed)) {
+    throw clientError(`baseUrl must start with http:// or https:// (from ${source}: ${JSON.stringify(trimmed)})`);
+  }
+  return `${trimmed.replace(/\/+$/, "")}${CHAT_COMPLETIONS_PATH}`;
 }
 
 export function positiveIntOption(

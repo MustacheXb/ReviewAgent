@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { EnvLocalLoadResult } from "../../src/shared/env-local.js";
 import {
   cliOptionsToPlan,
   experimentCliUsage,
   parseExperimentArgs,
+  runExperimentCli,
 } from "../../src/experiment/cli.js";
 
 /**
@@ -77,6 +79,15 @@ describe("parseExperimentArgs — 取值形式", () => {
 
   it("内联空串被接受为空值（--id= → 后续 --id is required）", () => {
     expect(parseFail(["--id="]).message).toBe("--id is required");
+  });
+
+  it("裸 -- 分隔符被跳过（pnpm run 透传场景：pnpm experiment -- --id …）", () => {
+    const parsed = parseOk(["--", "--id", "poc1", "--judge"]);
+    if (!parsed.ok) throw new Error("unreachable");
+    expect(parsed.options.experimentId).toBe("poc1");
+    expect(parsed.options.judge).toBe(true);
+    // 尾部孤立 -- 同样无害（无位置参数 CLI 的约定语义）
+    expect(parseOk(["--id", "poc1", "--"]).ok).toBe(true);
   });
 
   it("未知 flag 报错（消息内嵌 usage）", () => {
@@ -177,6 +188,63 @@ describe("parseExperimentArgs — 布尔 flag 与可重复参数", () => {
     const parsed = parseOk(["--id", "a", "--cases-file", "ds.json", "--runs-root", "out/runs"]);
     expect(parsed.ok && parsed.options.casesFile).toBe("ds.json");
     expect(parsed.ok && parsed.options.runsRoot).toBe("out/runs");
+  });
+});
+
+describe("runExperimentCli — .env.local 装载接线", () => {
+  /** 空装载结果（exists=false 形态；测试只关心调用时序） */
+  function noFileResult(): EnvLocalLoadResult {
+    return { filePath: ".env.local", exists: false, loadedKeys: [], skippedKeys: [], malformedLines: [] };
+  }
+
+  it("装载先于环境校验：注入的 key 让启动检查通过（失败落在 cases 文件，而非环境缺失）", async () => {
+    const env: Record<string, string | undefined> = {};
+    let loadCalls = 0;
+    const logs: string[] = [];
+    const exitCode = await runExperimentCli(
+      ["--id", "env-local-wiring", "--cases-file", "does-not-exist-cases.json"],
+      {
+        env,
+        loadEnvLocal: () => {
+          loadCalls += 1;
+          env.DEEPSEEK_API_KEY = "from-env-local";
+          return { filePath: ".env.local", exists: true, loadedKeys: ["DEEPSEEK_API_KEY"], skippedKeys: [], malformedLines: [] };
+        },
+        log: (line) => logs.push(line),
+      },
+    );
+    expect(loadCalls).toBe(1);
+    expect(exitCode).toBe(2);
+    const joined = logs.join("\n");
+    // 环境校验看到了装载注入的 key（否则打出 "experiment startup blocked"）
+    expect(joined).not.toContain("experiment startup blocked");
+    // 已推进到数据装载（cases 文件不存在 → 配置错误通道）
+    expect(joined).toContain("failed to read cases file");
+  });
+
+  it("argv 解析失败时不装载 .env.local", async () => {
+    let loadCalls = 0;
+    const exitCode = await runExperimentCli(["--id", "a", "--bogus"], {
+      loadEnvLocal: () => {
+        loadCalls += 1;
+        return noFileResult();
+      },
+      log: () => {},
+    });
+    expect(exitCode).toBe(2);
+    expect(loadCalls).toBe(0);
+  });
+
+  it("装载抛错（如权限）→ 退出 2 并给出错误信息", async () => {
+    const logs: string[] = [];
+    const exitCode = await runExperimentCli(["--id", "a"], {
+      loadEnvLocal: () => {
+        throw new Error("EACCES: permission denied, open '.env.local'");
+      },
+      log: (line) => logs.push(line),
+    });
+    expect(exitCode).toBe(2);
+    expect(logs.join("\n")).toContain("EACCES");
   });
 });
 

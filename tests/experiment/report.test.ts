@@ -121,7 +121,8 @@ describe("buildExperimentReport（集成：指标 / 判定 / 阴性对照 / 消�
     const verdicts = report.verdicts?.verdicts ?? [];
     expect(verdicts.map((verdict) => verdict.configId)).toEqual(["A", "C"]);
     for (const verdict of verdicts) {
-      expect(verdict.criteria).toHaveLength(9); // 3 档 × 3 判据
+      // S 级 4 判据（Recall/Precision/Token/Cache，ADR-0004）+ A/B 各 3 判据 = 10
+      expect(verdict.criteria).toHaveLength(10);
       expect(verdict.anchor.configId).toBe("C");
     }
     // 脚本化 usage：A 与 C 的 token 相同 → Token ≤ C×30% 不可能通过 → BELOW_B（可复现的算术）

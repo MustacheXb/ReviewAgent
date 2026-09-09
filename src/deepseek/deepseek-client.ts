@@ -10,7 +10,7 @@ import {
   isRetryableStatus,
   usageOfError,
 } from "./errors.js";
-import { buildChatCompletionsBody } from "./request-mapper.js";
+import { buildChatCompletionsBody, buildWireToolNameMap } from "./request-mapper.js";
 import { mapChatCompletionsResponse } from "./response-mapper.js";
 import type { WireChatCompletionsRequest } from "./wire-types.js";
 import {
@@ -36,10 +36,16 @@ import { defaultSleep } from "../shared/openai-http-kernel.js";
  *   spec #1 user story 15；request-mapper 校验，退役 id 直接拒绝）；
  * - effort 单档锁定：harness effort 标签仅接受 "default"，线上恒为 thinking {type:"enabled"} + reasoning_effort "high"；
  * - API key 仅经 DEEPSEEK_API_KEY 环境变量或显式参数注入，绝不硬编码、绝不出现在错误信息中。
+ *
+ * 工具名 wire 适配：线上 function name 校验 ^[a-zA-Z0-9_-]+$，内部点分命名空间
+ * （review.get_symbol 等）在请求序列化时转下划线（request-mapper.toWireToolName），
+ * 响应 toolCalls 名反解回内部名——harness 契约层零感知。
  */
 
 export const DEEPSEEK_API_BASE_URL = "https://api.deepseek.com";
 export const DEEPSEEK_API_KEY_ENV_VAR = "DEEPSEEK_API_KEY";
+/** 接入点覆盖环境变量（中转/代理端点；显式 baseUrl 选项优先于它） */
+export const DEEPSEEK_URL_ENV_VAR = "DEEPSEEK_URL";
 export const DEFAULT_DEEPSEEK_TIMEOUT_MS = 600_000;
 export const DEFAULT_DEEPSEEK_MAX_RETRIES = 3;
 export const DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS = 1_000;
@@ -59,7 +65,7 @@ const KERNEL_ERROR_FACTORIES: HttpKernelErrorFactories = {
 export interface DeepSeekClientOptions {
   /** API key；缺省读环境变量 DEEPSEEK_API_KEY（启动即校验，缺失 fail fast） */
   readonly apiKey?: string;
-  /** API base URL；缺省 https://api.deepseek.com（测试可注入本地地址） */
+  /** API base URL；显式选项 > DEEPSEEK_URL 环境变量 > 缺省 https://api.deepseek.com（中转/代理端点用；测试可注入本地地址） */
   readonly baseUrl?: string;
   /** 单次请求超时（毫秒）；缺省 600_000（thinking 模式长思考，超时给足） */
   readonly timeoutMs?: number;
@@ -85,7 +91,7 @@ export class DeepSeekClient implements LlmClient {
     this.kernel = new OpenAiHttpKernel({
       serviceLabel: SERVICE_LABEL,
       apiKey: resolveApiKey(options.apiKey, DEEPSEEK_API_KEY_ENV_VAR, SERVICE_LABEL, clientError),
-      endpointUrl: resolveEndpointUrl(options.baseUrl, DEEPSEEK_API_BASE_URL, clientError),
+      endpointUrl: resolveEndpointUrl(options.baseUrl, DEEPSEEK_API_BASE_URL, clientError, DEEPSEEK_URL_ENV_VAR),
       timeoutMs: positiveIntOption(options.timeoutMs, DEFAULT_DEEPSEEK_TIMEOUT_MS, "timeoutMs", clientError),
       fetchFn: options.fetchFn ?? fetch,
       errors: KERNEL_ERROR_FACTORIES,
@@ -103,6 +109,8 @@ export class DeepSeekClient implements LlmClient {
   async complete(request: LlmRequest): Promise<LlmResponse> {
     // 请求体构造/校验失败：立即抛（本地错误，重试无意义）
     const body = buildChatCompletionsBody(request);
+    // wire 名 → 内部名映射（响应 toolCalls 反解用）；tools 已随 body 构造校验过，此处幂等重建
+    const internalToolNames = buildWireToolNameMap(request.tools);
     // 失败尝试已消耗的 usage 记账（insufficient_system_resource 携带），重试成功后并入
     let consumed: LlmUsage | undefined;
     return await runWithRetries({
@@ -119,12 +127,13 @@ export class DeepSeekClient implements LlmClient {
       operation: async () => {
         const wire = await this.fetchWire(body);
         const mapped = mapChatCompletionsResponse(wire);
+        const response = restoreInternalToolNames(mapped.response, internalToolNames);
         if (mapped.finishReason === "insufficient_system_resource") {
-          throw new DeepSeekInsufficientResourceError(mapped.response.usage);
+          throw new DeepSeekInsufficientResourceError(response.usage);
         }
         return consumed === undefined
-          ? mapped.response
-          : { ...mapped.response, usage: addUsage(consumed, mapped.response.usage) };
+          ? response
+          : { ...response, usage: addUsage(consumed, response.usage) };
       },
     });
   }
@@ -136,4 +145,24 @@ export class DeepSeekClient implements LlmClient {
     }
     return this.kernel.parseJsonBody(await this.kernel.readBodyText(response));
   }
+}
+
+/**
+ * 响应 toolCalls 的 wire 名反解回内部点分名（review_get_symbol → review.get_symbol）。
+ * 未注册名原样透传——幻觉名交由 executor 的 unknown-tool 语义处理，与无适配时行为一致。
+ */
+function restoreInternalToolNames(
+  response: LlmResponse,
+  wireToInternal: Map<string, string>,
+): LlmResponse {
+  if (response.toolCalls.length === 0 || wireToInternal.size === 0) {
+    return response;
+  }
+  return {
+    ...response,
+    toolCalls: response.toolCalls.map((call) => ({
+      ...call,
+      name: wireToInternal.get(call.name) ?? call.name,
+    })),
+  };
 }

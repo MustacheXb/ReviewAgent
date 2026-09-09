@@ -8,6 +8,7 @@ import {
   DEEPSEEK_API_KEY_ENV_VAR,
   DeepSeekClient,
   DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
+  DEEPSEEK_URL_ENV_VAR,
 } from "../../src/deepseek/deepseek-client.js";
 import {
   DeepSeekHttpError,
@@ -48,9 +49,11 @@ function okResponse(usage?: WireUsageFields | undefined): Response {
 
 /** 环境变量隔离：每个用例从干净环境出发，结束恢复原始值 */
 const originalEnvKey = process.env[DEEPSEEK_API_KEY_ENV_VAR];
+const originalEnvUrl = process.env[DEEPSEEK_URL_ENV_VAR];
 
 beforeEach(() => {
   delete process.env[DEEPSEEK_API_KEY_ENV_VAR];
+  delete process.env[DEEPSEEK_URL_ENV_VAR];
 });
 
 afterEach(() => {
@@ -58,6 +61,11 @@ afterEach(() => {
     delete process.env[DEEPSEEK_API_KEY_ENV_VAR];
   } else {
     process.env[DEEPSEEK_API_KEY_ENV_VAR] = originalEnvKey;
+  }
+  if (originalEnvUrl === undefined) {
+    delete process.env[DEEPSEEK_URL_ENV_VAR];
+  } else {
+    process.env[DEEPSEEK_URL_ENV_VAR] = originalEnvUrl;
   }
 });
 
@@ -111,6 +119,43 @@ describe("DeepSeekClient — constructor option validation", () => {
   });
 });
 
+describe("DeepSeekClient — DEEPSEEK_URL 接入点覆盖（中转/代理端点）", () => {
+  it("无显式 baseUrl 时 DEEPSEEK_URL 环境变量生效", async () => {
+    process.env[DEEPSEEK_URL_ENV_VAR] = "https://relay.example.com";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.url).toBe("https://relay.example.com/chat/completions");
+  });
+
+  it("显式 baseUrl 优先于 DEEPSEEK_URL（尾斜杠归一化同样适用）", async () => {
+    process.env[DEEPSEEK_URL_ENV_VAR] = "https://env.example.com";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({
+      apiKey: "test-key-001",
+      baseUrl: "https://option.example.com/",
+      fetchFn: stub.fetch,
+    });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.url).toBe("https://option.example.com/chat/completions");
+  });
+
+  it("空白 DEEPSEEK_URL 视为未设置（回落缺省端点）", async () => {
+    process.env[DEEPSEEK_URL_ENV_VAR] = "   ";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.url).toBe("https://api.deepseek.com/chat/completions");
+  });
+
+  it("DEEPSEEK_URL 非法协议报错并注明来源（环境变量）", () => {
+    process.env[DEEPSEEK_URL_ENV_VAR] = "ftp://relay.example.com";
+    expect(() => new DeepSeekClient({ apiKey: "test-key-001" })).toThrowError(
+      /baseUrl must start with http:\/\/ or https:\/\/ \(from DEEPSEEK_URL environment variable/,
+    );
+  });
+});
+
 describe("DeepSeekClient — request wire shape", () => {
   it("posts an OpenAI-compatible body with locked bytes to the chat completions endpoint", async () => {
     const stub = createFetchStub(() => okResponse());
@@ -135,7 +180,7 @@ describe("DeepSeekClient — request wire shape", () => {
     ]);
   });
 
-  it("serializes tool schemas and assistant tool-call rounds in the wire body", async () => {
+  it("serializes tool schemas and assistant tool-call rounds in the wire body (dotted names underscored)", async () => {
     const stub = createFetchStub(() => okResponse());
     const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
     await client.complete(
@@ -153,10 +198,11 @@ describe("DeepSeekClient — request wire shape", () => {
     );
     const body = JSON.parse(stub.requests[0]?.body ?? "{}") as Record<string, unknown>;
     expect(Object.keys(body)).toEqual(["model", "messages", "thinking", "reasoning_effort", "tools", "tool_choice", "stream"]);
+    // DeepSeek 线上 function name 校验 ^[a-zA-Z0-9_-]+$：内部点分名（review.*）必须转下划线上 wire
     expect(body.tools).toEqual([
       {
         type: "function",
-        function: { name: "review.get_symbol", description: "Get a symbol", parameters: { type: "object" } },
+        function: { name: "review_get_symbol", description: "Get a symbol", parameters: { type: "object" } },
       },
     ]);
     expect(body.tool_choice).toBe("auto");
@@ -167,7 +213,7 @@ describe("DeepSeekClient — request wire shape", () => {
         role: "assistant",
         content: null,
         tool_calls: [
-          { id: "call_0", type: "function", function: { name: "review.get_symbol", arguments: '{"symbol":"X"}' } },
+          { id: "call_0", type: "function", function: { name: "review_get_symbol", arguments: '{"symbol":"X"}' } },
         ],
       },
       { role: "tool", content: "result", tool_call_id: "call_0" },
@@ -181,6 +227,62 @@ describe("DeepSeekClient — request wire shape", () => {
       /unsupported model/,
     );
     await expect(client.complete(baseRequest({ effort: "low" }))).rejects.toThrowError(/effort is locked/);
+    expect(stub.requests).toHaveLength(0);
+  });
+});
+
+describe("DeepSeekClient — wire tool name adaptation（点分工具名线上适配）", () => {
+  const dottedTool = { name: "review.get_symbol", description: "Get a symbol", parametersJson: '{"type":"object"}' };
+
+  it("round-trip：wire 请求带下划线名，响应 toolCalls 反解回内部点分名", async () => {
+    const stub = createFetchStub(() =>
+      jsonResponse(
+        200,
+        wireChatCompletion({
+          content: "",
+          toolCalls: [
+            { id: "call_9", type: "function", function: { name: "review_get_symbol", arguments: '{"symbol":"X"}' } },
+          ],
+        }),
+      ),
+    );
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
+    const response = await client.complete(baseRequest({ tools: [dottedTool] }));
+
+    const body = JSON.parse(stub.requests[0]?.body ?? "{}") as { tools?: { function: { name: string } }[] };
+    expect(body.tools?.[0]?.function.name).toBe("review_get_symbol");
+    expect(response.toolCalls).toEqual([
+      { id: "call_9", name: "review.get_symbol", argumentsJson: '{"symbol":"X"}' },
+    ]);
+  });
+
+  it("响应携带未注册的 wire 名时原样透传（幻觉名交由 executor 的 unknown-tool 语义）", async () => {
+    const stub = createFetchStub(() =>
+      jsonResponse(
+        200,
+        wireChatCompletion({
+          content: "",
+          toolCalls: [
+            { id: "call_x", type: "function", function: { name: "review_get_hallucination", arguments: "{}" } },
+          ],
+        }),
+      ),
+    );
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
+    const response = await client.complete(baseRequest({ tools: [dottedTool] }));
+    expect(response.toolCalls[0]?.name).toBe("review_get_hallucination");
+  });
+
+  it("两个内部工具名映射到同一 wire 名时构造期 fail fast（零网络）", async () => {
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
+    await expect(
+      client.complete(
+        baseRequest({
+          tools: [dottedTool, { name: "review_get_symbol", description: "Collision", parametersJson: '{"type":"object"}' }],
+        }),
+      ),
+    ).rejects.toThrowError(/both map to wire name/);
     expect(stub.requests).toHaveLength(0);
   });
 });

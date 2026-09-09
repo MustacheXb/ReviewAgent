@@ -2,15 +2,16 @@
 
 > **文首说明（原文首注）**：重新核对了当前 DeepSeek Harness 的官方架构：它将 `session`、`system-prompt`、`tools`、`agent`、`agent-loop`、`llm` 等声明为可替换插件能力（代码层核对：仅 `ctx.llm` 有多实现 seam，其余为 core 单实现，详见第 2 章"DSH 能力核对"）；`agent/pre-step` 可以决定模型实际看到的消息；Session 是 append-only event log；这些都非常适合实现我们的"**Cache-Stable Review Loop**"。（[GitHub](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md)）
 
-> **修订记录（v2.0，2026-09-02）**：本版为设计共识评审（28 项设计决策 + 四轮事实核查：DSH 代码仓、DeepSeek API、Java 代码智能工具链、Java 公开数据集）后的写回版。主要修订：
+> **修订记录（v2.1，2026-09-08）**：v2.0（2026-09-02）为设计共识评审（28 项设计决策 + 四轮事实核查：DSH 代码仓、DeepSeek API、Java 代码智能工具链、Java 公开数据集）后的写回版。主要修订：
 > 1. **POC1 先行、DSH 后置**：POC1 在零 DSH 依赖的独立薄 harness（TypeScript）上运行，DSH 仅作并行技术 spike；原"Phase 1 = DSH Review Runtime"调整为 POC1 之后的迁移阶段（ADR-0001，见第 8 章阶段 0）。
 > 2. **DSH 能力表述修正**：六个能力入口中仅 `ctx.llm` 具备多实现 seam，`sessions` / `systemPrompt` / `tools` / `agents` / `tokenMeter` 均为 core 零替代实现；自定义 Agent Loop 经 `setFactory` 可替换但零生产示例。Loop 采用"标准 loop + 策略监听器"起步（见第 3 章）。
 > 3. **模型层锁定**：`deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 退役；POC1 锁定 DeepSeek 官方 API，主力 `deepseek-v4-flash`、`deepseek-v4-pro` 用于高险升级与消融（ADR-0002），全实验锁定单一 effort 档位。
-> 4. **S/A/B 主锚切换**：成功标准由"Claude Code × N%"改为"配置 C（Full Repo 效果上限）× N%"；Claude Code 模型不可同源，降为跨模型外部参照，不进主判定。
+> 4. **S/A/B 主锚切换**：成功标准由"Claude Code × N%"改为"配置 C（Full Repo 效果上限）× N%"；Claude Code 与本项目模型不同源（前者原生 Claude 系、本项目锁定 DeepSeek 系），定位为跨模型外部参照，不进主判定。
 > 5. **代码智能零构建**：企业落地只提供静态源码快照，C1/C2 后端锁定 tree-sitter-java + ripgrep 词法级静态解析，排除一切构建依赖；数据集随之不要求可构建（ADR-0003，见第 4 章）。
 > 6. **Benchmark 落地**：逆补丁法构造缺陷引入 MR + 五源数据集组合（Defects4J 主集 / Vul4J 高险 / Multi-SWE-bench Java MR 形态 / 自建阴性对照 / MCR-Bench 参照，见第 7 章）。
 > 7. **实验协议补全**：判定链（原生真值 + 规则粗筛 + GPT 系 LLM-as-judge + 10% 人工抽检）、≥3 重复报均值±标准差、缓存分层报告（rep1 冷单列、rep2+ 热均值为主）、DeepSeek 缓存整匹语义与冷/热协议（见第 5、6 章）。
 > 8. **术语与决策存档**：术语表见 `CONTEXT.md`；不可逆决策见 `docs/adr/0001–0003`；详版过程记录见《基于 DeepSeek Harness 的 Review Agent 架构设计方案过程讨论》。
+> 9. **Claude Code 参照措辞修正（v2.1，2026-09-08）**：Claude Code 经 `ANTHROPIC_BASE_URL` 可接入外部模型，"模型不可同源"表述不准确；改为"模型不同源"（Claude Code 原生 Claude 系、本项目锁定 DeepSeek 系），定位仍为跨模型外部参照（方案 A，见第 7 章）。
 
 ## 1. 项目概述与问题定义
 
@@ -1356,7 +1357,7 @@ Same Diff
 Same Objective
 ```
 
-模型不可同源（Claude Code 锁定 Claude 系模型，本项目锁定 DeepSeek 系），原"Same Model where possible"不成立（v2.0 修正）。因此 Claude Code 为**跨模型外部参照**：单列报告、不进 S/A/B 主判定。比较：
+本项目锁定 DeepSeek 系模型，Claude Code 原生运行 Claude 系模型，二者模型不同源；本版将 Claude Code 定位为**跨模型外部参照**：单列报告、不进 S/A/B 主判定。比较：
 
 ```text
 Claude Code（跨模型外部参照）

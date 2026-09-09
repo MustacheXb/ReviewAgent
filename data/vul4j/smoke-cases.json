@@ -1,0 +1,161 @@
+[
+  {
+    "caseId": "VUL4J-38",
+    "repoPath": ".cache/datasets/vul4j-repos/VUL4J-38-ab6cbdc3da",
+    "diff": "--- cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java\n+++ cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java\n@@ -110,7 +110,7 @@ protected final String constructValidationUrl(final String ticket, final String\n \n         logger.debug(\"Placing URL parameters in map.\");\n         urlParameters.put(\"ticket\", ticket);\n+        urlParameters.put(\"service\", encodeUrl(serviceUrl));\n-        urlParameters.put(\"service\", serviceUrl);\n \n         if (this.renew) {\n             urlParameters.put(\"renew\", \"true\");\n@@ -144,8 +144,7 @@ protected final String constructValidationUrl(final String ticket, final String\n                 buffer.append(i++ == 0 ? \"?\" : \"&\");\n                 buffer.append(key);\n                 buffer.append(\"=\");\n+                buffer.append(value);\n-                final String encodedValue = encodeUrl(value);\n-                buffer.append(encodedValue);\n             }\n         }\n \n--- cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java\n+++ cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java\n@@ -70,7 +70,7 @@ public Cas20ServiceTicketValidator(final String casServerUrlPrefix) {\n      * @param urlParameters the Map containing the existing parameters to send to the server.\n      */\n     protected final void populateUrlAttributeMap(final Map<String, String> urlParameters) {\n+        urlParameters.put(\"pgtUrl\", encodeUrl(this.proxyCallbackUrl));\n-        urlParameters.put(\"pgtUrl\", this.proxyCallbackUrl);\n     }\n \n     protected String getUrlSuffix() {\n",
+    "issueDescription": "Vulnerability CVE-2014-4172 (CWE-74: Improper Neutralization of Special Elements in Output Used by a Downstream Component ('Injection')) in apereo/java-cas-client. Fixed by https://github.com/apereo/java-cas-client/commit/ab6cbdc3daa451b4fef89c0bd0f4e6568f3aa9ef.",
+    "truth": {
+      "locations": [
+        {
+          "file": "cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java",
+          "lineStart": 113,
+          "lineEnd": 113,
+          "defectNature": "SECURITY"
+        },
+        {
+          "file": "cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java",
+          "lineStart": 147,
+          "lineEnd": 147,
+          "defectNature": "SECURITY"
+        },
+        {
+          "file": "cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java",
+          "lineStart": 73,
+          "lineEnd": 73,
+          "defectNature": "SECURITY"
+        }
+      ],
+      "fixPatch": "diff --git a/cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java b/cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java\nindex 3ea31bdd0..fab058150 100644\n--- a/cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java\n+++ b/cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java\n@@ -110,7 +110,7 @@ protected final String constructValidationUrl(final String ticket, final String\n \n         logger.debug(\"Placing URL parameters in map.\");\n         urlParameters.put(\"ticket\", ticket);\n-        urlParameters.put(\"service\", encodeUrl(serviceUrl));\n+        urlParameters.put(\"service\", serviceUrl);\n \n         if (this.renew) {\n             urlParameters.put(\"renew\", \"true\");\n@@ -144,7 +144,8 @@ protected final String constructValidationUrl(final String ticket, final String\n                 buffer.append(i++ == 0 ? \"?\" : \"&\");\n                 buffer.append(key);\n                 buffer.append(\"=\");\n-                buffer.append(value);\n+                final String encodedValue = encodeUrl(value);\n+                buffer.append(encodedValue);\n             }\n         }\n \ndiff --git a/cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java b/cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java\nindex 4380348b2..9ecc5b850 100644\n--- a/cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java\n+++ b/cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java\n@@ -70,7 +70,7 @@ public Cas20ServiceTicketValidator(final String casServerUrlPrefix) {\n      * @param urlParameters the Map containing the existing parameters to send to the server.\n      */\n     protected final void populateUrlAttributeMap(final Map<String, String> urlParameters) {\n-        urlParameters.put(\"pgtUrl\", encodeUrl(this.proxyCallbackUrl));\n+        urlParameters.put(\"pgtUrl\", this.proxyCallbackUrl);\n     }\n \n     protected String getUrlSuffix() {\n"
+    },
+    "labels": {
+      "source": "vul4j",
+      "riskClass": "High",
+      "allowedConfigs": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "extensions": {
+      "vulId": "VUL4J-38",
+      "repoSlug": "apereo/java-cas-client",
+      "fixCommitUrl": "https://github.com/apereo/java-cas-client/commit/ab6cbdc3daa451b4fef89c0bd0f4e6568f3aa9ef",
+      "fixSha": "ab6cbdc3daa451b4fef89c0bd0f4e6568f3aa9ef",
+      "nature": "SECURITY",
+      "natureMatched": "true",
+      "cveId": "CVE-2014-4172",
+      "cweId": "CWE-74",
+      "cweName": "Improper Neutralization of Special Elements in Output Used by a Downstream Component ('Injection')",
+      "owaspId": "none",
+      "excludedTestFiles": "cas-client-core/src/test/java/org/jasig/cas/client/validation/Cas10TicketValidatorTests.java"
+    }
+  },
+  {
+    "caseId": "VUL4J-52",
+    "repoPath": ".cache/datasets/vul4j-repos/VUL4J-52-0cd7ec12b7",
+    "diff": "--- src/main/java/org/kohsuke/groovy/sandbox/SandboxTransformer.java\n+++ src/main/java/org/kohsuke/groovy/sandbox/SandboxTransformer.java\n@@ -137,7 +137,6 @@ public void call(final SourceUnit source, GeneratorContext context, ClassNode cl\n \n         processConstructors(visitor, classNode);\n         for (MethodNode m : classNode.getMethods()) {\n-            forbidIfFinalizer(m);\n             visitor.visitMethod(m);\n         }\n         for (Statement s : classNode.getObjectInitializerStatements()) {\n@@ -148,26 +147,6 @@ public void call(final SourceUnit source, GeneratorContext context, ClassNode cl\n         }\n     }\n \n-    /**\n-     * {@link Object#finalize} is called by the JVM outside of the sandbox, so overriding it in a\n-     * sandboxed script is not allowed.\n-     */\n-    public void forbidIfFinalizer(MethodNode m) {\n-        if (m.getName().equals(\"finalize\") && m.isVoidMethod() && !m.isPrivate() && !m.isStatic()) {\n-            boolean safe = false;\n-            // There must be at least one parameter without an initial expression for the method to be acceptable.\n-            for (Parameter p : m.getParameters()) {\n-                if (!p.hasInitialExpression()) {\n-                    safe = true;\n-                    break;\n-                }\n-            }\n-            if (!safe) {\n-                throw new SecurityException(\"Sandboxed code may not override Object.finalize()\");\n-            }\n-        }\n-    }\n-\n     /** Do not care about {@code super} calls for classes extending these types. */\n     private static final Set<String> TRIVIAL_CONSTRUCTORS = new HashSet<>(Arrays.asList(\n         Object.class.getName(),\n",
+    "issueDescription": "Vulnerability CVE-2018-1000865 (CWE-269: Improper Privilege Management) in jenkinsci/groovy-sandbox. Fixed by https://github.com/jenkinsci/groovy-sandbox/commit/0cd7ec12b7c56cfa3167d99c5f43147ce05449d3.",
+    "truth": {
+      "locations": [
+        {
+          "file": "src/main/java/org/kohsuke/groovy/sandbox/SandboxTransformer.java",
+          "lineStart": 140,
+          "lineEnd": 140,
+          "defectNature": "SECURITY"
+        },
+        {
+          "file": "src/main/java/org/kohsuke/groovy/sandbox/SandboxTransformer.java",
+          "lineStart": 150,
+          "lineEnd": 150,
+          "defectNature": "SECURITY"
+        }
+      ],
+      "fixPatch": "diff --git a/src/main/java/org/kohsuke/groovy/sandbox/SandboxTransformer.java b/src/main/java/org/kohsuke/groovy/sandbox/SandboxTransformer.java\nindex 494e5cc..418fd37 100644\n--- a/src/main/java/org/kohsuke/groovy/sandbox/SandboxTransformer.java\n+++ b/src/main/java/org/kohsuke/groovy/sandbox/SandboxTransformer.java\n@@ -137,6 +137,7 @@ public void call(final SourceUnit source, GeneratorContext context, ClassNode cl\n \n         processConstructors(visitor, classNode);\n         for (MethodNode m : classNode.getMethods()) {\n+            forbidIfFinalizer(m);\n             visitor.visitMethod(m);\n         }\n         for (Statement s : classNode.getObjectInitializerStatements()) {\n@@ -147,6 +148,26 @@ public void call(final SourceUnit source, GeneratorContext context, ClassNode cl\n         }\n     }\n \n+    /**\n+     * {@link Object#finalize} is called by the JVM outside of the sandbox, so overriding it in a\n+     * sandboxed script is not allowed.\n+     */\n+    public void forbidIfFinalizer(MethodNode m) {\n+        if (m.getName().equals(\"finalize\") && m.isVoidMethod() && !m.isPrivate() && !m.isStatic()) {\n+            boolean safe = false;\n+            // There must be at least one parameter without an initial expression for the method to be acceptable.\n+            for (Parameter p : m.getParameters()) {\n+                if (!p.hasInitialExpression()) {\n+                    safe = true;\n+                    break;\n+                }\n+            }\n+            if (!safe) {\n+                throw new SecurityException(\"Sandboxed code may not override Object.finalize()\");\n+            }\n+        }\n+    }\n+\n     /** Do not care about {@code super} calls for classes extending these types. */\n     private static final Set<String> TRIVIAL_CONSTRUCTORS = new HashSet<>(Arrays.asList(\n         Object.class.getName(),\n"
+    },
+    "labels": {
+      "source": "vul4j",
+      "riskClass": "High",
+      "allowedConfigs": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "extensions": {
+      "vulId": "VUL4J-52",
+      "repoSlug": "jenkinsci/groovy-sandbox",
+      "fixCommitUrl": "https://github.com/jenkinsci/groovy-sandbox/commit/0cd7ec12b7c56cfa3167d99c5f43147ce05449d3",
+      "fixSha": "0cd7ec12b7c56cfa3167d99c5f43147ce05449d3",
+      "nature": "SECURITY",
+      "natureMatched": "true",
+      "cveId": "CVE-2018-1000865",
+      "cweId": "CWE-269",
+      "cweName": "Improper Privilege Management",
+      "owaspId": "CWE Top 40",
+      "excludedTestFiles": "src/test/java/org/kohsuke/groovy/sandbox/FinalizerTest.java"
+    }
+  },
+  {
+    "caseId": "VUL4J-79",
+    "repoPath": ".cache/datasets/vul4j-repos/VUL4J-79-759b72f33b",
+    "diff": "--- src/main/java/org/zeroturnaround/zip/ZipUtil.java\n+++ src/main/java/org/zeroturnaround/zip/ZipUtil.java\n@@ -1150,15 +1150,6 @@ public void process(InputStream in, ZipEntry zipEntry) throws IOException {\n       String name = mapper.map(zipEntry.getName());\n       if (name != null) {\n         File file = new File(outputDir, name);\n-\n-        /* If we see the relative traversal string of \"..\" we need to make sure\n-         * that the outputdir + name doesn't leave the outputdir. See\n-         * DirectoryTraversalMaliciousTest for details.\n-         */\n-        if (name.indexOf(\"..\") != -1 && !file.getCanonicalPath().startsWith(outputDir.getCanonicalPath())) {\n-          throw new ZipException(\"The file \"+name+\" is trying to leave the target output directory of \"+outputDir+\". Ignoring this file.\");\n-        }\n-\n         if (zipEntry.isDirectory()) {\n           FileUtils.forceMkdir(file);\n         }\n@@ -1227,29 +1218,11 @@ public void process(InputStream in, ZipEntry zipEntry) throws IOException {\n             parentDirectory = file;\n           }\n           File destFile = new File(parentDirectory, dirs[dirs.length - 1]);\n-\n-          /* If we see the relative traversal string of \"..\" we need to make sure\n-           * that the outputdir + name doesn't leave the outputdir. See\n-           * DirectoryTraversalMaliciousTest for details.\n-           */\n-          if (name.indexOf(\"..\") != -1 && !destFile.getCanonicalPath().startsWith(outputDir.getCanonicalPath())) {\n-            throw new ZipException(\"The file \"+name+\" is trying to leave the target output directory of \"+outputDir+\". Ignoring this file.\");\n-          }\n-\n           FileUtils.copy(in, destFile);\n         }\n         // it could be that there are just top level files that the unpacker is used for\n         else {\n           File destFile = new File(outputDir, name);\n-\n-          /* If we see the relative traversal string of \"..\" we need to make sure\n-           * that the outputdir + name doesn't leave the outputdir. See\n-           * DirectoryTraversalMaliciousTest for details.\n-           */\n-          if (name.indexOf(\"..\") != -1 && !destFile.getCanonicalPath().startsWith(outputDir.getCanonicalPath())) {\n-            throw new ZipException(\"The file \"+name+\" is trying to leave the target output directory of \"+outputDir+\". Ignoring this file.\");\n-          }\n-\n           FileUtils.copy(in, destFile);\n         }\n       }\n@@ -1285,15 +1258,6 @@ else if (!rootDir.equals(root)) {\n       String name = mapper.map(getUnrootedName(root, zipEntry.getName()));\n       if (name != null) {\n         File file = new File(outputDir, name);\n-\n-        /* If we see the relative traversal string of \"..\" we need to make sure\n-         * that the outputdir + name doesn't leave the outputdir. See\n-         * DirectoryTraversalMaliciousTest for details.\n-         */\n-        if (name.indexOf(\"..\") != -1 && !file.getCanonicalPath().startsWith(outputDir.getCanonicalPath())) {\n-          throw new ZipException(\"The file \"+name+\" is trying to leave the target output directory of \"+outputDir+\". Ignoring this file.\");\n-        }\n-\n         if (zipEntry.isDirectory()) {\n           FileUtils.forceMkdir(file);\n         }\n",
+    "issueDescription": "Vulnerability CVE-2018-1002201 (CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')) in zeroturnaround/zt-zip. Fixed by https://github.com/zeroturnaround/zt-zip/commit/759b72f33bc8f4d69f84f09fcb7f010ad45d6fff.",
+    "truth": {
+      "locations": [
+        {
+          "file": "src/main/java/org/zeroturnaround/zip/ZipUtil.java",
+          "lineStart": 1153,
+          "lineEnd": 1153,
+          "defectNature": "SECURITY"
+        },
+        {
+          "file": "src/main/java/org/zeroturnaround/zip/ZipUtil.java",
+          "lineStart": 1221,
+          "lineEnd": 1221,
+          "defectNature": "SECURITY"
+        },
+        {
+          "file": "src/main/java/org/zeroturnaround/zip/ZipUtil.java",
+          "lineStart": 1226,
+          "lineEnd": 1226,
+          "defectNature": "SECURITY"
+        },
+        {
+          "file": "src/main/java/org/zeroturnaround/zip/ZipUtil.java",
+          "lineStart": 1261,
+          "lineEnd": 1261,
+          "defectNature": "SECURITY"
+        }
+      ],
+      "fixPatch": "diff --git a/src/main/java/org/zeroturnaround/zip/ZipUtil.java b/src/main/java/org/zeroturnaround/zip/ZipUtil.java\nindex 7ebc8dd9..604866ef 100644\n--- a/src/main/java/org/zeroturnaround/zip/ZipUtil.java\n+++ b/src/main/java/org/zeroturnaround/zip/ZipUtil.java\n@@ -1150,6 +1150,15 @@ public void process(InputStream in, ZipEntry zipEntry) throws IOException {\n       String name = mapper.map(zipEntry.getName());\n       if (name != null) {\n         File file = new File(outputDir, name);\n+\n+        /* If we see the relative traversal string of \"..\" we need to make sure\n+         * that the outputdir + name doesn't leave the outputdir. See\n+         * DirectoryTraversalMaliciousTest for details.\n+         */\n+        if (name.indexOf(\"..\") != -1 && !file.getCanonicalPath().startsWith(outputDir.getCanonicalPath())) {\n+          throw new ZipException(\"The file \"+name+\" is trying to leave the target output directory of \"+outputDir+\". Ignoring this file.\");\n+        }\n+\n         if (zipEntry.isDirectory()) {\n           FileUtils.forceMkdir(file);\n         }\n@@ -1218,11 +1227,29 @@ public void process(InputStream in, ZipEntry zipEntry) throws IOException {\n             parentDirectory = file;\n           }\n           File destFile = new File(parentDirectory, dirs[dirs.length - 1]);\n+\n+          /* If we see the relative traversal string of \"..\" we need to make sure\n+           * that the outputdir + name doesn't leave the outputdir. See\n+           * DirectoryTraversalMaliciousTest for details.\n+           */\n+          if (name.indexOf(\"..\") != -1 && !destFile.getCanonicalPath().startsWith(outputDir.getCanonicalPath())) {\n+            throw new ZipException(\"The file \"+name+\" is trying to leave the target output directory of \"+outputDir+\". Ignoring this file.\");\n+          }\n+\n           FileUtils.copy(in, destFile);\n         }\n         // it could be that there are just top level files that the unpacker is used for\n         else {\n           File destFile = new File(outputDir, name);\n+\n+          /* If we see the relative traversal string of \"..\" we need to make sure\n+           * that the outputdir + name doesn't leave the outputdir. See\n+           * DirectoryTraversalMaliciousTest for details.\n+           */\n+          if (name.indexOf(\"..\") != -1 && !destFile.getCanonicalPath().startsWith(outputDir.getCanonicalPath())) {\n+            throw new ZipException(\"The file \"+name+\" is trying to leave the target output directory of \"+outputDir+\". Ignoring this file.\");\n+          }\n+\n           FileUtils.copy(in, destFile);\n         }\n       }\n@@ -1258,6 +1285,15 @@ else if (!rootDir.equals(root)) {\n       String name = mapper.map(getUnrootedName(root, zipEntry.getName()));\n       if (name != null) {\n         File file = new File(outputDir, name);\n+\n+        /* If we see the relative traversal string of \"..\" we need to make sure\n+         * that the outputdir + name doesn't leave the outputdir. See\n+         * DirectoryTraversalMaliciousTest for details.\n+         */\n+        if (name.indexOf(\"..\") != -1 && !file.getCanonicalPath().startsWith(outputDir.getCanonicalPath())) {\n+          throw new ZipException(\"The file \"+name+\" is trying to leave the target output directory of \"+outputDir+\". Ignoring this file.\");\n+        }\n+\n         if (zipEntry.isDirectory()) {\n           FileUtils.forceMkdir(file);\n         }\n"
+    },
+    "labels": {
+      "source": "vul4j",
+      "riskClass": "High",
+      "allowedConfigs": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "extensions": {
+      "vulId": "VUL4J-79",
+      "repoSlug": "zeroturnaround/zt-zip",
+      "fixCommitUrl": "https://github.com/zeroturnaround/zt-zip/commit/759b72f33bc8f4d69f84f09fcb7f010ad45d6fff",
+      "fixSha": "759b72f33bc8f4d69f84f09fcb7f010ad45d6fff",
+      "nature": "SECURITY",
+      "natureMatched": "true",
+      "cveId": "CVE-2018-1002201",
+      "cweId": "CWE-22",
+      "cweName": "Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')",
+      "owaspId": "A5",
+      "excludedTestFiles": "src/test/java/org/zeroturnaround/zip/DirectoryTraversalMaliciousTest.java,src/test/resources/zip-malicious-traversal-backslashes.zip,src/test/resources/zip-malicious-traversal.zip"
+    }
+  }
+]

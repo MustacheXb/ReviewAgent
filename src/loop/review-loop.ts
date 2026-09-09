@@ -259,49 +259,85 @@ async function processToolCalls(
     content: response.content,
     toolCalls: response.toolCalls,
   };
-  let appended: readonly LlmMessage[] = [...messages, assistantWithToolCalls];
+  const appended: readonly LlmMessage[] = [...messages, assistantWithToolCalls];
   if (!inputs.config.toolsEnabled || inputs.toolExecutor === undefined) {
-    const records = response.toolCalls.map((call) =>
-      skippedToolCallRecord(call, "tools are not enabled in this configuration"),
-    );
-    return {
-      state: appendToolRecords(state, records),
-      messages: appended,
-      notes: ["tool calls ignored: tools are not enabled in this configuration"],
-      recall: false,
-    };
+    return skippedToolCycle(state, appended, response.toolCalls, "tools are not enabled in this configuration", {
+      note: "tool calls ignored: tools are not enabled in this configuration",
+    });
   }
   const remaining = MAX_TOOL_CALLS - state.toolCallCount;
   if (remaining <= 0) {
-    return {
-      state: addTruncationReason(state, TRUNCATION_TOOL_BUDGET),
-      messages: appended,
-      notes: ["phase force-completed: tool call budget exhausted"],
-      recall: false,
-    };
+    return skippedToolCycle(state, appended, response.toolCalls, "tool call budget exhausted", {
+      note: "phase force-completed: tool call budget exhausted",
+      truncationReason: TRUNCATION_TOOL_BUDGET,
+    });
   }
   let current = state;
   const toExecute = response.toolCalls.slice(0, remaining);
   const overflow = response.toolCalls.slice(remaining);
+  const executedRecords: ToolCallRecord[] = [];
   for (const call of toExecute) {
     const record = await executeToolCall(inputs.toolExecutor, call);
+    executedRecords.push(record);
     current = {
       ...current,
       toolCallCount: current.toolCallCount + 1,
       toolCallLog: [...current.toolCallLog, record],
     };
-    appended = [...appended, { role: "tool", content: record.resultSummary, toolCallId: call.id }];
   }
+  const overflowReason = "tool call budget exhausted";
+  const overflowRecords = overflow.map((call) => skippedToolCallRecord(call, overflowReason));
   const notes: string[] = [];
   if (overflow.length > 0) {
-    current = appendToolRecords(
-      current,
-      overflow.map((call) => skippedToolCallRecord(call, "tool call budget exhausted")),
-    );
-    current = addTruncationReason(current, TRUNCATION_TOOL_BUDGET);
+    current = addTruncationReason(appendToolRecords(current, overflowRecords), TRUNCATION_TOOL_BUDGET);
     notes.push(`${overflow.length} tool call(s) skipped: budget exhausted`);
   }
-  return { state: current, messages: appended, notes, recall: true };
+  return {
+    state: current,
+    messages: [...appended, ...toolResponseMessages(response.toolCalls, [...executedRecords, ...overflowRecords])],
+    notes,
+    recall: true,
+  };
+}
+
+/**
+ * 工具调用整体跳过（未启用 / 预算耗尽）：不执行，但每个 tool_call_id 仍回一条
+ * SKIPPED 应答消息。协议纪律：assistant tool_calls 消息后必须紧跟覆盖全部 id 的
+ * tool 应答，否则下一次请求被 DeepSeek 线上校验拒绝（HTTP 400 insufficient tool
+ * messages）——fake client 不校验消息结构，此纪律必须由 harness 自守。
+ */
+function skippedToolCycle(
+  state: LoopState,
+  messagesWithAssistant: readonly LlmMessage[],
+  calls: readonly ToolCall[],
+  reason: string,
+  outcome: { readonly note: string; readonly truncationReason?: string },
+): ToolCycleResult {
+  const records = calls.map((call) => skippedToolCallRecord(call, reason));
+  let next = appendToolRecords(state, records);
+  if (outcome.truncationReason !== undefined) {
+    next = addTruncationReason(next, outcome.truncationReason);
+  }
+  return {
+    state: next,
+    messages: [...messagesWithAssistant, ...toolResponseMessages(calls, records)],
+    notes: [outcome.note],
+    recall: false,
+  };
+}
+
+/** 由调用与审计记录构造 tool 应答消息（顺序与 toolCalls 一致，内容即 resultSummary） */
+function toolResponseMessages(
+  calls: readonly ToolCall[],
+  records: readonly ToolCallRecord[],
+): readonly LlmMessage[] {
+  return calls.map((call, index) => {
+    const record = records[index];
+    if (record === undefined) {
+      throw new Error(`internal error: missing audit record for tool call ${JSON.stringify(call.id)}`);
+    }
+    return { role: "tool", content: record.resultSummary, toolCallId: call.id };
+  });
 }
 
 async function executeToolCall(executor: ToolExecutor, call: ToolCall): Promise<ToolCallRecord> {

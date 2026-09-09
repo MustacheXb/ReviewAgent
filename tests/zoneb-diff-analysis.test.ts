@@ -79,6 +79,52 @@ describe("analyzeDiff (Diff layer of the deterministic prefetch pipeline)", () =
     expect(analysis.files[0]?.hunks[0]).toEqual({ oldStart: 5, oldCount: 1, newStart: 5, newCount: 1 });
   });
 
+  it("parses bare ---/+++ headers without a/ b/ prefixes (Vul4J reverse-patch constructor format)", () => {
+    // 逆补丁构造器（T02）产出裸 `--- path` / `+++ path`，无 diff --git 头、无 a/ b/ 前缀
+    const diff = [
+      "--- cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java",
+      "+++ cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java",
+      "@@ -110,7 +110,7 @@ protected final String constructValidationUrl(final String ticket, final String",
+      " context",
+      "+        urlParameters.put(\"service\", encodeUrl(serviceUrl));",
+      "-        urlParameters.put(\"service\", serviceUrl);",
+      "--- cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java",
+      "+++ cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java",
+      "@@ -1,2 +1,2 @@",
+      " context",
+      "-old",
+      "+new",
+    ].join("\n");
+
+    const analysis = analyzeDiff(diff);
+    expect(analysis.files.map((file) => file.file)).toEqual([
+      "cas-client-core/src/main/java/org/jasig/cas/client/validation/AbstractUrlBasedTicketValidator.java",
+      "cas-client-core/src/main/java/org/jasig/cas/client/validation/Cas20ServiceTicketValidator.java",
+    ]);
+    expect(analysis.files[0]?.hunks[0]).toEqual({ oldStart: 110, oldCount: 7, newStart: 110, newCount: 7 });
+    expect(analysis.files[1]?.hunks[0]).toEqual({ oldStart: 1, oldCount: 2, newStart: 1, newCount: 2 });
+  });
+
+  it("bare headers: deleted file keeps the a-side path, new file takes the b-side path", () => {
+    const deleted = [
+      "--- src/Old.java",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-public class Old {",
+      "-}",
+    ].join("\n");
+    expect(analyzeDiff(deleted).files.map((file) => file.file)).toEqual(["src/Old.java"]);
+
+    const added = [
+      "--- /dev/null",
+      "+++ src/New.java",
+      "@@ -0,0 +1,2 @@",
+      "+public class New {",
+      "+}",
+    ].join("\n");
+    expect(analyzeDiff(added).files.map((file) => file.file)).toEqual(["src/New.java"]);
+  });
+
   it("fails fast on a diff without parsable file headers (no silent empty result)", () => {
     expect(() => analyzeDiff("just some text\nwith no diff headers\n")).toThrow(
       /no parsable file headers/,

@@ -16,6 +16,7 @@ import {
   type ValueFlagParser,
   type FlagApplyResult,
 } from "../shared/cli-args.js";
+import { loadEnvLocalFile, type EnvLocalLoadResult } from "../shared/env-local.js";
 import { renderDashboardMarkdown } from "./dashboard.js";
 import { loadExperimentCases } from "./datasets.js";
 import { checkExperimentEnv, envErrorMessage } from "./env.js";
@@ -289,14 +290,30 @@ export interface CliRunDeps {
   readonly createLlmClient: () => DeepSeekClient;
   readonly createJudgeClient: () => JudgeClient;
   readonly log: (line: string) => void;
+  /** 启动期装载 .env.local（注入 process.env）；缺省读仓库根 .env.local 并打印键名摘要 */
+  readonly loadEnvLocal: () => EnvLocalLoadResult;
 }
 
 export function defaultCliRunDeps(): CliRunDeps {
+  const log = (line: string): void => console.log(line);
   return {
     env: process.env,
     createLlmClient: () => new DeepSeekClient(),
     createJudgeClient: () => new GptJudgeClient(),
-    log: (line) => console.log(line),
+    log,
+    loadEnvLocal: () => {
+      const result = loadEnvLocalFile(path.resolve(".env.local"), process.env);
+      if (result.exists) {
+        // 只报键名与行号（key 纪律：值绝不回显）；skipped = 空值或环境已有非空值
+        const parts = [
+          result.loadedKeys.length > 0 ? `injected ${result.loadedKeys.join(", ")}` : "nothing to inject",
+          ...(result.skippedKeys.length > 0 ? [`skipped ${result.skippedKeys.join(", ")} (empty value or already set)`] : []),
+          ...(result.malformedLines.length > 0 ? [`malformed ${result.malformedLines.join(", ")}`] : []),
+        ];
+        log(`env: .env.local found — ${parts.join("; ")}`);
+      }
+      return result;
+    },
   };
 }
 
@@ -318,6 +335,14 @@ export async function runExperimentCli(
     plan = cliOptionsToPlan(options);
   } catch (error) {
     resolved.log(`invalid experiment plan: ${errorMessage(error)}`);
+    return 2;
+  }
+  // .env.local 装载（本机注入面，文件缺失 no-op）——必须在环境校验前，
+  // 让 checkExperimentEnv 看到注入的 key（resolved.env 与装载目标同为 process.env）
+  try {
+    resolved.loadEnvLocal();
+  } catch (error) {
+    resolved.log(`failed to load .env.local: ${errorMessage(error)}`);
     return 2;
   }
   const envCheck = checkExperimentEnv(

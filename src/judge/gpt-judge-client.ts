@@ -39,6 +39,8 @@ import {
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 export const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
+/** 接入点覆盖环境变量（中转/代理端点；显式 baseUrl 选项优先于它） */
+export const OPENAI_URL_ENV_VAR = "OPENAI_URL";
 export const DEFAULT_GPT_JUDGE_TIMEOUT_MS = 300_000;
 export const DEFAULT_GPT_JUDGE_MAX_RETRIES = 3;
 export const DEFAULT_GPT_JUDGE_RETRY_BASE_DELAY_MS = 1_000;
@@ -58,7 +60,7 @@ const KERNEL_ERROR_FACTORIES: HttpKernelErrorFactories = {
 export interface GptJudgeClientOptions extends GptRequestMapperOptions {
   /** API key；缺省读环境变量 OPENAI_API_KEY（启动即校验，缺失 fail fast） */
   readonly apiKey?: string;
-  /** API base URL；缺省 https://api.openai.com/v1（测试可注入本地地址） */
+  /** API base URL；显式选项 > OPENAI_URL 环境变量 > 缺省 https://api.openai.com/v1（中转/代理端点用；测试可注入本地地址） */
   readonly baseUrl?: string;
   /** 单次请求超时（毫秒）；缺省 300_000（推理型 judge 长思考给足） */
   readonly timeoutMs?: number;
@@ -85,7 +87,7 @@ export class GptJudgeClient implements JudgeClient {
     this.kernel = new OpenAiHttpKernel({
       serviceLabel: SERVICE_LABEL,
       apiKey: resolveApiKey(options.apiKey, OPENAI_API_KEY_ENV_VAR, SERVICE_LABEL, clientError),
-      endpointUrl: resolveEndpointUrl(options.baseUrl, OPENAI_API_BASE_URL, clientError),
+      endpointUrl: resolveEndpointUrl(options.baseUrl, OPENAI_API_BASE_URL, clientError, OPENAI_URL_ENV_VAR),
       timeoutMs: positiveIntOption(options.timeoutMs, DEFAULT_GPT_JUDGE_TIMEOUT_MS, "timeoutMs", clientError),
       fetchFn: options.fetchFn ?? fetch,
       errors: KERNEL_ERROR_FACTORIES,
