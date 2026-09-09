@@ -4,7 +4,9 @@
 
 ---
 
-# 1. 文档目的
+# 1. 概述与目标
+
+## 文档目的
 
 本文用于指导 **Review Agent V0.1 PoC** 的直接开发，实现一个基于 DeepSeek Harness（以下简称 DSH）的专用代码检视 Agent。
 
@@ -14,32 +16,31 @@ V0.1 不追求企业级完整能力，而聚焦验证一个核心技术命题：
 
 ---
 
-# 2. V0.1 核心目标
+## V0.1 核心目标
 
-## 2.1 必须回答的四个问题
+### 必须回答的四个问题
 
-### Q1：Diff-only 是否真的会漏掉深度问题？
+#### Q1：Diff-only 是否真的会漏掉深度问题？
 
 例如：
 
 - Caller / Callee；
-    
+
 - 跨模块依赖；
-    
+
 - 生命周期；
-    
+
 - 状态传播；
-    
+
 - 事务；
-    
+
 - 并发；
-    
+
 - 资源管理。
-    
 
 ---
 
-### Q2：增加多少 Context 才足够？
+#### Q2：增加多少 Context 才足够？
 
 寻找：
 
@@ -51,7 +52,7 @@ V0.1 不追求企业级完整能力，而聚焦验证一个核心技术命题：
 
 ---
 
-### Q3：Minimal Context 是否可以达到 Full Context 的接近效果？
+#### Q3：Minimal Context 是否可以达到 Full Context 的接近效果？
 
 目标：
 
@@ -63,7 +64,7 @@ Full Context Review Quality
 
 ---
 
-### Q4：能否通过 Cache-Stable Context 进一步降低实际成本？
+#### Q4：能否通过 Cache-Stable Context 进一步降低实际成本？
 
 目标：
 
@@ -76,7 +77,7 @@ Review Quality 不下降
 
 ---
 
-# 3. V0.1 不解决的问题
+## V0.1 不解决的问题
 
 V0.1 明确暂不做：
 
@@ -100,9 +101,11 @@ Web UI
 
 ---
 
-# 4. V0.1 总体设计原则
+# 2. 设计原则与总体架构
 
-## 原则 1：Diff-first，不是 Diff-only
+## V0.1 总体设计原则
+
+### 原则 1：Diff-first，不是 Diff-only
 
 Diff 是 Review 的入口。
 
@@ -119,7 +122,7 @@ State
 
 ---
 
-## 原则 2：Minimal Sufficient Context
+### 原则 2：Minimal Sufficient Context
 
 不是：
 
@@ -135,7 +138,7 @@ State
 
 ---
 
-## 原则 3：Evidence-driven
+### 原则 3：Evidence-driven
 
 任何 Finding 都必须能够回答：
 
@@ -147,7 +150,7 @@ State
 
 ---
 
-## 原则 4：Bounded Agent Loop
+### 原则 4：Bounded Agent Loop
 
 Agent 必须受到：
 
@@ -162,7 +165,7 @@ Token Budget
 
 ---
 
-## 原则 5：Cache-stable
+### 原则 5：Cache-stable
 
 模型请求上下文尽可能保持：
 
@@ -176,13 +179,13 @@ Append-only Dynamic Context
 
 ---
 
-## 原则 6：DSH Core 不修改
+### 原则 6：DSH Core 不修改
 
 DSH 当前明确采用插件化架构，Agent、Agent Loop、Tools、Session、System Prompt 等均属于可替换扩展边界，因此 Review Agent 原则上通过 Plugin / Profile / Adapter 实现，而不修改 DSH Core。
 
 ---
 
-# 5. 技术架构总览
+## 技术架构总览
 
 ```text
                          Git / MR
@@ -277,11 +280,11 @@ DSH 的官方架构明确将 `ctx.sessions`、`ctx.systemPrompt`、`ctx.tools`�
 
 ---
 
-# 6. 运行时架构
+## 运行时架构
 
 V0.1 建议定义：
 
-## Review Runtime
+### Review Runtime
 
 ```text
 review-runtime
@@ -298,7 +301,7 @@ review-runtime
 
 ---
 
-# 7. DSH 中的挂载方式
+## DSH 中的挂载方式
 
 建议采用：
 
@@ -327,7 +330,7 @@ DSH 当前支持通过 Profile / Bundle / patch 进行运行时组合，并明�
 
 ---
 
-# 8. Plugin 划分
+## Plugin 划分
 
 V0.1 建议控制在 6 个核心 Plugin：
 
@@ -342,28 +345,29 @@ V0.1 建议控制在 6 个核心 Plugin：
 
 ---
 
-# 9. Plugin 1：review-runtime
+# 3. Review Runtime 与 Context 引擎
 
-## 职责
+## Plugin 1：review-runtime
+
+### 职责
 
 负责：
 
 - Review Agent；
-    
+
 - Review Loop；
-    
+
 - Risk Policy；
-    
+
 - Budget Policy；
-    
+
 - Review State；
-    
+
 - Agent Lifecycle。
-    
 
 ---
 
-## 核心接口
+### 核心接口
 
 以下以“目标 API / 伪 TypeScript”定义，实际实现以 DSH 当前发布的类型签名为准。
 
@@ -381,7 +385,7 @@ export interface ReviewAgent {
 
 ---
 
-## ReviewRequest
+### ReviewRequest
 
 ```ts
 export interface ReviewRequest {
@@ -401,7 +405,7 @@ export interface ReviewRequest {
 
 ---
 
-## ReviewBudget
+### ReviewBudget
 
 ```ts
 export interface ReviewBudget {
@@ -428,9 +432,9 @@ maxOutputTokens = 2000
 
 ---
 
-# 10. Plugin 2：review-context
+## Plugin 2：review-context
 
-## 职责
+### 职责
 
 负责：
 
@@ -446,7 +450,7 @@ Context Ledger
 
 ---
 
-## Context Service
+### Context Service
 
 ```ts
 export interface ReviewContextService {
@@ -467,7 +471,7 @@ export interface ReviewContextService {
 
 ---
 
-# 11. Diff 数据结构
+## Diff 数据结构
 
 ```ts
 interface DiffContext {
@@ -485,7 +489,7 @@ interface DiffContext {
 
 ---
 
-# 12. Symbol 数据结构
+## Symbol 数据结构
 
 ```ts
 interface SymbolContext {
@@ -505,7 +509,7 @@ interface SymbolContext {
 
 ---
 
-# 13. Context Ledger
+## Context Ledger
 
 ```ts
 interface ContextLedger {
@@ -542,7 +546,7 @@ Already Loaded
 
 ---
 
-# 14. Context Decision
+## Context Decision
 
 这是 Review Agent 的核心智能模块。
 
@@ -572,7 +576,7 @@ Evidence Requirement
 
 ---
 
-# 15. Evidence Request
+## Evidence Request
 
 统一定义：
 
@@ -605,11 +609,13 @@ type EvidenceRequest =
 
 ---
 
-# 16. Plugin 3：review-cache
+# 4. Cache 引擎
+
+## Plugin 3：review-cache
 
 这是 V0.1 的一级核心模块。
 
-## 职责
+### 职责
 
 负责：
 
@@ -626,7 +632,7 @@ Cache Break Detection
 
 ---
 
-# 17. CacheContextComposer
+## CacheContextComposer
 
 核心接口：
 
@@ -649,7 +655,7 @@ export interface CacheContextComposer {
 
 ---
 
-# 18. Cache 三层结构
+## Cache 三层结构
 
 ```text
 ┌──────────────────────────────┐
@@ -683,7 +689,7 @@ export interface CacheContextComposer {
 
 ---
 
-# 19. Stable Prefix 设计要求
+## Stable Prefix 设计要求
 
 必须保证：
 
@@ -708,7 +714,7 @@ DSH 当前 System Prompt 子系统负责 Prompt Section 与 Tool Schema 组装�
 
 ---
 
-# 20. Tool Schema Optimization
+## Tool Schema Optimization
 
 V0.1 只开放：
 
@@ -730,7 +736,7 @@ DSH 的 Tool Runtime 支持 scoped registration 和 restriction，因此可以�
 
 ---
 
-# 21. Append-only Context
+## Append-only Context
 
 每一轮只追加：
 
@@ -758,7 +764,7 @@ Stable Prefix + Diff + Symbol + Caller + Evidence
 
 ---
 
-# 22. Cache Break Detection
+## Cache Break Detection
 
 每次检测到 Prefix / Cache 异常变化，记录：
 
@@ -781,7 +787,9 @@ interface CacheBreakEvent {
 
 ---
 
-# 23. Plugin 4：review-knowledge
+# 5. Knowledge / Evidence / Metrics 插件
+
+## Plugin 4：review-knowledge
 
 V0.1 不要求大型知识库。
 
@@ -793,7 +801,7 @@ rules/*.yaml
 
 ---
 
-## Rule
+### Rule
 
 ```ts
 interface ReviewRule {
@@ -815,7 +823,7 @@ interface ReviewRule {
 
 ---
 
-# 24. Plugin 5：review-evidence
+## Plugin 5：review-evidence
 
 职责：
 
@@ -833,7 +841,7 @@ Accept / Reject
 
 ---
 
-## Finding
+### Finding
 
 ```ts
 interface ReviewFinding {
@@ -861,7 +869,7 @@ interface ReviewFinding {
 
 ---
 
-# 25. Evidence Checker
+## Evidence Checker
 
 核心：
 
@@ -903,7 +911,7 @@ rejected → 丢弃
 
 ---
 
-# 26. Plugin 6：review-metrics
+## Plugin 6：review-metrics
 
 记录：
 
@@ -925,7 +933,9 @@ Rejected Finding
 
 ---
 
-# 27. DSH Session 集成
+# 6. DSH 集成与 Agent Loop
+
+## DSH Session 集成
 
 DSH 当前 Session 是 append-only typed `SessionEvent` log，并从该日志派生模型可见消息；文档明确要求新的 model-visible input 应通过可重建的 Session Event 表达。
 
@@ -945,7 +955,7 @@ review/completed
 
 ---
 
-# 28. Review Event 数据模型
+## Review Event 数据模型
 
 ```ts
 interface ReviewEventMap {
@@ -996,7 +1006,7 @@ DSH 当前 `SessionEventMap` 本身支持通过 declaration merging 扩展事件
 
 ---
 
-# 29. Agent Loop
+## Agent Loop
 
 这是 V0.1 最关键的执行逻辑。
 
@@ -1046,7 +1056,7 @@ START
 
 ---
 
-# 30. Agent Loop 关键原则
+## Agent Loop 关键原则
 
 每次 Loop 必须满足：
 
@@ -1075,13 +1085,13 @@ Hypothesis Update
 
 ---
 
-# 31. DSH Agent Hook 的利用方式
+## DSH Agent Hook 的利用方式
 
 DSH 当前提供 `agent/pre-step` waterfall，可以在每个 step 进入模型之前决定或重写本次进入的消息；`agent/request` 则可以替换本次模型调用配置。
 
 建议：
 
-### `agent/pre-step`
+#### agent/pre-step
 
 负责：
 
@@ -1093,7 +1103,7 @@ Budget Check
 
 ---
 
-### `agent/request`
+#### agent/request
 
 负责：
 
@@ -1105,7 +1115,7 @@ Reasoning Effort
 
 ---
 
-# 32. 推荐 Agent Loop 与 DSH 的关系
+## 推荐 Agent Loop 与 DSH 的关系
 
 不要：
 
@@ -1137,7 +1147,7 @@ agent/turn-stopping
 
 ---
 
-# 33. 一次 Review 时序图
+## 一次 Review 时序图
 
 ```text
 User
@@ -1209,7 +1219,7 @@ Metrics / Session
 
 ---
 
-# 34. 更完整的多轮时序
+## 更完整的多轮时序
 
 ```text
 Agent       Context       Cache        DSH        LLM
@@ -1241,7 +1251,9 @@ Agent       Context       Cache        DSH        LLM
 
 ---
 
-# 35. V0.1 Context Budget
+# 7. Budget、成本、CLI 与代码目录
+
+## V0.1 Context Budget
 
 建议：
 
@@ -1264,7 +1276,7 @@ Target                    17K
 
 ---
 
-# 36. V0.1 Agent Budget
+## V0.1 Agent Budget
 
 ```text
 maxRounds       = 5
@@ -1285,7 +1297,7 @@ Evidence 不足则放弃 Finding
 
 ---
 
-# 37. Cache 目标
+## Cache 目标
 
 第一阶段不把：
 
@@ -1306,7 +1318,7 @@ Stretch Goal ≥ 90%
 
 ---
 
-# 38. Cache 指标
+## Cache 指标
 
 ```text
 cache_hit_rate
@@ -1320,7 +1332,7 @@ cache_break_reason
 
 ---
 
-# 39. Cost 指标
+## Cost 指标
 
 建议：
 
@@ -1338,7 +1350,7 @@ Latency
 
 建立：
 
-### Cache-adjusted Review Cost
+#### Cache-adjusted Review Cost
 
 ```text
 CARC =
@@ -1351,7 +1363,7 @@ Tool Cost
 
 ---
 
-# 40. CLI 设计
+## CLI 设计
 
 V0.1 提供：
 
@@ -1361,7 +1373,7 @@ review-agent review
 
 ---
 
-## 参数
+### 参数
 
 ```bash
 review-agent review \
@@ -1383,7 +1395,7 @@ review-agent review \
 
 ---
 
-# 41. CLI 输出
+## CLI 输出
 
 ```text
 Review Agent V0.1
@@ -1423,7 +1435,7 @@ Cache:
 
 ---
 
-# 42. 代码目录
+## 代码目录
 
 建议不要把 Review Agent 直接塞进 DSH 源码目录。
 
@@ -1525,7 +1537,7 @@ review-agent/
 
 ---
 
-# 43. 为什么不直接修改 DSH 源码目录
+## 为什么不直接修改 DSH 源码目录
 
 DSH 当前明确建议：
 
@@ -1557,7 +1569,9 @@ Fork
 
 ---
 
-# 44. POC 开发任务总览
+# 8. POC 开发任务与实验设计
+
+## POC 开发任务总览
 
 整个 POC 拆成：
 
@@ -1577,9 +1591,9 @@ P0-11 Optimization
 
 ---
 
-# 45. P0-01：DSH Runtime Spike
+## P0-01：DSH Runtime Spike
 
-## 目标
+### 目标
 
 证明：
 
@@ -1587,7 +1601,7 @@ P0-11 Optimization
 
 ---
 
-## 工作项
+### 工作项
 
 ```text
 1. 固定 DSH Commit
@@ -1600,7 +1614,7 @@ P0-11 Optimization
 
 ---
 
-## 验收
+### 验收
 
 ```bash
 review-agent review
@@ -1616,9 +1630,9 @@ review-agent review
 
 ---
 
-# 46. P0-02：Diff Engine
+## P0-02：Diff Engine
 
-## 工作项
+### 工作项
 
 实现：
 
@@ -1632,7 +1646,7 @@ changed symbols
 
 ---
 
-## 验收
+### 验收
 
 输出：
 
@@ -1647,9 +1661,9 @@ changed symbols
 
 ---
 
-# 47. P0-03：Repo / Symbol Map
+## P0-03：Repo / Symbol Map
 
-## 第一阶段
+### 第一阶段
 
 支持：
 
@@ -1666,7 +1680,7 @@ Tree-sitter
 
 ---
 
-## 输出
+### 输出
 
 ```text
 FooService.java
@@ -1678,7 +1692,7 @@ FooService.java
 
 ---
 
-# 48. P0-04：Context Retrieval
+## P0-04：Context Retrieval
 
 实现：
 
@@ -1691,7 +1705,7 @@ get_call_chain
 
 ---
 
-## 验收
+### 验收
 
 对于：
 
@@ -1710,7 +1724,7 @@ Call Chain
 
 ---
 
-# 49. P0-05：Review Loop
+## P0-05：Review Loop
 
 实现：
 
@@ -1739,7 +1753,7 @@ Finding
 
 ---
 
-# 50. P0-06：Cache Engine
+## P0-06：Cache Engine
 
 实现：
 
@@ -1754,7 +1768,7 @@ Cache Metrics
 
 ---
 
-## 验收
+### 验收
 
 重复读取：
 
@@ -1772,7 +1786,7 @@ AlreadyLoaded(ctx#001)
 
 ---
 
-# 51. P0-07：Evidence Engine
+## P0-07：Evidence Engine
 
 实现：
 
@@ -1788,7 +1802,7 @@ Finding
 
 ---
 
-## 验收
+### 验收
 
 不能证明的 Finding：
 
@@ -1798,7 +1812,7 @@ Finding
 
 ---
 
-# 52. P0-08：Metrics
+## P0-08：Metrics
 
 每次 Review 记录：
 
@@ -1822,7 +1836,7 @@ cache_hit_rate
 
 ---
 
-# 53. P0-09：ReviewBench
+## P0-09：ReviewBench
 
 第一版：
 
@@ -1839,7 +1853,7 @@ cache_hit_rate
 
 ---
 
-# 54. Ground Truth
+## Ground Truth
 
 每个 Case：
 
@@ -1860,7 +1874,7 @@ cache_hit_rate
 
 ---
 
-# 55. P0-10：Claude Code Baseline
+## P0-10：Claude Code Baseline
 
 对于同一 Case：
 
@@ -1882,7 +1896,7 @@ Review Objective
 
 ---
 
-# 56. P0-11：Optimization
+## P0-11：Optimization
 
 根据 Benchmark：
 
@@ -1902,7 +1916,7 @@ Model
 
 ---
 
-# 57. 第一阶段实验设计
+## 第一阶段实验设计
 
 必须至少跑：
 
@@ -1916,7 +1930,7 @@ E Minimal + Ledger + Append-only
 
 ---
 
-# 58. 实验 A：Diff-only
+## 实验 A：Diff-only
 
 ```text
 Diff
@@ -1932,7 +1946,7 @@ Review
 
 ---
 
-# 59. 实验 B：Minimal Context
+## 实验 B：Minimal Context
 
 ```text
 Diff
@@ -1952,7 +1966,7 @@ Review
 
 ---
 
-# 60. 实验 C：Full Repo
+## 实验 C：Full Repo
 
 ```text
 Diff
@@ -1970,7 +1984,7 @@ Review
 
 ---
 
-# 61. 实验 D：Minimal + Stable Prefix
+## 实验 D：Minimal + Stable Prefix
 
 验证：
 
@@ -1978,7 +1992,7 @@ Review
 
 ---
 
-# 62. 实验 E：Minimal + Ledger
+## 实验 E：Minimal + Ledger
 
 验证：
 
@@ -1986,9 +2000,9 @@ Review
 
 ---
 
-# 63. 核心指标
+## 核心指标
 
-## Quality
+### Quality
 
 ```text
 Recall
@@ -1998,14 +2012,14 @@ False Positive Rate
 Acceptance
 ```
 
-## Context
+### Context
 
 ```text
 Context Tokens
 Deep Recall / Context Token
 ```
 
-## Agent
+### Agent
 
 ```text
 Rounds
@@ -2013,7 +2027,7 @@ Tool Calls
 Latency
 ```
 
-## Cache
+### Cache
 
 ```text
 Cache Hit Rate
@@ -2025,9 +2039,9 @@ Cache Break Count
 
 ---
 
-# 64. 核心效率指标
+## 核心效率指标
 
-## Review Intelligence Efficiency
+### Review Intelligence Efficiency
 
 ```text
 RIE =
@@ -2038,7 +2052,7 @@ Total Tokens / 1K
 
 ---
 
-## Cache Efficiency
+### Cache Efficiency
 
 ```text
 CE =
@@ -2049,7 +2063,7 @@ Total Input Tokens
 
 ---
 
-## Cache-adjusted Review Cost
+### Cache-adjusted Review Cost
 
 ```text
 CARC =
@@ -2062,9 +2076,9 @@ Tool Cost
 
 ---
 
-# 65. POC 验收标准
+## POC 验收标准
 
-## S 级
+### S 级
 
 ```text
 Recall ≥ Claude Code × 90%
@@ -2075,7 +2089,7 @@ Tool Calls ≤ Claude Code × 30%
 
 ---
 
-## A 级
+### A 级
 
 ```text
 Recall ≥ Claude Code × 80%
@@ -2084,7 +2098,7 @@ Token ≤ Claude Code × 30%
 
 ---
 
-## B 级
+### B 级
 
 ```text
 Recall ≥ Claude Code × 70%
@@ -2093,7 +2107,7 @@ Token ≤ Claude Code × 50%
 
 ---
 
-# 66. 深度问题专项指标
+## 深度问题专项指标
 
 POC 不能只看总体 Recall。
 
@@ -2117,7 +2131,7 @@ State Management
 
 ---
 
-# 67. Context Sufficiency Matrix
+## Context Sufficiency Matrix
 
 最终形成：
 
@@ -2135,9 +2149,9 @@ State Management
 
 ---
 
-# 68. POC 里最值得做的两个自动实验
+## POC 里最值得做的两个自动实验
 
-## Experiment 1：Context Ablation
+### Experiment 1：Context Ablation
 
 自动逐步减少 Context：
 
@@ -2159,7 +2173,7 @@ Diff
 
 ---
 
-## Experiment 2：Cache Ablation
+### Experiment 2：Cache Ablation
 
 逐步关闭：
 
@@ -2182,9 +2196,11 @@ Latency
 
 ---
 
-# 69. 推荐开发节奏
+# 9. 开发节奏、验收与最终交付
 
-## Stage 1：Runtime
+## 推荐开发节奏
+
+### Stage 1：Runtime
 
 ```text
 DSH
@@ -2196,7 +2212,7 @@ Basic Loop
 
 ---
 
-## Stage 2：Context
+### Stage 2：Context
 
 ```text
 Diff
@@ -2210,7 +2226,7 @@ Call Chain
 
 ---
 
-## Stage 3：Cache
+### Stage 3：Cache
 
 ```text
 Stable Prefix
@@ -2222,7 +2238,7 @@ Append-only
 
 ---
 
-## Stage 4：Evidence
+### Stage 4：Evidence
 
 ```text
 Candidate
@@ -2234,7 +2250,7 @@ Verification
 
 ---
 
-## Stage 5：Benchmark
+### Stage 5：Benchmark
 
 ```text
 100 Cases
@@ -2246,7 +2262,7 @@ Claude Code Baseline
 
 ---
 
-# 70. 开发任务依赖关系
+## 开发任务依赖关系
 
 ```text
 P0-01 DSH Runtime
@@ -2281,63 +2297,63 @@ P0-05 Review Loop   P0-06 Cache
 
 ---
 
-# 71. 推荐代码提交顺序
+## 推荐代码提交顺序
 
-### Commit 01
+#### Commit 01
 
 ```text
 chore: bootstrap review-agent workspace
 ```
 
-### Commit 02
+#### Commit 02
 
 ```text
 feat: integrate deepseek harness runtime
 ```
 
-### Commit 03
+#### Commit 03
 
 ```text
 feat: add git diff engine
 ```
 
-### Commit 04
+#### Commit 04
 
 ```text
 feat: add repo symbol map
 ```
 
-### Commit 05
+#### Commit 05
 
 ```text
 feat: add review context tools
 ```
 
-### Commit 06
+#### Commit 06
 
 ```text
 feat: add review agent loop
 ```
 
-### Commit 07
+#### Commit 07
 
 ```text
 feat: add cache-aware context ledger
 ```
 
-### Commit 08
+#### Commit 08
 
 ```text
 feat: add evidence verification
 ```
 
-### Commit 09
+#### Commit 09
 
 ```text
 feat: add review metrics
 ```
 
-### Commit 10
+#### Commit 10
 
 ```text
 feat: add review benchmark
@@ -2345,9 +2361,9 @@ feat: add review benchmark
 
 ---
 
-# 72. 第一阶段工程验收 Checklist
+## 第一阶段工程验收 Checklist
 
-## Runtime
+### Runtime
 
 ```text
 □ DSH 正常启动
@@ -2357,7 +2373,7 @@ feat: add review benchmark
 □ Tool 正常注册
 ```
 
-## Context
+### Context
 
 ```text
 □ Git Diff 正常解析
@@ -2367,7 +2383,7 @@ feat: add review benchmark
 □ Ledger 正常记录
 ```
 
-## Review
+### Review
 
 ```text
 □ Agent Loop 正常
@@ -2377,7 +2393,7 @@ feat: add review benchmark
 □ Finding 可输出
 ```
 
-## Cache
+### Cache
 
 ```text
 □ Stable Prefix Hash
@@ -2387,7 +2403,7 @@ feat: add review benchmark
 □ Cached Token Metrics
 ```
 
-## Evidence
+### Evidence
 
 ```text
 □ Candidate Finding
@@ -2396,7 +2412,7 @@ feat: add review benchmark
 □ Reject / Accept
 ```
 
-## Benchmark
+### Benchmark
 
 ```text
 □ Case Dataset
@@ -2408,7 +2424,7 @@ feat: add review benchmark
 
 ---
 
-# 73. 最终 POC 交付物
+## 最终 POC 交付物
 
 第一阶段不要超过以下 7 项：
 
@@ -2430,7 +2446,7 @@ feat: add review benchmark
 
 ---
 
-# 74. POC 最终输出报告
+## POC 最终输出报告
 
 必须给出如下结果：
 
@@ -2462,7 +2478,7 @@ feat: add review benchmark
 
 ---
 
-# 75. V0.1 成功之后的演进路径
+## V0.1 成功之后的演进路径
 
 ```text
 V0.1
@@ -2491,7 +2507,7 @@ Enterprise AI Review Engine
 
 ---
 
-# 76. V0.2：领域 Intelligence
+## V0.2：领域 Intelligence
 
 加入：
 
@@ -2515,7 +2531,7 @@ Review Intelligence
 
 ---
 
-# 77. V0.3：Verification
+## V0.3：Verification
 
 增加：
 
@@ -2541,7 +2557,7 @@ Confirmed Finding
 
 ---
 
-# 78. V0.4：Feedback
+## V0.4：Feedback
 
 记录：
 
@@ -2568,7 +2584,7 @@ Review
 
 ---
 
-# 79. 长期架构
+## 长期架构
 
 ```text
                         AI Review Engine
@@ -2593,7 +2609,7 @@ Review
 
 ---
 
-# 80. 最终技术定位
+## 最终技术定位
 
 这个项目不是：
 
@@ -2625,7 +2641,7 @@ Review
 
 ---
 
-# 81. 方案核心价值
+## 方案核心价值
 
 最终希望达到：
 
@@ -2665,7 +2681,7 @@ Evidence Verification
 
 ---
 
-# 82. V0.1 最终核心技术命题
+## V0.1 最终核心技术命题
 
 > ### **Minimal Sufficient Context + Cache-Stable Review Loop**
 > 
@@ -2673,7 +2689,7 @@ Evidence Verification
 
 ---
 
-# 83. 开发团队拿到后的第一条任务
+## 开发团队拿到后的第一条任务
 
 建议第一个开发 Issue 直接命名：
 
@@ -2728,7 +2744,7 @@ Benchmark
 
 ---
 
-# 84. 研发负责人视角的最终执行要求
+## 研发负责人视角的最终执行要求
 
 为了避免 PoC 在实施过程中重新变成“Mini Claude Code”，开发过程中增加五条硬约束：
 
@@ -2750,7 +2766,7 @@ Benchmark
 
 ---
 
-# 85. 项目最终 Definition of Done
+## 项目最终 Definition of Done
 
 当以下条件同时满足时，V0.1 才算完成：
 
@@ -2792,7 +2808,7 @@ Benchmark
 
 ---
 
-# 86. 最终建议的 PoC 优先级
+## 最终建议的 PoC 优先级
 
 ```text
 P0：必须先做

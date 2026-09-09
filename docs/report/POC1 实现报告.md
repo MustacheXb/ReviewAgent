@@ -20,11 +20,12 @@ POC1 的目标是为「低 Token、高质量代码检视 Agent」论文搭建**�
 
 ## 3. 架构决策（ADR）
 
-| ADR | 决策 | 一句话理由 |
-|---|---|---|
-| [0001](../adr/0001-poc1-runs-on-standalone-harness.md) | POC1 跑在**独立薄 harness**，零 DSH 依赖，DSH 仅作并行 spike | A–C 不需要 DSH；D/E 验证的本质是消息构造纪律而非 runtime 能力；避免把 developer preview 的架构风险传染给实验。Phase 1 迁移时 Context Engine / Ledger / 消息构造 TS 代码直接复用 |
-| [0002](../adr/0002-poc1-model-pinned-to-deepseek-api.md) | 模型锁定 DeepSeek API（deepseek-v4-flash，effort 单档） | 消除模型变量，五配置对比只剩上下文/缓存策略差异 |
-| [0003](../adr/0003-poc1-zero-build-static-code-intelligence.md) | 零构建静态代码智能（tree-sitter-java + ripgrep） | 生产约束是「只有静态源码快照」，不依赖构建与运行时 |
+| ADR                                                             | 决策                                             | 一句话理由                                                                                                                           |
+| --------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| [0001](../adr/0001-poc1-runs-on-standalone-harness.md)          | POC1 跑在**独立薄 harness**，零 DSH 依赖，DSH 仅作并行 spike | A–C 不需要 DSH；D/E 验证的本质是消息构造纪律而非 runtime 能力；避免把 developer preview 的架构风险传染给实验。Phase 1 迁移时 Context Engine / Ledger / 消息构造 TS 代码直接复用 |
+| [0002](../adr/0002-poc1-model-pinned-to-deepseek-api.md)        | 模型锁定 DeepSeek API（deepseek-v4-flash，effort 单档） | 消除模型变量，五配置对比只剩上下文/缓存策略差异                                                                                                        |
+| [0003](../adr/0003-poc1-zero-build-static-code-intelligence.md) | 零构建静态代码智能（tree-sitter-java + ripgrep）          | 生产约束是「只有静态源码快照」，不依赖构建与运行时                                                                                                       |
+|                                                                 |                                                |                                                                                                                                 |
 
 ## 4. 核心交付
 
@@ -107,16 +108,17 @@ code-review 修复轮（收尾质量门）另计：11 提交，41 文件，+2,95
 
 ## 7. 交付与验证状态
 
-| 项 | 状态 |
-|---|---|
-| 分支 | `spec/poc1-thin-harness` @ `5490e68`，已推送远端（git 传输被网络阻断，经 git database API 复刻推送，SHA 级校验一致） |
-| PR | **#15 ready for review**，body 含完整实现总结与修复轮明细 |
-| 工单 | #2–#14 全部 close（逐工单验收评论留痕）；#1（spec）随 PR 合入关闭 |
-| `pnpm typecheck` | ✅ 0 错误 |
-| `pnpm test` | ✅ 987/987 |
-| `pnpm test:coverage` | ✅ 90.7% lines（阈值 80%） |
-| `/code-review` | ✅ 10 项发现全部修复 |
-| 冒烟 e2e | ✅ DeepSeek config A + Claude Code 参照（见 §8 注记） |
+| 项                    | 状态                                                                                        |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| 分支                   | `spec/poc1-thin-harness` @ `5490e68`，已推送远端（git 传输被网络阻断，经 git database API 复刻推送，SHA 级校验一致） |
+| PR                   | **#15 ready for review**，body 含完整实现总结与修复轮明细                                               |
+| 工单                   | #2–#14 全部 close（逐工单验收评论留痕）；#1（spec）随 PR 合入关闭                                              |
+| `pnpm typecheck`     | ✅ 0 错误                                                                                    |
+| `pnpm test`          | ✅ 987/987                                                                                 |
+| `pnpm test:coverage` | ✅ 90.7% lines（阈值 80%）                                                                     |
+| `/code-review`       | ✅ 10 项发现全部修复                                                                              |
+| 冒烟 e2e               | ✅ DeepSeek config A + Claude Code 参照（见 §8 注记）                                             |
+|                      |                                                                                           |
 
 ## 8. 遗留事项与下一步
 
