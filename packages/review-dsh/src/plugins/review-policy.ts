@@ -110,6 +110,18 @@ export const PHASE_INSTRUCTIONS: Readonly<Record<ReviewPhase, string>> = {
 export const MAX_ROUNDS = 5;
 export const MAX_TOOL_CALLS = 6;
 
+/** 单 turn 等待上界缺省（毫秒）：防御性显式失败而非挂起 */
+export const DEFAULT_TURN_TIMEOUT_MS = 10_000;
+
+/** review-policy 插件配置（政策可调面；缺省全默认） */
+export interface ReviewPolicyConfig {
+  /**
+   * 单 turn 等待上界（毫秒）；缺省 10_000。真实 LLM（thinking 模式）单 turn
+   * 可达分钟级——冒烟与生产经组装转发调大；进程内 fake 回复即时，缺省即可。
+   */
+  readonly turnTimeoutMs?: number;
+}
+
 /** reviewPolicy 服务：config A 政策的唯一持有者（核内其他插件经 inject 消费） */
 export interface ReviewPolicyService {
   /** Zone A 字节（complete system prompt） */
@@ -122,6 +134,8 @@ export interface ReviewPolicyService {
   readonly maxRounds: number;
   /** Loop 硬上界：单次检视工具调用总数 */
   readonly maxToolCalls: number;
+  /** 单 turn 等待上界（毫秒） */
+  readonly turnTimeoutMs: number;
   /** 模型路由（config A：deepseek / deepseek-v4-flash / effort default） */
   readonly provider: string;
   readonly model: string;
@@ -137,10 +151,12 @@ declare module "@deepseek-ai/cordis" {
 }
 
 /** review-policy 插件胚胎：Zone A complete section + 政策服务 */
-export const reviewPolicy: Plugin.Object = {
+export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
   name: "review-policy",
   inject: ["systemPrompt"],
-  apply(ctx: Context) {
+  apply(ctx: Context, config: ReviewPolicyConfig) {
+    const turnTimeoutMs = resolveTurnTimeoutMs(config.turnTimeoutMs);
+
     const disposer = ctx.systemPrompt.section({
       name: "review-zone-a",
       order: 100,
@@ -154,6 +170,7 @@ export const reviewPolicy: Plugin.Object = {
       phaseInstruction: (phase) => PHASE_INSTRUCTIONS[phase],
       maxRounds: MAX_ROUNDS,
       maxToolCalls: MAX_TOOL_CALLS,
+      turnTimeoutMs,
       provider: "deepseek",
       model: "deepseek-v4-flash",
       effortLabel: "default",
@@ -167,3 +184,14 @@ export const reviewPolicy: Plugin.Object = {
     };
   },
 };
+
+/** turnTimeoutMs 校验：正整数，非法值组装期 fail fast */
+function resolveTurnTimeoutMs(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_TURN_TIMEOUT_MS;
+  }
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`review-policy: turnTimeoutMs must be a positive integer (got ${JSON.stringify(value)})`);
+  }
+  return value;
+}

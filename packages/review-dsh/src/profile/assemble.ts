@@ -22,8 +22,9 @@ import ToolRuntime from "@deepseek-ai/dsh-tools";
 import { reviewCache } from "../plugins/review-cache.js";
 import { reviewContext } from "../plugins/review-context.js";
 import { reviewEvidence } from "../plugins/review-evidence.js";
-import { reviewPolicy } from "../plugins/review-policy.js";
+import { reviewPolicy, type ReviewPolicyConfig } from "../plugins/review-policy.js";
 import { reviewRuntime } from "../plugins/review-runtime.js";
+import { DeepSeekLlmAdapter } from "../llm/deepseek-adapter.js";
 
 export interface AssembleReviewProfileOptions {
   /** jsonl 会话持久化根目录（调用方持有目录生命周期） */
@@ -34,6 +35,8 @@ export interface AssembleReviewProfileOptions {
   readonly providers?: readonly string[];
   /** cmdline 行的内层 argv（进程内默认空） */
   readonly args?: readonly string[];
+  /** review-policy 插件 config 转发（政策可调面，如 turnTimeoutMs；缺省全默认） */
+  readonly policy?: ReviewPolicyConfig;
 }
 
 /** 组装句柄：拆卸 + 宿主侧观测 */
@@ -78,10 +81,13 @@ export async function assembleReviewProfile(
   await ctx.plugin(AgentRegistry);
   await ctx.plugin(AgentLoop, { agents: [] });
 
-  // 核内插件胚胎
-  await ctx.plugin(reviewPolicy);
+  // 核内插件胚胎（review-policy 收政策覆盖；review-cache 挂上 DeepSeek 适配器的
+  // wire 字节日志——序列化点捕获的请求原文按调用序并入审计 requests；fake 缺席）
+  await ctx.plugin(reviewPolicy, options.policy ?? {});
   await ctx.plugin(reviewContext);
-  await ctx.plugin(reviewCache);
+  await ctx.plugin(reviewCache, {
+    ...(options.adapter instanceof DeepSeekLlmAdapter ? { wireLog: options.adapter.wireLog } : {}),
+  });
   await ctx.plugin(reviewEvidence);
   await ctx.plugin(reviewRuntime);
 

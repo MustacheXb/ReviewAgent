@@ -17,13 +17,11 @@ import type { Session, SessionEvent, TurnEndReason } from "@deepseek-ai/dsh-sess
 import { SessionId } from "@deepseek-ai/dsh-session";
 
 import { LOCKED_EFFORT_LABEL, joinTextBlocks } from "../llm/wire.js";
+import type { CapturedWireRequest } from "../llm/wire-log.js";
 import { parseCandidatesReply, parseVerificationReply } from "../loop/parse.js";
 import type { CapturedKernelRequest } from "./review-cache.js";
 import type { MrInput } from "./review-context.js";
 import type { CandidateRejection, Finding } from "./review-evidence.js";
-
-/** 单 turn 等待上界（防御性：驱动器缺陷时显式失败而非挂起） */
-const TURN_TIMEOUT_MS = 10_000;
 
 /** 本形态唯一配置：config A（零工具、Diff-only） */
 const CONFIG_ID = "A";
@@ -43,6 +41,11 @@ export interface AuditLlmRequest {
   readonly messages: readonly { readonly role: "system" | "user" | "assistant"; readonly content: string }[];
   /** POC1 契约：请求携带完整 ToolSchema 列表（config A 恒为空数组） */
   readonly tools: readonly ToolSchema[];
+  /**
+   * wire 序列化点的精确请求字节（JSON 原文，可原样重放——POC1「可重放字节」契约）。
+   * DeepSeek 适配器运行时逐条携带；fake 适配器无 wire 序列化，字段缺席。
+   */
+  readonly wireBody?: string;
 }
 
 /** embryonic POC1 审计（config A 形态；cacheBreaks/toolCallLog 随对应票扩展） */
@@ -142,7 +145,7 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
     let parseNote: string | undefined;
     for (const [index, phase] of policy.phases.entries()) {
       const turn = index + 1;
-      const turnEnded = awaitTurnEnd(ctx, session, turn);
+      const turnEnded = awaitTurnEnd(ctx, session, turn, policy.turnTimeoutMs);
       const requestsBefore = ctx.reviewCache.requests.length;
       agent.followup(phaseUserMessage(policy.phaseInstruction(phase)));
       const reason = await turnEnded;
@@ -207,7 +210,11 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
           : phaseLog,
       rejections: gate.rejections,
       cacheBreaks: [],
-      requests: ctx.reviewCache.requests.map(toAuditRequest),
+      requests: toAuditRequests(
+        ctx.reviewCache.requests,
+        ctx.reviewCache.wireRequests,
+        ctx.reviewCache.wireCaptureEnabled,
+      ),
       toolCallLog: [],
     };
 
@@ -229,13 +236,18 @@ function messageText(message: Message): string {
   return joinTextBlocks(message) ?? "";
 }
 
-/** 等待指定 turn 结束（超时显式失败；只认本 session 的 turn/end） */
-function awaitTurnEnd(ctx: Context, session: Session, turn: number): Promise<TurnEndReason> {
+/** 等待指定 turn 结束（政策时限内未结束显式失败；只认本 session 的 turn/end） */
+function awaitTurnEnd(
+  ctx: Context,
+  session: Session,
+  turn: number,
+  turnTimeoutMs: number,
+): Promise<TurnEndReason> {
   return new Promise<TurnEndReason>((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error(`review-runtime: turn ${turn} did not end within ${TURN_TIMEOUT_MS}ms`));
-    }, TURN_TIMEOUT_MS);
+      reject(new Error(`review-runtime: turn ${turn} did not end within ${turnTimeoutMs}ms`));
+    }, turnTimeoutMs);
     const off = ctx.on("session/event", (eventSession: Session, event: SessionEvent) => {
       if (eventSession !== session) return;
       if (event.type === "turn/end" && event.data.turn === turn) {
@@ -250,8 +262,30 @@ function awaitTurnEnd(ctx: Context, session: Session, turn: number): Promise<Tur
   });
 }
 
-/** kernel 侧请求快照 → POC1 审计请求形态（system 落 messages[0]，tools 全 schema） */
-function toAuditRequest(request: CapturedKernelRequest): AuditLlmRequest {
+/**
+ * kernel 侧请求快照 × wire 字节按调用序合并为审计请求序列。
+ *
+ * 硬不变量：wire 捕获挂载时两流长度必须相等——kernel 快照在 llm/stream waterfall
+ * 分发时入列，wire 字节在适配器序列化点入列，一次成功调用两处各记一条；任何
+ * 早退的分发（预中止 / 路由校验拒绝）产生「有快照无字节」，若静默按位 zip，
+ * 后续所有 wireBody 会错位归因到错误的调用。违背即 fail fast，绝不产出错位审计。
+ * wire 捕获未挂载（fake 适配器）时 wireRequests 恒空，字段合法缺席。
+ */
+export function toAuditRequests(
+  requests: readonly CapturedKernelRequest[],
+  wireRequests: readonly CapturedWireRequest[],
+  wireCaptureEnabled: boolean,
+): AuditLlmRequest[] {
+  if (wireCaptureEnabled && wireRequests.length !== requests.length) {
+    throw new Error(
+      `review-runtime: wire capture is misaligned: ${wireRequests.length} wire record(s) for ${requests.length} kernel request(s); replay bytes would be attributed to the wrong call (one dispatch exited before the serialization point)`,
+    );
+  }
+  return requests.map((request, index) => toAuditRequest(request, wireRequests[index]));
+}
+
+/** kernel 侧请求快照 → POC1 审计请求形态（system 落 messages[0]，tools 全 schema，wire 字节按调用序并入） */
+function toAuditRequest(request: CapturedKernelRequest, wire?: CapturedWireRequest): AuditLlmRequest {
   return {
     model: request.model,
     effort: request.reasoningEffort ?? LOCKED_EFFORT_LABEL,
@@ -260,6 +294,7 @@ function toAuditRequest(request: CapturedKernelRequest): AuditLlmRequest {
       ...request.messages.map((message) => ({ role: message.role, content: messageText(message) })),
     ],
     tools: request.tools,
+    ...(wire !== undefined ? { wireBody: wire.text } : {}),
   };
 }
 
