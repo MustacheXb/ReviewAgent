@@ -1,0 +1,18 @@
+# DSH 内核形态：标准 agent-loop + 策略驱动器，显式最小树
+
+Phase 1 的内核组装方式（Round 3 定）：六阶段骨架**不**通过 `ctx.agents.setFactory` 替换 DSH 的 agent-loop，而是由核内 review-runtime 插件作为**策略驱动器**（`/goal` 模式先例）代码级强制——驱动器独占阶段指令推进权（一阶段 = 一 turn，阶段内工具循环 = turn 内 steps），`MAX_ROUNDS` 由驱动器状态控制，`MAX_TOOL_CALLS` 由 `tools/execute` 包裹层强制，Evidence Gate 在 phase-6 的 turn/end 执行 join + 跨轮去重；verdict `complete=false` 时 followup 开启下一轮。profile 采用 **sdk-minimal 式显式最小树**（不继承 dsh-base）。术语见 `CONTEXT.md`「运行时边界」。
+
+## Considered Options
+
+- Loop 姿态：`setFactory` 自定义 loop / **标准 agent-loop + 策略驱动器**——被选。自定义 loop 须实现整个 `Agent` 驱动面（inbox 管理、turn/step 事件、session 维护），等于重写 dsh-agent-loop 且零生产示例；驱动器路径让骨架保持代码级强制（模型无法自行推进阶段）。`setFactory` 降级为逃生门：walking skeleton 证明硬阻塞才启用。
+- 组装基座：骑 dsh-base 再裁剪 / **显式最小树**——被选。dsh-base 携带 session-title-llm（额外 LLM 调用）、typert 三件套、user-questions、jobs、遥测等（`--dump-config` 实测）；Zone A 字节纪律要求组装进 prompt 的每一行都可知。行集：llm、session、session-projection、system-prompt、tools、agent、agent-loop、session-persistence-jsonl、cmdline + 核内插件（`session-projection` 为票 #18 勘误补记：dsh-agent-loop 硬注入 `sessionProjections`，两版同构，缺行则 agent-loop 不加载）。
+- LLM 适配器：直接用 `dsh-llm-deepseek` / **移植 POC1 客户端为 LlmAdapter**——被选。ADR-0002 锁定语义（effort default→thinking enabled + reasoning_effort high、不发 temperature/top_p、模型白名单、usage 含 cached tokens、`review.*`→`review_*` 工具名映射）是实验契约；且**审计的可重放字节只能从持有 wire 序列化的一方采集**——adapter 捕获每次请求的精确 body，POC1 审计契约原样存活。
+- A–E 参数化：插件 config 字段 / 每单元 spawn 进程 / **五 agent preset + 长驻内核进程（SDK JSON-RPC，agent-per-unit）**——被选。工具开/关是改变 Zone A 字节的组装级差异，config 字段表达不了；spawn-per-unit 在五源 × 五配置 × ≥3 重复规模下进程开销不可接受。
+- 仓库结构：每插件一包 / **单包新增 `packages/review-dsh/`**（五插件 + bundle 声明 + 薄 CLI wrapper）——被选。Cordis 单包多插件是官方形态（dsh-base 即是）；wrapper 按 Python-SDK 模式 spawn 锁定版 `dsh --profile review`。
+
+## Consequences
+
+- Zone B 注入顺序（session-start `agent.inject()` 与首条 followup 在 claim 批内的先后）文档层无明确答案：walking skeleton 首票以捕获字节断言顺序；不可控时退路为 Zone B 并入首条 followup 消息内容（字节布局仍确定）。
+- 本地 reference_project（0.1.5-alpha.1）与 npm 消费线（0.1.2-rc.1）存在文档/代码偏差，walking skeleton 负责对消费版本校验关键机制。
+- `stablePrefix` 保持纯声明字段（POC1 实测无行为读取它）；DSH 原生机制（compaction seam、`ctx.toolResultPruner`、session seed/fork、`request/header` 事件）仍按 ADR-0005 后置为独立消融票。
+- fake LLM 以 FakeLlmAdapter 形态注册在同一 `ctx.llm` seam；插件测试按 DSH 包测试先例进程内组装真实 Loader 树。

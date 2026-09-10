@@ -61,6 +61,20 @@ _Avoid_: 评论、告警、issue（泛化）
 **Risk Class**:
 变更的风险分级（Low / Medium / High），决定 C 级上下文加载深度与证据等级。
 
+### 运行时边界
+
+**核内（Review Runtime）**:
+检视会话运行时的全部行为：loop 策略、`review.*` 工具、C0–C3 上下文决策、缓存纪律、检视政策与 Evidence Gate；以 DSH 插件形态挂在 DSH 插件树。
+_Avoid_: DSH 组件（粒度混淆）、全部组件插件化（核外不入树）
+
+**策略驱动器（Review Driver）**:
+核内 review-runtime 插件中代码级强制六阶段骨架的组件：只有它能推进阶段（一阶段 = 一回合），回合边界执行 Evidence Gate 与轮次调度。
+_Avoid_: 自定义 Loop（指 setFactory 替换内核 loop，已否）、提示词纪律（骨架不是提示词约定）
+
+**核外（研究工具链）**:
+服务于实验而非检视会话的层：数据集构造、判定链、指标聚合、实验运行器、外部参照；普通库被 CLI 调用，不进 DSH 插件树。
+_Avoid_: 实验插件
+
 ### 知识
 
 **CWD**:
