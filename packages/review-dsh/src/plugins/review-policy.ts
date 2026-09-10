@@ -120,6 +120,17 @@ export interface ReviewPolicyConfig {
    * 可达分钟级——冒烟与生产经组装转发调大；进程内 fake 回复即时，缺省即可。
    */
   readonly turnTimeoutMs?: number;
+  /**
+   * 工具挂载（config C/D/E 形态开关）；缺省 false = config A 零工具（Diff-only，
+   * 请求字节与冻结 harness config A 完全一致）。启用时挂载固定 7 个 review.*
+   * 工具（POC1 工具箱 1:1 复用，见 context/review-tools.ts）。
+   */
+  readonly toolsEnabled?: boolean;
+  /**
+   * Context Ledger 功能态（config E 形态开关）；缺省 false = 惰性态（A/B/C/D
+   * 重复读取返回原文，行为与 T05/T06 一致）。仅在 toolsEnabled 时有意义。
+   */
+  readonly ledger?: boolean;
 }
 
 /** reviewPolicy 服务：config A 政策的唯一持有者（核内其他插件经 inject 消费） */
@@ -140,8 +151,10 @@ export interface ReviewPolicyService {
   readonly provider: string;
   readonly model: string;
   readonly effortLabel: string;
-  /** config A：零工具（Diff-only） */
+  /** 工具挂载开关（config A false；C/D/E true——驱动器据此走 scoped 工具注册） */
   readonly toolsEnabled: boolean;
+  /** Context Ledger 功能态开关（config E true；A/B/C/D false 惰性态） */
+  readonly ledger: boolean;
 }
 
 declare module "@deepseek-ai/cordis" {
@@ -174,7 +187,8 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
       provider: "deepseek",
       model: "deepseek-v4-flash",
       effortLabel: "default",
-      toolsEnabled: false,
+      toolsEnabled: config.toolsEnabled === true,
+      ledger: config.ledger === true,
     };
 
     const disposeService = ctx.provide("reviewPolicy", service);

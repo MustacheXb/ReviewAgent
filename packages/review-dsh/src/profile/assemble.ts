@@ -16,9 +16,10 @@ import AgentLoop from "@deepseek-ai/dsh-agent-loop";
 import SessionStore from "@deepseek-ai/dsh-session";
 import JsonlSessionPersistence from "@deepseek-ai/dsh-session-persistence-jsonl";
 import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
-import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
+import SystemPrompt, { TOOL_ORDER_REST } from "@deepseek-ai/dsh-system-prompt";
 import ToolRuntime from "@deepseek-ai/dsh-tools";
 
+import { REVIEW_TOOL_ORDER } from "../../../../src/tools/registry.js";
 import { reviewCache } from "../plugins/review-cache.js";
 import { reviewContext } from "../plugins/review-context.js";
 import { reviewEvidence } from "../plugins/review-evidence.js";
@@ -76,6 +77,9 @@ export async function assembleReviewProfile(
     // Zone A 字节纪律：complete section 即全部 prompt，无 harness 身份与运行时上下文
     includeHarnessIdentity: false,
     includeRuntimeContext: false,
+    // 工具顺序 = POC1 REVIEW_TOOL_ORDER（get_symbol 先于 get_file，非字典序）；
+    // 名单校验依赖 review-context 的 knownNames 声明（config A 零注册不 fail）
+    toolOrder: [...REVIEW_TOOL_ORDER, TOOL_ORDER_REST],
   });
   await ctx.plugin(ToolRuntime);
   await ctx.plugin(AgentRegistry);

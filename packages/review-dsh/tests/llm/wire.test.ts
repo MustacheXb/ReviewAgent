@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { GenerateOptions } from "@deepseek-ai/dsh-llm";
 import { createAssistantMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
 
+import { buildChatCompletionsBody as poc1BuildChatCompletionsBody } from "../../../../src/deepseek/request-mapper.js";
+import { toToolSchema } from "../../../../src/tools/registry.js";
+import { buildReviewReadTools } from "../../../../src/tools/toolkit.js";
 import { buildChatCompletionsBody } from "../../src/llm/wire.js";
 
 function userMessage(text: string): ReturnType<typeof createUserMessage> {
@@ -102,5 +105,36 @@ describe("buildChatCompletionsBody（ADR-0002 wire 契约）", () => {
       },
     ]);
     expect(body.tool_choice).toBe("auto");
+  });
+
+  it("#20 真实 7 工具 schema：wire tools 字节与 POC1 冻结 mapper 逐字节一致（含 review_* 名映射）", () => {
+    const registered = buildReviewReadTools();
+    // POC1 侧：注册表 ToolSchema（parametersJson canonical 串）直接进冻结 mapper
+    const poc1Body = poc1BuildChatCompletionsBody({
+      model: "deepseek-v4-flash",
+      effort: "default",
+      messages: [{ role: "user", content: "q" }],
+      tools: registered.map(toToolSchema),
+    });
+    // DSH 侧：同一注册表工具的 object 形态 parameters（canonical 键序经 JSON round-trip 保持）
+    const dshBody = buildChatCompletionsBody({
+      ...baseOptions([userMessage("q")]),
+      tools: registered.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: JSON.parse(tool.parametersJson) as Record<string, unknown>,
+      })),
+    });
+
+    expect(JSON.stringify(dshBody.tools)).toBe(JSON.stringify(poc1Body.tools));
+    expect(dshBody.tools?.map((tool) => tool.function.name)).toEqual([
+      "review_get_diff",
+      "review_get_symbol",
+      "review_get_file",
+      "review_find_references",
+      "review_get_call_chain",
+      "review_search_rule",
+      "review_search_history",
+    ]);
   });
 });

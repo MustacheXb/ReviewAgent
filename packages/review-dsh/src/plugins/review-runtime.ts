@@ -12,10 +12,12 @@
 
 import type { Context, Plugin } from "@deepseek-ai/cordis";
 import { createUserMessage, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
-import type { Message, ToolSchema, UserMessage } from "@deepseek-ai/dsh-llm";
+import type { Message, ToolCallBlock, ToolResultBlock, ToolSchema, UserMessage } from "@deepseek-ai/dsh-llm";
 import type { Session, SessionEvent, TurnEndReason } from "@deepseek-ai/dsh-session";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
+import type { LedgerEntry } from "../../../../src/contracts/ledger.js";
+import { createToolBudgetGuard, toDshToolDefinitions } from "../context/review-tools.js";
 import { LOCKED_EFFORT_LABEL, joinTextBlocks } from "../llm/wire.js";
 import type { CapturedWireRequest } from "../llm/wire-log.js";
 import { parseCandidatesReply, parseVerificationReply } from "../loop/parse.js";
@@ -23,7 +25,7 @@ import type { CapturedKernelRequest } from "./review-cache.js";
 import type { MrInput } from "./review-context.js";
 import type { CandidateRejection, Finding } from "./review-evidence.js";
 
-/** 本形态唯一配置：config A（零工具、Diff-only） */
+/** 本形态唯一配置：config A（零工具、Diff-only）；工具形态（C/D/E）经政策开关挂载 */
 const CONFIG_ID = "A";
 
 /** POC1 审计 phaseLog 条目 */
@@ -34,11 +36,32 @@ export interface PhaseLogEntry {
   readonly note?: string;
 }
 
+/**
+ * POC1 LlmMessage 形态的审计消息投影：assistant 工具调用（toolCalls）与工具结果
+ * （role "tool" + toolCallId）完整留痕；工具名为内部点号名（review.* 映射只发生在
+ * DeepSeek 适配器的 wire 序列化点）。
+ */
+export type AuditMessage =
+  | { readonly role: "system" | "user"; readonly content: string }
+  | {
+      readonly role: "assistant";
+      readonly content: string;
+      readonly toolCalls?: readonly { readonly id: string; readonly name: string; readonly argumentsJson: string }[];
+    }
+  | { readonly role: "tool"; readonly content: string; readonly toolCallId: string };
+
+/** POC1 审计 ToolCallRecord（resultSummary = 模型可见的工具结果文本，含 Error: 拒绝） */
+export interface ToolCallRecord {
+  readonly name: string;
+  readonly argumentsJson: string;
+  readonly resultSummary: string;
+}
+
 /** POC1 审计 LlmRequest（结构化请求快照；messages 含 messages[0] 的 system 槽） */
 export interface AuditLlmRequest {
   readonly model: string;
   readonly effort: string;
-  readonly messages: readonly { readonly role: "system" | "user" | "assistant"; readonly content: string }[];
+  readonly messages: readonly AuditMessage[];
   /** POC1 契约：请求携带完整 ToolSchema 列表（config A 恒为空数组） */
   readonly tools: readonly ToolSchema[];
   /**
@@ -48,7 +71,7 @@ export interface AuditLlmRequest {
   readonly wireBody?: string;
 }
 
-/** embryonic POC1 审计（config A 形态；cacheBreaks/toolCallLog 随对应票扩展） */
+/** embryonic POC1 审计（config A 形态；cacheBreaks 随对应票扩展） */
 export interface ReviewAudit {
   readonly runId: string;
   readonly caseId: string;
@@ -68,7 +91,9 @@ export interface ReviewAudit {
   readonly rejections: readonly CandidateRejection[];
   readonly cacheBreaks: readonly unknown[];
   readonly requests: readonly AuditLlmRequest[];
-  readonly toolCallLog: readonly unknown[];
+  readonly toolCallLog: readonly ToolCallRecord[];
+  /** Context Ledger 登记快照（功能态 config E；惰性态与非工具配置合法缺席） */
+  readonly ledger?: readonly LedgerEntry[];
 }
 
 /** 一次检视会话的产出 */
@@ -110,11 +135,32 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
   const startedAt = new Date();
   const runId = buildRunId(startedAt, CONFIG_ID, input.caseId);
 
-  const agent = ctx.agentLoop.create(SessionId(sanitizeId(runId)), {
-    provider: policy.provider,
-    model: policy.model,
-    reasoningEffort: ReasoningEffortId(policy.effortLabel),
+  // 工具挂载（toolsEnabled）：run 私有工具箱（独立 Ledger），先于 agent 创建构建——
+  // setup 闭包经 DSH 注册面（scoped tools + guard）把它接入该 agent 的世界
+  const toolkit = policy.toolsEnabled
+    ? ctx.reviewContext.buildToolkit(input, { ledger: policy.ledger })
+    : undefined;
+
+  const handle = await ctx.agentLoop.createAgent(ctx, {
+    sessionId: SessionId(sanitizeId(runId)),
+    agentOptions: {
+      provider: policy.provider,
+      model: policy.model,
+      reasoningEffort: ReasoningEffortId(policy.effortLabel),
+    },
+    ...(toolkit !== undefined
+      ? {
+          // 发布前的组合点：scoped 工具注册（首请求即携带 7 个 schema）+ 预算守卫
+          setup: (agentCtx: Context) => {
+            for (const definition of toDshToolDefinitions(toolkit)) {
+              agentCtx.tools.register(definition);
+            }
+            agentCtx.tools.guard(createToolBudgetGuard(policy.maxToolCalls));
+          },
+        }
+      : {}),
   });
+  const agent = handle.agent;
   const session = agent.session;
 
   // 会话启动注入：MR intro（Zone C 起点材料，非指令；留待首条 followup 同批入请求）
@@ -123,6 +169,8 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
   // 回复与计量收集（kernel 侧：session 事件）
   const replies = new Map<number, string>();
   const usageTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+  const toolCallLog: ToolCallRecord[] = [];
+  const openToolCalls = new Map<string, { readonly name: string; readonly argumentsJson: string }>();
   let toolCalls = 0;
   const offEvents = ctx.on("session/event", (eventSession: Session, event: SessionEvent) => {
     if (eventSession !== session) return;
@@ -136,6 +184,20 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       }
     } else if (event.type === "tool/call") {
       toolCalls += 1;
+      openToolCalls.set(event.data.callId, {
+        name: event.data.name,
+        argumentsJson: event.data.arguments,
+      });
+    } else if (event.type === "tool/result") {
+      // ToolResultMessage 是 user 角色单块消息：callId 在 ToolResultBlock 上
+      const result = event.data.message.content[0];
+      if (result !== undefined && result.type === "tool-result") {
+        const open = openToolCalls.get(result.toolCallId);
+        if (open !== undefined) {
+          openToolCalls.delete(result.toolCallId);
+          toolCallLog.push({ ...open, resultSummary: toolResultText(result) });
+        }
+      }
     }
   });
 
@@ -215,11 +277,16 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
         ctx.reviewCache.wireRequests,
         ctx.reviewCache.wireCaptureEnabled,
       ),
-      toolCallLog: [],
+      toolCallLog,
+      // 功能态 Ledger 留痕（POC1 契约：config.ledger 且 toolkit 在场；惰性态缺席）
+      ...(toolkit !== undefined && policy.ledger ? { ledger: toolkit.ledger.snapshot() } : {}),
     };
 
     return { findings: gate.findings, phaseLog: audit.phaseLog, audit };
   } finally {
+    // 不逐 run dispose：handle.dispose 会等 loop 静默，而超时/异常路径的 turn 可能
+    // 永远不静默（适配器挂起即死锁）。当前产品形态 profile-per-run，agent 生命周期
+    // 由组装树拆卸（ctx.fiber.dispose → loop 排空全部 agent）统一收口
     offEvents();
   }
 }
@@ -231,9 +298,40 @@ function phaseUserMessage(instruction: string): UserMessage {
   });
 }
 
-/** DSH Message → 纯文本（wire 同款投影；无 text 块按空串，工具块随 config B/C 票扩展） */
+/** DSH Message → 纯文本（wire 同款投影；无 text 块按空串，工具块经投影函数分流） */
 function messageText(message: Message): string {
   return joinTextBlocks(message) ?? "";
+}
+
+/** ToolResultBlock → 模型可见结果文本（POC1 resultSummary 语义：结果原文，含 Error: 拒绝） */
+function toolResultText(result: ToolResultBlock): string {
+  return result.content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+}
+
+/** DSH Message → POC1 LlmMessage 审计形态；一条消息可投影多条（tool 结果独立成行） */
+function projectMessage(message: Message): AuditMessage[] {
+  if (message.role === "assistant") {
+    const toolCalls = message.content
+      .filter((block): block is ToolCallBlock => block.type === "tool-call")
+      .map((block) => ({ id: block.id, name: block.name, argumentsJson: block.arguments }));
+    return toolCalls.length > 0
+      ? [{ role: "assistant", content: messageText(message), toolCalls }]
+      : [{ role: "assistant", content: messageText(message) }];
+  }
+  const toolResults = message.content.filter(
+    (block): block is ToolResultBlock => block.type === "tool-result",
+  );
+  if (toolResults.length > 0) {
+    return toolResults.map((result) => ({
+      role: "tool" as const,
+      content: toolResultText(result),
+      toolCallId: result.toolCallId,
+    }));
+  }
+  return [{ role: "user", content: messageText(message) }];
 }
 
 /** 等待指定 turn 结束（政策时限内未结束显式失败；只认本 session 的 turn/end） */
@@ -284,14 +382,14 @@ export function toAuditRequests(
   return requests.map((request, index) => toAuditRequest(request, wireRequests[index]));
 }
 
-/** kernel 侧请求快照 → POC1 审计请求形态（system 落 messages[0]，tools 全 schema，wire 字节按调用序并入） */
+/** kernel 侧请求快照 → POC1 审计请求形态（system 落 messages[0]，工具调用/结果全投影，wire 字节按调用序并入） */
 function toAuditRequest(request: CapturedKernelRequest, wire?: CapturedWireRequest): AuditLlmRequest {
   return {
     model: request.model,
     effort: request.reasoningEffort ?? LOCKED_EFFORT_LABEL,
     messages: [
       ...(request.system !== undefined ? [{ role: "system" as const, content: request.system }] : []),
-      ...request.messages.map((message) => ({ role: message.role, content: messageText(message) })),
+      ...request.messages.flatMap((message) => projectMessage(message)),
     ],
     tools: request.tools,
     ...(wire !== undefined ? { wireBody: wire.text } : {}),
