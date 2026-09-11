@@ -5,44 +5,30 @@
  * src/finding/finding-schema.ts 与 src/gate/candidate-gate.ts：
  * 拦截顺序 SCHEMA_INVALID → NON_ENGLISH → NO_EVIDENCE → VERIFICATION_FAILED →
  * DUPLICATE_ID，每个候选最多一条拦截记录（首败即出），全部留痕进审计 rejections。
+ *
+ * 契约直接复用冻结 contracts（type-only import）：Finding / CandidateRejection /
+ * RejectionStage 漂移即编译期报错，不靠形状巧合。
  */
 
 import type { Context, Plugin } from "@deepseek-ai/cordis";
 
+import type { Finding } from "../../../../src/contracts/finding.js";
+import type { CandidateRejection, RejectionStage } from "../../../../src/contracts/run.js";
 import type { VerificationVerdict } from "../loop/parse.js";
 
-/** Finding 契约（spec #1 Finding JSON Schema；只有过 Evidence Gate 的候选可产出） */
-export interface Finding {
-  readonly id: string;
-  readonly severity: "P0" | "P1" | "P2" | "P3";
-  readonly category: string;
-  readonly file: string;
-  readonly line: number;
-  readonly title: string;
-  readonly description: string;
-  /** 支撑本条结论的可验证材料：具体符号、行号与代码摘录 */
-  readonly evidence: readonly string[];
-  readonly rule: string;
-  readonly confidence: number;
-}
+export type { Finding, CandidateRejection };
 
-/** Evidence Gate 阶段（每个候选按序检查，首个失败即拒绝并记录原因） */
-export const EVIDENCE_GATE_STAGES = [
+/** Evidence Gate 阶段（每个候选按序检查，首个失败即拒绝并记录原因）；阶段全集
+ * 经 RejectionStage 类型收口（冻结契约），数组字面漂移即编译期报错 */
+export const EVIDENCE_GATE_STAGES: readonly RejectionStage[] = [
   "SCHEMA_INVALID",
   "NON_ENGLISH",
   "NO_EVIDENCE",
   "VERIFICATION_FAILED",
   "DUPLICATE_ID",
-] as const;
+];
 
-export type EvidenceGateStage = (typeof EVIDENCE_GATE_STAGES)[number];
-
-/** 候选拦截记录（POC1 RunAudit.rejections 条目） */
-export interface CandidateRejection {
-  readonly candidateId: string;
-  readonly stage: EvidenceGateStage;
-  readonly reason: string;
-}
+export type EvidenceGateStage = RejectionStage;
 
 /** 校验候选是否符合 Finding Schema（形状校验；空 evidence 不在此判，属 NO_EVIDENCE） */
 export function validateFinding(candidate: unknown): readonly string[] {

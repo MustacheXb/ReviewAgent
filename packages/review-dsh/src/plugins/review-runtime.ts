@@ -2,8 +2,9 @@
  * review-runtime：核内策略驱动器插件（ADR-0006）。
  *
  * 驱动器独占阶段指令推进权：一阶段 = 一 turn（agent.followup），阶段内工具循环 =
- * turn 内 steps；MAX_ROUNDS 由驱动器状态控制；phase-6 verdict complete=false 时
- * followup 开启下一轮（多轮驱动随轮次票落地，本形态跑六阶段 × 1 轮）。
+ * turn 内 steps；MAX_ROUNDS 由驱动器状态控制（冻结硬上界）；phase-6 verdict
+ * complete=false 时 followup 开启下一轮，耗尽显式截断；Evidence Gate 在每轮
+ * 第六阶段 turn/end 边界（serial）执行 join + 跨轮去重。
  *
  * 会话启动注入（#18 落锤 + #22 生产化）：MR intro 以 agent.inject 注入（idle
  * driver 留待首条 followup 唤醒，同批进入请求）；config B 预取开启时，Zone B
@@ -24,7 +25,7 @@ import type { PrefetchLayerRecord } from "../../../../src/contracts/prefetch.js"
 import type { CacheBreakRecord } from "../../../../src/contracts/run.js";
 import type { LedgerEntry } from "../../../../src/contracts/ledger.js";
 import { classifyCacheBreaks } from "../../../../src/loop/cache-break.js";
-import { TRUNCATION_TOOL_BUDGET } from "../../../../src/loop/constants.js";
+import { MAX_ROUNDS, TRUNCATION_MAX_ROUNDS, TRUNCATION_TOOL_BUDGET } from "../../../../src/loop/constants.js";
 import { addUsage, ZERO_USAGE } from "../../../../src/loop/usage.js";
 import { createToolBudgetGuard, toDshToolDefinitions, TOOL_BUDGET_DENIED_TEXT } from "../context/review-tools.js";
 import { LOCKED_EFFORT_LABEL, joinTextBlocks } from "../llm/wire.js";
@@ -233,61 +234,88 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
   });
 
   try {
-    // 六阶段骨架 × 1 轮：一阶段 = 一 turn，驱动器独占推进
+    // 六阶段骨架 × MAX_ROUNDS（冻结硬上界，驱动器状态控制）：轮 = 一次完整
+    // 六阶段推进，一阶段 = 一 turn（followup 续号，session turn 计数器跨轮连续）
     const phaseLog: PhaseLogEntry[] = [];
-    let parseNote: string | undefined;
-    for (const [index, phase] of policy.phases.entries()) {
-      const turn = index + 1;
-      const turnEnded = awaitTurnEnd(ctx, session, turn, policy.turnTimeoutMs);
-      const requestsBefore = ctx.reviewCache.requests.length;
-      agent.followup(userTextMessage(policy.phaseInstruction(phase)));
-      const reason = await turnEnded;
-      if (reason.kind !== "completed") {
-        throw new Error(`review-runtime: turn ${turn} (${phase}) ended with reason "${reason.kind}"`);
+    // 解析 note 按 turn 落位：candidates note → Deep Reasoning 条目、verification
+    // note → Evidence Verification 条目（POC1 逐条目同位）
+    const parseNotes = new Map<number, string>();
+    let findings: readonly Finding[] = [];
+    let rejections: readonly CandidateRejection[] = [];
+    let emittedIds: ReadonlySet<string> = new Set<string>();
+    let complete = false;
+    let rounds = 0;
+    // 轮不变偏移（阶段序 → 轮内 turn 序）：阶段表固定，turn = 轮基 + 阶段偏移
+    const deepReasoningOffset = policy.phases.indexOf("Deep Reasoning") + 1;
+    const evidenceVerificationOffset = policy.phases.indexOf("Evidence Verification") + 1;
+    for (let round = 1; round <= MAX_ROUNDS; round++) {
+      rounds = round;
+      const roundBase = (round - 1) * policy.phases.length;
+      for (const [index, phase] of policy.phases.entries()) {
+        const turn = roundBase + index + 1;
+        const turnEnded = awaitTurnEnd(ctx, session, turn, policy.turnTimeoutMs);
+        const requestsBefore = ctx.reviewCache.requests.length;
+        agent.followup(userTextMessage(policy.phaseInstruction(phase)));
+        const reason = await turnEnded;
+        if (reason.kind !== "completed") {
+          throw new Error(`review-runtime: turn ${turn} (${phase}, round ${round}) ended with reason "${reason.kind}"`);
+        }
+        // turn/end 后 kick 驱动器还有一个微任务尾巴（置 idle）；等它落定再发下一条
+        // followup——否则 followup 撞上 running→idle 的窗口，wake 被吞、消息悬死
+        // inbox（0.1.2-rc.1 实测；whenIdle 是 DSH 驱动器的标准节拍）
+        await agent.whenIdle();
+        phaseLog.push({
+          round,
+          phase,
+          requestCount: ctx.reviewCache.requests.length - requestsBefore,
+        });
       }
-      // turn/end 后 kick 驱动器还有一个微任务尾巴（置 idle）；等它落定再发下一条
-      // followup——否则 followup 撞上 running→idle 的窗口，wake 被吞、消息悬死
-      // inbox（0.1.2-rc.1 实测；whenIdle 是 DSH 驱动器的标准节拍）
-      await agent.whenIdle();
-      phaseLog.push({
-        round: 1,
-        phase,
-        requestCount: ctx.reviewCache.requests.length - requestsBefore,
+
+      // 解析本轮阶段回复：候选（Deep Reasoning）× 裁决（Evidence Verification），
+      // turn 序号按轮基推导，不硬编码
+      const deepReasoningTurn = roundBase + deepReasoningOffset;
+      const evidenceVerificationTurn = roundBase + evidenceVerificationOffset;
+      const reasoning = parseCandidatesReply(replies.get(deepReasoningTurn) ?? "");
+      const verification = parseVerificationReply(replies.get(evidenceVerificationTurn) ?? "");
+      if (reasoning.note !== undefined) {
+        parseNotes.set(deepReasoningTurn, reasoning.note);
+      }
+      if (verification.note !== undefined) {
+        parseNotes.set(evidenceVerificationTurn, verification.note);
+      }
+
+      // Evidence Gate：第六阶段回合结束边界（serial）——本轮候选 × 本轮裁决 join，
+      // emittedIds 经 Gate 输出跨轮携带（已发出的 id 在后续轮重提 → DUPLICATE_ID）
+      const gate = ctx.reviewEvidence.applyGate({
+        candidates: reasoning.candidates,
+        verdicts: verification.verdicts,
+        emittedIds,
+        round,
       });
+      findings = [...findings, ...gate.findings];
+      rejections = [...rejections, ...gate.rejections];
+      emittedIds = gate.emittedIds;
+      complete = verification.complete;
+      if (complete) {
+        break;
+      }
     }
-
-    // 解析阶段回复：候选（Deep Reasoning）× 裁决（Evidence Verification），
-    // turn 序号从 policy.phases 推导，不硬编码
-    const deepReasoningTurn = policy.phases.indexOf("Deep Reasoning") + 1;
-    const evidenceVerificationTurn = policy.phases.indexOf("Evidence Verification") + 1;
-    const reasoning = parseCandidatesReply(replies.get(deepReasoningTurn) ?? "");
-    const verification = parseVerificationReply(replies.get(evidenceVerificationTurn) ?? "");
-    if (!verification.complete) {
-      throw new Error(
-        "review-runtime: multi-round driving (complete=false) lands with the rounds ticket; the walking skeleton runs exactly one round",
-      );
-    }
-    parseNote = reasoning.note ?? verification.note;
-
-    // Evidence Gate：候选 × 裁决 → findings + rejections
-    const gate = ctx.reviewEvidence.applyGate({
-      candidates: reasoning.candidates,
-      verdicts: verification.verdicts,
-      emittedIds: new Set<string>(),
-      round: 1,
-    });
 
     const finishedAt = new Date();
-    // phaseLog note 装配（POC1 同位语义）：预算拒绝记 "N tool call(s) skipped:
-    // budget exhausted" 于发生阶段条目，解析 note 落 Evidence Verification——
-    // POC1 把工具周期 note 与解析 note 以 "; " 串联，此处同构
+    // phaseLog note 装配（POC1 同位语义）。不变式：每个阶段 turn 恰好压一条
+    // phaseLog 条目（跨轮成立），故条目 index + 1 = session turn——deniedByTurn
+    // 与 parseNotes 均按 turn 记账，直接对位。预算拒绝记 "N tool call(s) skipped:
+    // budget exhausted" 于发生阶段条目，解析 note 落各自阶段条目（candidates →
+    // Deep Reasoning、verification → Evidence Verification）——POC1 把工具周期
+    // note 与解析 note 以 "; " 串联，此处同构
     const phaseLogWithNotes = phaseLog.map((entry, index) => {
       const notes: string[] = [];
       const denied = deniedByTurn.get(index + 1);
       if (denied !== undefined) {
         notes.push(`${denied} tool call(s) skipped: budget exhausted`);
       }
-      if (entry.phase === "Evidence Verification" && parseNote !== undefined) {
+      const parseNote = parseNotes.get(index + 1);
+      if (parseNote !== undefined) {
         notes.push(parseNote);
       }
       return notes.length > 0 ? { ...entry, note: notes.join("; ") } : entry;
@@ -306,19 +334,21 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       durationMs: finishedAt.getTime() - startedAt.getTime(),
-      rounds: 1,
+      rounds,
       toolCalls: toolBudget.allowedCount(),
-      // POC1 语义：truncated = 评审未完成（!complete）才置 true——本形态
-      // complete=false 直接显式失败（多轮驱动随轮次票），预算耗尽只追加
-      // truncationReason，不翻转 truncated
-      truncated: false,
-      truncationReasons: toolBudget.deniedCount() > 0 ? [TRUNCATION_TOOL_BUDGET] : [],
+      // POC1 语义：truncated = 评审未完成（MAX_ROUNDS 耗尽仍未 complete）——
+      // 预算耗尽只追加 truncationReason，不翻转 truncated
+      truncated: !complete,
+      truncationReasons: [
+        ...(toolBudget.deniedCount() > 0 ? [TRUNCATION_TOOL_BUDGET] : []),
+        ...(!complete ? [TRUNCATION_MAX_ROUNDS] : []),
+      ],
       // 冻结 addUsage 直用（reduce + ZERO_USAGE）：聚合语义单一来源——可选字段
       // 任一事件定义即在，含 0（网关显式回报 cached_tokens: 0 是有信息量的记账）
       usage: usageEvents.reduce(addUsage, ZERO_USAGE),
-      findings: gate.findings,
+      findings,
       phaseLog: phaseLogWithNotes,
-      rejections: gate.rejections,
+      rejections,
       cacheBreaks: classifyAuditCacheBreaks(auditRequests),
       requests: auditRequests,
       toolCallLog,
@@ -328,7 +358,7 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       ...(prefetch !== undefined ? { prefetch: prefetch.records } : {}),
     };
 
-    return { findings: gate.findings, phaseLog: audit.phaseLog, audit };
+    return { findings, phaseLog: audit.phaseLog, audit };
   } finally {
     // 不逐 run dispose：handle.dispose 会等 loop 静默，而超时/异常路径的 turn 可能
     // 永远不静默（适配器挂起即死锁）。当前产品形态 profile-per-run，agent 生命周期

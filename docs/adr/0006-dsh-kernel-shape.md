@@ -34,3 +34,10 @@ Phase 1 的内核组装方式（Round 3 定）：六阶段骨架**不**通过 `c
 
 - **迁移审计的落位形态**：对照面 = DSH 审计请求（POC1 形态投影）× 冻结薄 harness 自有装配函数——Zone A 字节（`buildSystemMessage`；工具面 `buildReviewToolkit().tools`，canonical parameters 字节经 round-trip）+ 同配置路由（`DEFAULT_MODEL` / `DEFAULT_EFFORT`；路由非 Zone A 组成部分，作同配置对照的旁证位）。`zone-a-parity.test.ts` 覆盖 config A / C / E 三形态（E 的 Ledger 不入请求字节，工具 schema 与 C 同源）；`diffZoneA` 的字段敏感性由负面对照用例自动化锁定。
 - **差异集登记契约**：允许类别两类（`ASSEMBLY_WRAPPING` / `TOOL_NAME_WIRE_MAPPING`），但本对照面只有组装包裹物化为键（`SYSTEM_PROMPT_BYTES[*]`），wire 映射只出现在 wire 序列化点（#19 适配器测试持有）——可登记键形态经模板字面量类型收口：工具名 / 路由 / schema 字段的漂移无键可登记，唯一出路是修实现。实际差异集当前为空；计算差异与登记差异由 `expectParity` 强制相等，出现漂移必须同变更登记（key + reason）。
+
+### 实现注记（#21 多轮驱动 + Evidence Gate 跨轮去重落地后补记，2026-09-11）
+
+- **轮次驱动的实现形态**：驱动器轮循环 `1..MAX_ROUNDS`（冻结常量直引，硬上界不可配置——「单次检视成本有界」是骨架约束），轮 = 一次完整六阶段推进；turn 序号按轮基推导（轮基 + 阶段偏移，session 计数器跨轮连续），phaseLog 条目携带实际轮号（轮循环变量）。每轮第六阶段 `turn/end` + `whenIdle` 边界（serial）执行本轮 Evidence Gate——join 用本轮候选 × 本轮裁决，`emittedIds` 经 Gate 输出跨轮携带（后续轮重提已发出的 id → `DUPLICATE_ID` 拒绝）；verdict `complete=false` → 下一轮，耗尽 → `truncated=true` + `TRUNCATION_MAX_ROUNDS`（"MAX_ROUNDS_REACHED"），与 POC1 `runReviewLoop` 语义 1:1（`truncated = !complete`；预算耗尽只追加 reason 不翻转 truncated）。
+- **契约的编译期收口**：`Finding` / `CandidateRejection` / `RejectionStage` 不再在核内重声明，type-only import 冻结 contracts（`src/contracts/finding.ts` / `run.ts`）——「直接复用现有 contracts」从形状巧合升级为编译期保证，漂移即报错。
+- **事件流可验证性的落位**：Gate 不注册新内核事件——边界行为经既有可观测面验证（turn/end 序列恰好 2 轮 × 6 turn 全 completed、round-2 首请求携带 round-1 全部历史、审计 rounds / phaseLog / rejections），测试不窥探内核内部状态。
+- **phaseLog note 落位的 POC1 对齐**：candidates 解析 note 落 Deep Reasoning 条目、verification note 落 Evidence Verification 条目（先前单轮形态把两者合并落 verification 条目——随按轮解析修正为逐条目同位）。上界截断测试用 fake 适配器的 `fallback` 步（脚本耗尽后持续供给「永不完成」回复）驱动 5 轮耗尽路径。
