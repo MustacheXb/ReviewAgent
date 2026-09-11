@@ -274,6 +274,35 @@ describe("DSH kernel host（#27）", () => {
   );
 
   it(
+    "真实 API 级 turn 预算转发：首响应延迟 11.5s（> 缺省 10s）单元不炸（#29 冒烟回归）",
+    async () => {
+      // 冒烟现场：真实网关 thinking 单 turn 30-90s+，host 组装若不转发真实级
+      // turnTimeoutMs，缺省 10s 在首个慢 turn 上炸掉单元（review-runtime:
+      // "turn 1 did not end within 10000ms"）。延迟只加首响应控慢测试成本。
+      const stub = await startStubLlmServer(configAResponses(), undefined, {
+        firstResponseDelayMs: 11_500,
+      });
+      const auditDir = await makeAuditDir("dsh-host-slow-turn-");
+      const driver = createDshKernelDriver({ env: stubEnv(stub.url, "sk-slow-turn-sentinel") });
+      try {
+        const result = await driver.runUnit({
+          configId: "A",
+          caseId: "slow-first-turn",
+          issueDescription: "",
+          diff: SAMPLE_MR_CASE.diff,
+          repoPath: SAMPLE_MR_CASE.repoPath,
+          auditDir,
+        });
+        expect(result.findings.map((finding) => finding.id)).toEqual(["F001"]);
+      } finally {
+        await driver.close();
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "凭据缺失：无 DEEPSEEK_API_KEY → runUnit 拒绝并指引 key 名，进程正常关闭",
     async () => {
       const env: NodeJS.ProcessEnv = { ...process.env };

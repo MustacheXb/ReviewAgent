@@ -60,50 +60,62 @@ async function runOnce(
   return { zoneSnapshots, audit: result.audit };
 }
 
+/** 双运行全仓扫描（config C）在满套件并行下可达 5s+——与 cli-smoke/kernel-host
+ *  同款显式超时，防默认 5s testTimeout 在负载下掐死（#29 满套件复现 5046ms 超时） */
+const TEST_TIMEOUT_MS = 30_000;
+
 describe("spike：Zone A 字节稳定（同单元两次运行）", () => {
-  it("两次独立装配运行：Zone A 前缀与请求消息序列逐字节相等", async () => {
-    const first = await runOnce();
-    const second = await runOnce();
+  it(
+    "两次独立装配运行：Zone A 前缀与请求消息序列逐字节相等",
+    async () => {
+      const first = await runOnce();
+      const second = await runOnce();
 
-    // 每次运行内部：6 个请求的 Zone A 前缀全同，且等于冻结 harness 的 SYSTEM_PROMPT
-    expect(first.zoneSnapshots).toHaveLength(6);
-    expect(second.zoneSnapshots).toHaveLength(6);
-    expect(first.zoneSnapshots.every((zone) => zone === SYSTEM_PROMPT)).toBe(true);
-    expect(second.zoneSnapshots.every((zone) => zone === SYSTEM_PROMPT)).toBe(true);
+      // 每次运行内部：6 个请求的 Zone A 前缀全同，且等于冻结 harness 的 SYSTEM_PROMPT
+      expect(first.zoneSnapshots).toHaveLength(6);
+      expect(second.zoneSnapshots).toHaveLength(6);
+      expect(first.zoneSnapshots.every((zone) => zone === SYSTEM_PROMPT)).toBe(true);
+      expect(second.zoneSnapshots.every((zone) => zone === SYSTEM_PROMPT)).toBe(true);
 
-    // 两次运行之间：Zone A 前缀逐字节相等
-    expect(second.zoneSnapshots).toEqual(first.zoneSnapshots);
+      // 两次运行之间：Zone A 前缀逐字节相等
+      expect(second.zoneSnapshots).toEqual(first.zoneSnapshots);
 
-    // 两次运行之间：全部 6 个请求的消息序列（POC1 序列化形态）逐字节相等
-    const projection = (requests: readonly AuditLlmRequest[]): readonly string[] =>
-      requests.map((request) =>
-        JSON.stringify(request.messages.map((message) => ({ role: message.role, content: message.content }))),
+      // 两次运行之间：全部 6 个请求的消息序列（POC1 序列化形态）逐字节相等
+      const projection = (requests: readonly AuditLlmRequest[]): readonly string[] =>
+        requests.map((request) =>
+          JSON.stringify(request.messages.map((message) => ({ role: message.role, content: message.content }))),
+        );
+      expect(projection(second.audit.requests)).toEqual(projection(first.audit.requests));
+
+      // 无变更重跑零 Cache Break（#22 AC3：append-only 会话 + 稳定前缀 → 无归因）
+      expect(first.audit.cacheBreaks).toEqual([]);
+      expect(second.audit.cacheBreaks).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "config C（工具挂载）：两次独立运行全部请求（含 7 工具 schema）逐字节相等",
+    async () => {
+      const first = await runOnce(REVIEW_PRESETS.C, CONFIG_C_INPUT);
+      const second = await runOnce(REVIEW_PRESETS.C, CONFIG_C_INPUT);
+
+      expect(first.audit.requests).toHaveLength(6);
+      // 每请求携带 7 个工具 schema（Zone A 工具面的字节稳定）
+      for (const request of first.audit.requests) {
+        expect(request.tools).toHaveLength(7);
+      }
+
+      // 两次运行之间：完整请求对象（model + effort + messages + tools）的
+      // 规范序列化逐字节相等
+      expect(second.audit.requests.map((request) => JSON.stringify(request))).toEqual(
+        first.audit.requests.map((request) => JSON.stringify(request)),
       );
-    expect(projection(second.audit.requests)).toEqual(projection(first.audit.requests));
 
-    // 无变更重跑零 Cache Break（#22 AC3：append-only 会话 + 稳定前缀 → 无归因）
-    expect(first.audit.cacheBreaks).toEqual([]);
-    expect(second.audit.cacheBreaks).toEqual([]);
-  });
-
-  it("config C（工具挂载）：两次独立运行全部请求（含 7 工具 schema）逐字节相等", async () => {
-    const first = await runOnce(REVIEW_PRESETS.C, CONFIG_C_INPUT);
-    const second = await runOnce(REVIEW_PRESETS.C, CONFIG_C_INPUT);
-
-    expect(first.audit.requests).toHaveLength(6);
-    // 每请求携带 7 个工具 schema（Zone A 工具面的字节稳定）
-    for (const request of first.audit.requests) {
-      expect(request.tools).toHaveLength(7);
-    }
-
-    // 两次运行之间：完整请求对象（model + effort + messages + tools）的
-    // 规范序列化逐字节相等
-    expect(second.audit.requests.map((request) => JSON.stringify(request))).toEqual(
-      first.audit.requests.map((request) => JSON.stringify(request)),
-    );
-
-    // 无变更重跑零 Cache Break（#22 AC3；工具面字节亦稳定）
-    expect(first.audit.cacheBreaks).toEqual([]);
-    expect(second.audit.cacheBreaks).toEqual([]);
-  });
+      // 无变更重跑零 Cache Break（#22 AC3；工具面字节亦稳定）
+      expect(first.audit.cacheBreaks).toEqual([]);
+      expect(second.audit.cacheBreaks).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

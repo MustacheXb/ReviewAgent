@@ -2,7 +2,9 @@ import { LlmAdapter, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_TURN_TIMEOUT_MS } from "../../src/plugins/review-policy.js";
+import { DEFAULT_TURN_TIMEOUT_MS, REAL_LLM_TURN_TIMEOUT_MS } from "../../src/plugins/review-policy.js";
+import { DEFAULT_DEEPSEEK_TIMEOUT_MS } from "../../src/llm/deepseek-adapter.js";
+import { realApiReviewPolicy } from "../../src/profile/assemble.js";
 import type { MrInput } from "../../src/plugins/review-context.js";
 import { REVIEW_PRESETS } from "../../src/presets/review-presets.js";
 import { mount, mountAdapter } from "../helpers/mount-profile.js";
@@ -92,6 +94,25 @@ describe("turnTimeoutMs 政策化（policy 服务 + runtime 等待上界 + 组�
 
   it("组合校验 fail fast：ledger=true 而 toolsEnabled 缺省 → 组装期拒绝（不静默空转）", async () => {
     await expect(mount([], { policy: { ledger: true } })).rejects.toThrow(/ledger requires toolsEnabled/);
+  });
+
+  it("真实 API 级上界不变式：不早于适配器单请求超时（护栏不得先于延迟权威绑定）", () => {
+    // 900s 上界须容下一整次适配器超时重试周期（单请求 600s）——若有人调小
+    // REAL_LLM_TURN_TIMEOUT_MS 或调大 DEFAULT_DEEPSEEK_TIMEOUT_MS，先在这里红
+    expect(REAL_LLM_TURN_TIMEOUT_MS).toBeGreaterThan(DEFAULT_DEEPSEEK_TIMEOUT_MS);
+  });
+
+  it("生产组装政策面：realApiReviewPolicy（host/CLI 共用）preset 语义 + 真实级 turn 预算直达服务", async () => {
+    const { ctx } = await mount([], { policy: realApiReviewPolicy("D") });
+
+    // preset 语义不被 turnTimeoutMs 覆盖冲掉（spread 后仍逐字段直达）
+    expect(ctx.reviewPolicy.toolsEnabled).toBe(true);
+    expect(ctx.reviewPolicy.stablePrefix).toBe(true);
+    expect(ctx.reviewPolicy.ledger).toBe(false);
+    expect(ctx.reviewPolicy.fullRepo).toBe(false);
+    expect(ctx.reviewPolicy.prefetch).toBe(false);
+    // 真实 API 级 turn 预算（缺省 10s 只对进程内 fake 成立）
+    expect(ctx.reviewPolicy.turnTimeoutMs).toBe(REAL_LLM_TURN_TIMEOUT_MS);
   });
 });
 

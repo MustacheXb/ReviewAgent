@@ -20,12 +20,23 @@ import SystemPrompt, { TOOL_ORDER_REST } from "@deepseek-ai/dsh-system-prompt";
 import ToolRuntime from "@deepseek-ai/dsh-tools";
 
 import { REVIEW_TOOL_ORDER } from "../../../../src/tools/registry.js";
+import type { ConfigId } from "../../../../src/contracts/config.js";
 import { reviewCache } from "../plugins/review-cache.js";
 import { reviewContext } from "../plugins/review-context.js";
 import { reviewEvidence } from "../plugins/review-evidence.js";
-import { reviewPolicy, type ReviewPolicyConfig } from "../plugins/review-policy.js";
+import { reviewPolicy, REAL_LLM_TURN_TIMEOUT_MS, type ReviewPolicyConfig } from "../plugins/review-policy.js";
 import { reviewRuntime } from "../plugins/review-runtime.js";
 import { DeepSeekLlmAdapter } from "../llm/deepseek-adapter.js";
+import { REVIEW_PRESETS } from "../presets/review-presets.js";
+
+/**
+ * 生产/冒烟组装的政策面：preset 语义 + 真实 API 级 turn 预算（kernel-host 与
+ * CLI wrapper 共用——两处都承载真实适配器，thinking 单 turn 分钟级，缺省 10s
+ * 只对进程内 fake 成立；#29 冒烟回归）。
+ */
+export function realApiReviewPolicy(configId: ConfigId): ReviewPolicyConfig {
+  return { ...REVIEW_PRESETS[configId], turnTimeoutMs: REAL_LLM_TURN_TIMEOUT_MS };
+}
 
 export interface AssembleReviewProfileOptions {
   /** jsonl 会话持久化根目录（调用方持有目录生命周期） */

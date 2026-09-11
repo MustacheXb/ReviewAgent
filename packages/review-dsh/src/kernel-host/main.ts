@@ -32,7 +32,8 @@ import type { ConfigId } from "../../../../src/contracts/config.js";
 import { toAuditFileContent, toPoc1RunResult } from "../audit/audit-export.js";
 import { DeepSeekLlmAdapter } from "../llm/deepseek-adapter.js";
 import { REVIEW_PRESETS } from "../presets/review-presets.js";
-import { assembleReviewProfile } from "../profile/assemble.js";
+import { assembleReviewProfile, realApiReviewPolicy } from "../profile/assemble.js";
+import { exitGracefully } from "../process/graceful-exit.js";
 
 /** review/run 请求参数（进程边界契约；字段校验 fail fast） */
 interface ReviewRunParams {
@@ -92,7 +93,7 @@ async function handleReviewRun(params: Record<string, unknown>): Promise<unknown
     await assembleReviewProfile(ctx, {
       sessionRoot,
       adapter,
-      policy: REVIEW_PRESETS[request.configId],
+      policy: realApiReviewPolicy(request.configId),
     });
     const result = await ctx.reviewRuntime.run({
       caseId: request.caseId,
@@ -117,9 +118,10 @@ transport.onRequest(async (method, params) => {
     return handleReviewRun(params);
   }
   if (method === "shutdown") {
-    // 响应帧由 transport 在 handler 返回后写出；微任务写帧完成后 flush 再退
+    // 响应帧由 transport 在 handler 返回后写出；微任务写帧完成后优雅退出
+    // （停读 stdin 等循环排干——立即 exit 与在飞线程池写竞争会 fail-fast）
     setTimeout(() => {
-      void transport.flush().finally(() => process.exit(0));
+      void transport.flush().finally(() => exitGracefully(0, { destroyStdin: true }));
     }, 0);
     return {};
   }
@@ -130,7 +132,7 @@ transport.start();
 
 // EOF / 信号退出（客户端 close 阶梯的兜底路径；进程退出码恒 0）
 process.stdin.on("end", () => {
-  void transport.flush().finally(() => process.exit(0));
+  void transport.flush().finally(() => exitGracefully(0, { destroyStdin: true }));
 });
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
+process.on("SIGTERM", () => exitGracefully(0, { destroyStdin: true }));
+process.on("SIGINT", () => exitGracefully(0, { destroyStdin: true }));

@@ -16,7 +16,21 @@ export interface StubLlmServer {
   close(): Promise<void>;
 }
 
-export function startStubLlmServer(responses: string[], fallback?: string): Promise<StubLlmServer> {
+export interface StubLlmServerOptions {
+  /**
+   * 首个响应前的延迟（毫秒）：模拟真实 LLM 延迟（thinking 单 turn 分钟级）
+   * 超过被测缺省 turn 超时的场景——驱动「真实 API 级 turn 预算转发」的
+   * 回归断言（延迟只加在首响应，控制慢测试成本）。
+   */
+  readonly firstResponseDelayMs?: number;
+}
+
+export function startStubLlmServer(
+  responses: string[],
+  fallback?: string,
+  options: StubLlmServerOptions = {},
+): Promise<StubLlmServer> {
+  const firstResponseDelayMs = options.firstResponseDelayMs ?? 0;
   let next = 0;
   const server = createServer((request, response) => {
     if (request.method !== "POST" || !request.url?.endsWith("/chat/completions")) {
@@ -25,14 +39,22 @@ export function startStubLlmServer(responses: string[], fallback?: string): Prom
       return;
     }
     const body = next < responses.length ? responses[next] : fallback;
+    const index = next;
     next += 1;
     if (body === undefined) {
       response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "script exhausted" }));
       return;
     }
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(body);
+    const send = (): void => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(body);
+    };
+    if (index === 0 && firstResponseDelayMs > 0) {
+      setTimeout(send, firstResponseDelayMs);
+      return;
+    }
+    send();
   });
   return new Promise((resolvePromise) => {
     server.listen(0, "127.0.0.1", () => {

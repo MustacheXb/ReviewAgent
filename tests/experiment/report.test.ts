@@ -76,6 +76,10 @@ describe("buildExperimentReport（集成：指标 / 判定 / 阴性对照 / 消�
   let report: ExperimentReport;
   let judgeCallCount: number;
 
+  // 夹具 = 完整实验（2 case × {A,C} × 3 rep，verifier on）+ 报告装配，满套件
+  // 并行下可超默认 hookTimeout 10s——显式放宽（#29 满套件复现 Hook timed out）
+  const FIXTURE_HOOK_TIMEOUT_MS = 60_000;
+
   beforeAll(async () => {
     const cases = [experimentMainCase("rep-main-1"), experimentCleanCase("rep-clean-1")];
     const experimentRoot = path.join(workDir, "integration");
@@ -88,7 +92,7 @@ describe("buildExperimentReport（集成：指标 / 判定 / 阴性对照 / 消�
     );
     report = await buildExperimentReport(outcome, { judgeClient: judgeClientRef }, { experimentRoot });
     judgeCallCount = judgeClientRef.callCount;
-  });
+  }, FIXTURE_HOOK_TIMEOUT_MS);
 
   it("主集/clean 分箱与基础计数", () => {
     expect(report.caseCount).toBe(1); // 主集

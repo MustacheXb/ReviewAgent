@@ -115,6 +115,16 @@ export const MAX_TOOL_CALLS = 6;
 /** 单 turn 等待上界缺省（毫秒）：防御性显式失败而非挂起 */
 export const DEFAULT_TURN_TIMEOUT_MS = 10_000;
 
+/**
+ * 真实 LLM 的单 turn 等待上界（毫秒）：生产/冒烟组装转发用（kernel-host 与
+ * CLI wrapper）。缺省 10s 只对进程内 fake（即时回复）成立；真实网关 thinking
+ * 单 turn 30-90s+，一轮还含工具执行与适配器内重试（单次请求超时 600s）。取
+ * 900s：远超观测延迟、容一整次适配器超时重试周期，同时把「真挂死」单元的
+ * 止损压在 15 分钟内（防御性显式失败而非无限等待——POC1 无此护栏，本值
+ * 严格更优）。
+ */
+export const REAL_LLM_TURN_TIMEOUT_MS = 900_000;
+
 /** review-policy 插件配置（政策可调面；缺省全默认） */
 export interface ReviewPolicyConfig {
   /**

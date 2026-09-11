@@ -23,8 +23,8 @@ import { Context } from "@deepseek-ai/cordis";
 import { writeAuditFile } from "../../../../src/audit/audit-writer.js";
 import { toAuditFileContent } from "../audit/audit-export.js";
 import { DeepSeekLlmAdapter } from "../llm/deepseek-adapter.js";
-import { REVIEW_PRESETS } from "../presets/review-presets.js";
-import { assembleReviewProfile } from "../profile/assemble.js";
+import { assembleReviewProfile, realApiReviewPolicy } from "../profile/assemble.js";
+import { exitGracefully } from "../process/graceful-exit.js";
 import { parseReviewArgs, USAGE_TEXT, type ReviewCliArgs } from "./args.js";
 import { renderReviewOutcome } from "./render.js";
 
@@ -48,7 +48,7 @@ async function runReviewCommand(args: ReviewCliArgs): Promise<number> {
     const handle = await assembleReviewProfile(ctx, {
       sessionRoot,
       adapter,
-      policy: REVIEW_PRESETS[args.config],
+      policy: realApiReviewPolicy(args.config),
     });
     const result = await ctx.reviewRuntime.run({
       caseId: args.caseId,
@@ -81,14 +81,14 @@ async function runReviewCommand(args: ReviewCliArgs): Promise<number> {
 function main(): void {
   const parsed = parseReviewArgs(process.argv.slice(2));
   if (!parsed.ok) {
-    process.stderr.write(`review-agent: ${parsed.message}\n${USAGE_TEXT}\n`, () => process.exit(1));
+    process.stderr.write(`review-agent: ${parsed.message}\n${USAGE_TEXT}\n`, () => exitGracefully(1));
     return;
   }
   runReviewCommand(parsed.args)
-    .then((code) => process.exit(code))
+    .then((code) => exitGracefully(code))
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`review-agent: ${message}\n`, () => process.exit(1));
+      process.stderr.write(`review-agent: ${message}\n`, () => exitGracefully(1));
     });
 }
 

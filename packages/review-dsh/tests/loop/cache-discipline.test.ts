@@ -53,61 +53,74 @@ function configBScript(): readonly FakeLlmScriptStep[] {
   return PHASE_REPLIES.map((content) => ({ kind: "reply" as const, content }));
 }
 
+/** 冻结管线 oracle 直跑 + config B 全链路（真实仓库扫描）在满套件并行下可达
+ *  5s+——与 cli-smoke/kernel-host 同款显式超时，防默认 5s testTimeout 在负载
+ *  下掐死（#29 满套件复现 5295ms 超时） */
+const TEST_TIMEOUT_MS = 30_000;
+
 describe("config B 注入布局与记账（prefetch 政策开关）", () => {
-  it("请求 1 = [Zone A, Zone B, MR intro, Symbol, Reference, Call chain, Phase 1]，Zone B/三层 = 冻结管线字节", async () => {
-    const oracle = await buildPrefetchContext({
-      repoPath: SAMPLE_MR_CASE.repoPath,
-      diff: SAMPLE_MR_CASE.diff,
-      budgets: DEFAULT_PREFETCH_BUDGETS,
-    });
-    const { ctx } = await mount(configBScript(), { policy: { prefetch: true } });
+  it(
+    "请求 1 = [Zone A, Zone B, MR intro, Symbol, Reference, Call chain, Phase 1]，Zone B/三层 = 冻结管线字节",
+    async () => {
+      const oracle = await buildPrefetchContext({
+        repoPath: SAMPLE_MR_CASE.repoPath,
+        diff: SAMPLE_MR_CASE.diff,
+        budgets: DEFAULT_PREFETCH_BUDGETS,
+      });
+      const { ctx } = await mount(configBScript(), { policy: { prefetch: true } });
 
-    const result = await ctx.reviewRuntime.run(INPUT);
-    const audit = result.audit;
+      const result = await ctx.reviewRuntime.run(INPUT);
+      const audit = result.audit;
 
-    // —— 请求 1 布局（#18 落锤注入序的生产化：多连 inject 按调用序，Zone B 在
-    // system 之后、MR intro 之前，三层随后，首条 followup 收尾）
-    const messages = audit.requests[0]?.messages;
-    if (messages === undefined) throw new Error("request 1 was not captured");
-    expect(messages).toHaveLength(7);
-    expect(messages[0]).toEqual({ role: "system", content: SYSTEM_PROMPT });
-    expect(messages[1]).toEqual({ role: "user", content: oracle.zoneBMessage.content });
-    expect(messages[2]).toEqual({ role: "user", content: buildMrIntroText(INPUT) });
-    expect(messages[3]).toEqual({ role: "user", content: oracle.layerMessages[0]?.content });
-    expect(messages[4]).toEqual({ role: "user", content: oracle.layerMessages[1]?.content });
-    expect(messages[5]).toEqual({ role: "user", content: oracle.layerMessages[2]?.content });
-    expect(messages[6]).toEqual({ role: "user", content: PHASE_INSTRUCTIONS["Change Understanding"] });
+      // —— 请求 1 布局（#18 落锤注入序的生产化：多连 inject 按调用序，Zone B 在
+      // system 之后、MR intro 之前，三层随后，首条 followup 收尾）
+      const messages = audit.requests[0]?.messages;
+      if (messages === undefined) throw new Error("request 1 was not captured");
+      expect(messages).toHaveLength(7);
+      expect(messages[0]).toEqual({ role: "system", content: SYSTEM_PROMPT });
+      expect(messages[1]).toEqual({ role: "user", content: oracle.zoneBMessage.content });
+      expect(messages[2]).toEqual({ role: "user", content: buildMrIntroText(INPUT) });
+      expect(messages[3]).toEqual({ role: "user", content: oracle.layerMessages[0]?.content });
+      expect(messages[4]).toEqual({ role: "user", content: oracle.layerMessages[1]?.content });
+      expect(messages[5]).toEqual({ role: "user", content: oracle.layerMessages[2]?.content });
+      expect(messages[6]).toEqual({ role: "user", content: PHASE_INSTRUCTIONS["Change Understanding"] });
 
-    // —— 注入记账：4 条 PrefetchLayerRecord（POC1 RunAudit.prefetch 契约）；
-    // configId 如实标 B；config B 零工具
-    expect(audit.prefetch).toEqual(oracle.records);
-    expect(audit.configId).toBe("B");
-    for (const request of audit.requests) {
-      expect(request.tools).toEqual([]);
-    }
+      // —— 注入记账：4 条 PrefetchLayerRecord（POC1 RunAudit.prefetch 契约）；
+      // configId 如实标 B；config B 零工具
+      expect(audit.prefetch).toEqual(oracle.records);
+      expect(audit.configId).toBe("B");
+      for (const request of audit.requests) {
+        expect(request.tools).toEqual([]);
+      }
 
-    // —— append-only 会话：请求 2 = 请求 1 全前缀 + assistant 回复 + Phase 2 指令
-    expect(audit.requests[1]?.messages.slice(0, 7)).toEqual(messages);
-    expect(audit.requests[1]?.messages[7]).toEqual({ role: "assistant", content: PHASE_REPLIES[0] });
-    expect(audit.requests[1]?.messages[8]).toEqual({
-      role: "user",
-      content: PHASE_INSTRUCTIONS["Risk Classification"],
-    });
-  });
+      // —— append-only 会话：请求 2 = 请求 1 全前缀 + assistant 回复 + Phase 2 指令
+      expect(audit.requests[1]?.messages.slice(0, 7)).toEqual(messages);
+      expect(audit.requests[1]?.messages[7]).toEqual({ role: "assistant", content: PHASE_REPLIES[0] });
+      expect(audit.requests[1]?.messages[8]).toEqual({
+        role: "user",
+        content: PHASE_INSTRUCTIONS["Risk Classification"],
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  it("无变更重跑零 Cache Break：两次独立运行 cacheBreaks 均 []，全部请求逐字节相等", async () => {
-    const first = await runConfigB();
-    const second = await runConfigB();
+  it(
+    "无变更重跑零 Cache Break：两次独立运行 cacheBreaks 均 []，全部请求逐字节相等",
+    async () => {
+      const first = await runConfigB();
+      const second = await runConfigB();
 
-    expect(first.requests).toHaveLength(6);
-    expect(first.cacheBreaks).toEqual([]);
-    expect(second.cacheBreaks).toEqual([]);
+      expect(first.requests).toHaveLength(6);
+      expect(first.cacheBreaks).toEqual([]);
+      expect(second.cacheBreaks).toEqual([]);
 
-    // 两次运行之间：全部请求的规范序列化逐字节相等（Zone A/B 稳定 + 前缀纪律）
-    expect(second.requests.map((request) => JSON.stringify(request))).toEqual(
-      first.requests.map((request) => JSON.stringify(request)),
-    );
-  });
+      // 两次运行之间：全部请求的规范序列化逐字节相等（Zone A/B 稳定 + 前缀纪律）
+      expect(second.requests.map((request) => JSON.stringify(request))).toEqual(
+        first.requests.map((request) => JSON.stringify(request)),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
 });
 
 describe("usage 记账（事件流 → audit.usage，POC1 addUsage 语义）", () => {

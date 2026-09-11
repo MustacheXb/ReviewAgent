@@ -15,7 +15,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { JsonRpcLineTransport } from "@deepseek-ai/dsh-sdk-protocol";
@@ -49,10 +50,43 @@ const SHUTDOWN_TIMEOUT_MS = 5_000;
 const EOF_GRACE_MS = 6_000;
 const KILL_GRACE_MS = 3_000;
 
-/** host bin 的缺省位置（仓库根相对；镜像结构下编译产物同深——tests 与 .tmp-gen 双态成立） */
+/** host bin 相对标记（repo 根下的既定位置） */
+const HOST_BIN_RELATIVE_PATH = join("packages", "review-dsh", "bin", "review-kernel-host.js");
+
+/** 上溯层数上界（源树两级 / 编译树三级；给嵌套部署形态留余量） */
+const HOST_BIN_ANCESTRY_LIMIT = 6;
+
+/**
+ * 自给定目录逐级上溯定位 host bin（repo 根标记探测）。
+ * 源树（src/experiment/）与编译树（.tmp-gen/src/experiment/——`pnpm experiment`
+ * 产物镜像 repo 根相对结构）对本模块的深度不同：固定层级假设在编译树里解析到
+ * 不存在的路径，host 子进程秒死 MODULE_NOT_FOUND、单元以「JSON-RPC input
+ * closed」失败（#29 冒烟现场）。按标记上溯对两种形态统一成立；找不到即
+ * fail fast 并列出探测过的路径。
+ */
+export function resolveHostBinPath(fromDir: string): string {
+  const tried: string[] = [];
+  let dir = fromDir;
+  for (let depth = 0; depth < HOST_BIN_ANCESTRY_LIMIT; depth += 1) {
+    const candidate = join(dir, HOST_BIN_RELATIVE_PATH);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+    tried.push(candidate);
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  throw new Error(
+    `dsh-kernel: review-kernel-host bin not found (searched ${HOST_BIN_ANCESTRY_LIMIT} ancestors of ${fromDir} for ${HOST_BIN_RELATIVE_PATH}):\n${tried.join("\n")}`,
+  );
+}
+
+/** host bin 的缺省位置（本模块目录起按 repo 根标记上溯） */
 function defaultHostBinPath(): string {
-  const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-  return join(repoRoot, "packages", "review-dsh", "bin", "review-kernel-host.js");
+  return resolveHostBinPath(dirname(fileURLToPath(import.meta.url)));
 }
 
 export function createDshKernelDriver(options: DshKernelDriverOptions = {}): DshKernelDriver {
@@ -70,6 +104,10 @@ export function createDshKernelDriver(options: DshKernelDriverOptions = {}): Dsh
   }
   const transport = new JsonRpcLineTransport(stdout, stdin);
   transport.start();
+  // host 已死时，close 阶梯的 shutdown 写入打到断管以 socket 'error' 事件冒出
+  // （EPIPE 不在 transport.request 的拒绝面内，未处理会炸掉 runner 本体）——
+  // 对已死进程的拆解是预期路径，吞掉写侧错误；逻辑失败已由 pending 拒绝面回报
+  stdin.on("error", () => {});
   const stderrTail: string[] = [];
   child.stderr?.on("data", (chunk: Buffer) => {
     stderrTail.push(chunk.toString("utf8"));
