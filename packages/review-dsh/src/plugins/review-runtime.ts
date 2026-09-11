@@ -497,8 +497,10 @@ function toAuditRequest(request: CapturedKernelRequest, wire?: CapturedWireReque
 }
 
 /** 审计请求 → POC1 LlmRequest 形态（tools 的 parameters 对象经 JSON 序列化还原
- * parametersJson——round-trip 字节 = 注册表 canonical，#20 已锁定该等价） */
-function toPoc1Request(request: AuditLlmRequest): LlmRequest {
+ * parametersJson——round-trip 字节 = 注册表 canonical，#20 已锁定该等价）。
+ * 导出适配器（audit/audit-export.ts）复用同一投影——审计、Cache Break 分类
+ * 与导出三处消费同一形态，无第二份转换逻辑。 */
+export function toPoc1Request(request: AuditLlmRequest): LlmRequest {
   return {
     model: request.model,
     effort: request.effort,

@@ -47,3 +47,9 @@ Phase 1 的内核组装方式（Round 3 定）：六阶段骨架**不**通过 `c
 - **矩阵真源与收口点**：A–E 配置表的真源 = 冻结 `CONFIGS`（spec #1）；`REVIEW_PRESETS` 注册表逐字段对照它测试锁定，`deriveConfigId` 逐字段遍历它回环 configId。收口点在 review-policy 组装期（pairwise 互斥规则保留原消息，矩阵检查兜住其余组合：裸工具、无工具全仓、无工具前缀、C/D 杂交）——`deriveConfigId` 在 review-runtime 的审计侧只做推导不再自带分支逻辑（#22 的最小诚实化实现退役）。
 - **config C 的全仓注入形态**：`buildFullRepoInjection` 冻结复用（80k 预算不可覆盖），注入位次 = MR intro 之后（POC1 `buildInitialMessages` 布局）；RepoContext 经 toolkit `options.repo` 共享（一次加载，注入字节与 `get_file` 读取同源——POC1 run-review 同构）。`RunAudit.fullRepo` 记账字段随票补齐。
 - **stablePrefix 的诚实标注**：D/E 的 `stablePrefix` 是纯声明开关（服务面与审计 configId 可标注，行为零读取）——#22 注记预告的「D 随其开关票补位」落位；DSH 原生前缀机制仍按 ADR-0005 后置。
+
+### 实现注记（#24 审计导出适配器落地后补记，2026-09-11）
+
+- **导出零漂移的形态**：`AuditFileContent` / `RunResult` 的组装 1:1 经冻结件（`buildAuditFileContent`；`toPoc1RunResult` 只重排 DSH 审计字段，不新造语义）；请求投影复用 review-runtime 的 `toPoc1Request`（单一来源，#22 注记预告的 parametersJson 桥接随之收敛到该函数）。DSH 侧唯一增量 = 请求级 `wireBody` 扩展（真实适配器序列化点原文），POC1 读取端按结构化字段消费、扩展被忽略——「核外工具链零改动」从形状巧合升级为类型即契约（DSH 导出可直接装填 POC1 `AuditFileContent`）。
+- **wire 反解的命名约定**：wire.ts 的正映射 `toWireToolName`（点号→下划线）是不可逆折叠；反解按内核工具名约定（单点号命名空间 + snake_case 后缀，如 `review.get_diff`）只还原**首个**下划线。约定被破坏（多级点号名）时往返不等，由 `replayAuditRequest` 的 wire↔结构化逐字段对照 fail fast 兜底——重放的「重建」半边（从 wire 字节独立重建）与「校验」半边（强制等价）互为锚点。
+- **phaseLog 阶段名与 configId 的收窄**：DSH `PhaseLogEntry.phase` 为 string，导出时收窄为 POC1 `ReviewPhase` 六名之一（未知名 fail fast）；configId 收窄为 A–E（`"claude-code"` 核外参照标签出现在内核审计即装配事故）——内核矩阵收口（#25）在导出边界再守一道。
