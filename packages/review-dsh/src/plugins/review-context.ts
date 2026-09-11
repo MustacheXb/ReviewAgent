@@ -1,10 +1,11 @@
 /**
- * review-context：核内上下文插件——MR 输入 → 对话消息 + 工具挂载（Zone C 起点 / Zone B 挂载点）。
+ * review-context：核内上下文插件——MR 输入 → 对话消息 + 工具挂载 + 预取注入材料
+ * （Zone C 起点 / Zone B 挂载点）。
  *
  * MR intro 模板 1:1 移植自冻结 harness src/loop/messages.ts buildInitialUserMessage：
  * caseId、issue 描述、unified diff；repoPath 不进 intro 字节（Zone A/B 稳定前缀纪律），
- * 只作工具数据源。Zone B（config B 确定性上下文注入）在本插件后续形态中挂到
- * system 之后、MR intro 之前。
+ * 只作工具与预取的数据源。Zone B（config B 确定性上下文注入）经 buildPrefetch
+ * 供给注入材料，运行时把它编排到 system 之后、MR intro 之前（POC1 请求 1 布局）。
  *
  * #20 工具接线：buildToolkit 把 MR 输入交给冻结 harness 的 buildReviewToolkit
  * （7 个 review.* 工具 + codeintel/zoneb 复用 + run 私有 Context Ledger），
@@ -19,6 +20,7 @@ import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
 import { REVIEW_TOOL_ORDER } from "../../../../src/tools/registry.js";
 import { buildReviewToolkit, type ReviewToolkit } from "../../../../src/tools/toolkit.js";
+import { buildPrefetchInjection, type PrefetchInjection } from "../context/prefetch-context.js";
 
 /** MR 输入（Zone C 起点的全部材料） */
 export interface MrInput {
@@ -56,6 +58,13 @@ export interface ReviewContextService {
    * repoPath 缺失时 fail fast（工具已启用但无仓库可读是装配错误，不静默）。
    */
   buildToolkit(input: MrInput, options: { readonly ledger: boolean }): ReviewToolkit;
+  /**
+   * config B 确定性预取（prefetch 政策）：MR 输入 → Zone B 消息 + 三层预取
+   * 消息 + 注入层记账（POC1 buildPrefetchContext 1:1；同仓库同 diff 字节级
+   * 相同）。注入位次由运行时编排（Zone B 在 MR intro 前、三层在其后）。
+   * repoPath 缺失时 fail fast。
+   */
+  buildPrefetch(input: MrInput): Promise<PrefetchInjection>;
 }
 
 declare module "@deepseek-ai/cordis" {
@@ -91,6 +100,7 @@ export const reviewContext: Plugin.Object = {
           ...(options.ledger ? { ledger: true } : {}),
         });
       },
+      buildPrefetch: (input) => buildPrefetchInjection(input),
     };
     const disposeService = ctx.provide("reviewContext", service);
     return () => {

@@ -86,6 +86,12 @@ system（Zone A）独立成 GenerateOptions.system 字段
 逐字节对齐冻结 harness 的 `SYSTEM_PROMPT` + `buildInitialUserMessage` + Phase 1 指令）。
 **退路（Zone B 并入首条驱动指令）不需要启用。**
 
+**#22 扩展实证（2026-09-11，多连 inject）**：config B 生产化把注入扩为五连
+`inject`（Zone B → MR intro → Symbol → Reference → Call chain）后顺序仍确定——
+多连 inject 按调用序 FIFO 入 inbox，全部先于首条 followup 进请求 1 批。字节
+断言见 `packages/review-dsh/tests/loop/cache-discipline.test.ts`（请求 1 = 七条
+消息布局，Zone B / 三层与冻结 `buildPrefetchContext` 逐字节一致）。
+
 ## 5. 唤醒窗口竞态（实测新发现）
 
 **现象**：turn/end 事件的监听者（驱动器）在同一微任务队列中先于 agent-loop 的

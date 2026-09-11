@@ -1,29 +1,38 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-import { Context } from "@deepseek-ai/cordis";
-import { describe, expect, it } from "vitest";
-
-import { SYSTEM_PROMPT } from "../../../../src/loop/messages.js";
-
-import { FakeLlmAdapter, type FakeLlmScriptStep } from "../../src/llm/fake-adapter.js";
-import { assembleReviewProfile, type ReviewProfileHandle } from "../../src/profile/assemble.js";
-import type { MrInput } from "../../src/plugins/review-context.js";
-
 /**
- * Spike（票 #18）：Zone A 字节稳定——同单元两次独立装配运行，
+ * Spike（票 #18）+ #22 扩展：Zone A 字节稳定——同单元两次独立装配运行，
  * 捕获请求前缀逐字节相等（缓存纪律票的前置断言）。
  *
  * 「前缀」= POC1 请求序列化形态：system（Zone A）+ messages 的
  * {role, content}。DSH 内部的消息 id（UUID）与 source 元数据不进
  * POC1 字节，不在比较范围。
+ *
+ * #22 扩展：config C（工具挂载）形态下，比较面升级为完整请求对象
+ * （model + effort + messages + tools schema）的规范序列化——工具
+ * schema 属 Zone A 工具面字节，同样受稳定纪律约束；且两种形态均
+ * 断言无变更重跑零 Cache Break（#22 AC3，config B 见 cache-discipline）。
  */
+
+import { describe, expect, it } from "vitest";
+
+import { SYSTEM_PROMPT } from "../../../../src/loop/messages.js";
+import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
+
+import type { FakeLlmScriptStep } from "../../src/llm/fake-adapter.js";
+import type { MrInput } from "../../src/plugins/review-context.js";
+import type { ReviewPolicyConfig } from "../../src/plugins/review-policy.js";
+import type { AuditLlmRequest, ReviewAudit } from "../../src/plugins/review-runtime.js";
+import { runIsolated } from "../helpers/mount-profile.js";
 
 const INPUT: MrInput = {
   caseId: "VUL4J-38",
   issueDescription: "Vulnerability fix: URL encoding",
   diff: "--- a/src/main/java/Example.java\n+++ b/src/main/java/Example.java\n@@ -1,1 +1,1 @@\n-old\n+new",
+};
+
+/** config C 稳定门的输入：工具挂载需要 repoPath 作数据源（不进请求字节） */
+const CONFIG_C_INPUT: MrInput = {
+  ...INPUT,
+  repoPath: SAMPLE_MR_CASE.repoPath,
 };
 
 function configAScript(): readonly FakeLlmScriptStep[] {
@@ -37,22 +46,16 @@ function configAScript(): readonly FakeLlmScriptStep[] {
   ];
 }
 
-/** 一次完整装配 + 一次检视会话（用后即焚，保证两次运行零共享状态） */
-async function runOnce(): Promise<{ zoneSnapshots: readonly string[]; requests: readonly { role: string; content: string }[][] }> {
-  const ctx = new Context();
-  const sessionRoot = await mkdtemp(join(tmpdir(), "review-dsh-zonea-"));
-  const adapter = new FakeLlmAdapter(configAScript());
-  const handle: ReviewProfileHandle = await assembleReviewProfile(ctx, { sessionRoot, adapter });
-  try {
-    const result = await ctx.reviewRuntime.run(INPUT);
-    return {
-      zoneSnapshots: ctx.reviewCache.zoneSnapshots,
-      requests: result.audit.requests.map((request) => request.messages.map((message) => ({ role: message.role, content: message.content }))),
-    };
-  } finally {
-    await handle.dispose();
-    await rm(sessionRoot, { recursive: true, force: true });
-  }
+/** 一次完整装配 + 一次检视会话（inline 拆卸，两次运行零共享状态） */
+async function runOnce(
+  policy: ReviewPolicyConfig = {},
+  input: MrInput = INPUT,
+): Promise<{
+  zoneSnapshots: readonly string[];
+  audit: ReviewAudit;
+}> {
+  const { result, zoneSnapshots } = await runIsolated(configAScript(), { policy }, input);
+  return { zoneSnapshots, audit: result.audit };
 }
 
 describe("spike：Zone A 字节稳定（同单元两次运行）", () => {
@@ -70,6 +73,35 @@ describe("spike：Zone A 字节稳定（同单元两次运行）", () => {
     expect(second.zoneSnapshots).toEqual(first.zoneSnapshots);
 
     // 两次运行之间：全部 6 个请求的消息序列（POC1 序列化形态）逐字节相等
-    expect(second.requests).toEqual(first.requests);
+    const projection = (requests: readonly AuditLlmRequest[]): readonly string[] =>
+      requests.map((request) =>
+        JSON.stringify(request.messages.map((message) => ({ role: message.role, content: message.content }))),
+      );
+    expect(projection(second.audit.requests)).toEqual(projection(first.audit.requests));
+
+    // 无变更重跑零 Cache Break（#22 AC3：append-only 会话 + 稳定前缀 → 无归因）
+    expect(first.audit.cacheBreaks).toEqual([]);
+    expect(second.audit.cacheBreaks).toEqual([]);
+  });
+
+  it("config C（工具挂载）：两次独立运行全部请求（含 7 工具 schema）逐字节相等", async () => {
+    const first = await runOnce({ toolsEnabled: true }, CONFIG_C_INPUT);
+    const second = await runOnce({ toolsEnabled: true }, CONFIG_C_INPUT);
+
+    expect(first.audit.requests).toHaveLength(6);
+    // 每请求携带 7 个工具 schema（Zone A 工具面的字节稳定）
+    for (const request of first.audit.requests) {
+      expect(request.tools).toHaveLength(7);
+    }
+
+    // 两次运行之间：完整请求对象（model + effort + messages + tools）的
+    // 规范序列化逐字节相等
+    expect(second.audit.requests.map((request) => JSON.stringify(request))).toEqual(
+      first.audit.requests.map((request) => JSON.stringify(request)),
+    );
+
+    // 无变更重跑零 Cache Break（#22 AC3；工具面字节亦稳定）
+    expect(first.audit.cacheBreaks).toEqual([]);
+    expect(second.audit.cacheBreaks).toEqual([]);
   });
 });

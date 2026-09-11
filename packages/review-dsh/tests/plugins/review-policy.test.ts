@@ -93,3 +93,23 @@ describe("turnTimeoutMs 政策化（policy 服务 + runtime 等待上界 + 组�
     await expect(mount([], { policy: { ledger: true } })).rejects.toThrow(/ledger requires toolsEnabled/);
   });
 });
+
+describe("prefetch 开关（config B 形态）", () => {
+  it("缺省政策：prefetch=false（config A，零预取零工具）", async () => {
+    const { ctx } = await mount();
+
+    expect(ctx.reviewPolicy.prefetch).toBe(false);
+  });
+
+  it("组装转发：policy.prefetch 覆盖直达服务", async () => {
+    const { ctx } = await mount([], { policy: { prefetch: true } });
+
+    expect(ctx.reviewPolicy.prefetch).toBe(true);
+  });
+
+  it("组合校验 fail fast：prefetch 与 toolsEnabled 同启 → 组装期拒绝（不在 A–E 实验矩阵）", async () => {
+    await expect(mount([], { policy: { prefetch: true, toolsEnabled: true } })).rejects.toThrow(
+      /mutually exclusive/,
+    );
+  });
+});

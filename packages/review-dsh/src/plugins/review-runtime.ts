@@ -3,21 +3,29 @@
  *
  * 驱动器独占阶段指令推进权：一阶段 = 一 turn（agent.followup），阶段内工具循环 =
  * turn 内 steps；MAX_ROUNDS 由驱动器状态控制；phase-6 verdict complete=false 时
- * followup 开启下一轮（多轮驱动随轮次票落地，本形态跑 config A 六阶段 × 1 轮）。
+ * followup 开启下一轮（多轮驱动随轮次票落地，本形态跑六阶段 × 1 轮）。
  *
- * MR intro 以 agent.inject 在会话启动时注入（idle driver 留待首条 followup 唤醒，
- * 同批进入请求——walking-skeleton 实测：inject 落 messages[0]、followup 落其后，
- * 与 POC1 请求 1 布局 [system(Zone A), MR intro, Phase 1] 逐字节对齐）。
+ * 会话启动注入（#18 落锤 + #22 生产化）：MR intro 以 agent.inject 注入（idle
+ * driver 留待首条 followup 唤醒，同批进入请求）；config B 预取开启时，Zone B
+ * 消息在 MR intro 前、三层预取消息在其后，多连 inject 按调用序排列——与 POC1
+ * 请求 1 布局 [system(Zone A), Zone B, MR intro, Symbol, Reference, Call chain,
+ * Phase 1] 逐字节对齐。
  */
 
 import type { Context, Plugin } from "@deepseek-ai/cordis";
 import { createUserMessage, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
-import type { Message, ToolCallBlock, ToolResultBlock, ToolSchema, UserMessage } from "@deepseek-ai/dsh-llm";
+import type { Message, TokenUsage, ToolCallBlock, ToolResultBlock, ToolSchema, UserMessage } from "@deepseek-ai/dsh-llm";
 import type { Session, SessionEvent, TurnEndReason } from "@deepseek-ai/dsh-session";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
+import type { MetricsConfigId } from "../../../../src/contracts/config.js";
+import type { LlmRequest, LlmUsage } from "../../../../src/contracts/llm-client.js";
+import type { PrefetchLayerRecord } from "../../../../src/contracts/prefetch.js";
+import type { CacheBreakRecord } from "../../../../src/contracts/run.js";
 import type { LedgerEntry } from "../../../../src/contracts/ledger.js";
+import { classifyCacheBreaks } from "../../../../src/loop/cache-break.js";
 import { TRUNCATION_TOOL_BUDGET } from "../../../../src/loop/constants.js";
+import { addUsage, ZERO_USAGE } from "../../../../src/loop/usage.js";
 import { createToolBudgetGuard, toDshToolDefinitions, TOOL_BUDGET_DENIED_TEXT } from "../context/review-tools.js";
 import { LOCKED_EFFORT_LABEL, joinTextBlocks } from "../llm/wire.js";
 import type { CapturedWireRequest } from "../llm/wire-log.js";
@@ -25,9 +33,6 @@ import { parseCandidatesReply, parseVerificationReply } from "../loop/parse.js";
 import type { CapturedKernelRequest } from "./review-cache.js";
 import type { MrInput } from "./review-context.js";
 import type { CandidateRejection, Finding } from "./review-evidence.js";
-
-/** 本形态唯一配置：config A（零工具、Diff-only）；工具形态（C/D/E）经政策开关挂载 */
-const CONFIG_ID = "A";
 
 /** POC1 审计 phaseLog 条目 */
 export interface PhaseLogEntry {
@@ -72,11 +77,11 @@ export interface AuditLlmRequest {
   readonly wireBody?: string;
 }
 
-/** embryonic POC1 审计（config A 形态；cacheBreaks 随对应票扩展） */
+/** embryonic POC1 审计（A/B/C/E 形态经政策开关；configId 如实推导） */
 export interface ReviewAudit {
   readonly runId: string;
   readonly caseId: string;
-  readonly configId: string;
+  readonly configId: MetricsConfigId;
   readonly model: string;
   readonly effort: string;
   readonly startedAt: string;
@@ -87,15 +92,19 @@ export interface ReviewAudit {
   readonly toolCalls: number;
   readonly truncated: boolean;
   readonly truncationReasons: readonly string[];
-  readonly usage: { readonly inputTokens: number; readonly outputTokens: number; readonly cacheReadTokens?: number };
+  /** 事件流 usage 聚合（POC1 LlmUsage 口径：inputTokens = 未命中；可选字段任一事件定义即在，含 0） */
+  readonly usage: LlmUsage;
   readonly findings: readonly Finding[];
   readonly phaseLog: readonly PhaseLogEntry[];
   readonly rejections: readonly CandidateRejection[];
-  readonly cacheBreaks: readonly unknown[];
+  /** 相邻请求前缀分歧的归因分类（POC1 冻结分类器；纯观测，不改变请求字节） */
+  readonly cacheBreaks: readonly CacheBreakRecord[];
   readonly requests: readonly AuditLlmRequest[];
   readonly toolCallLog: readonly ToolCallRecord[];
   /** Context Ledger 登记快照（功能态 config E；惰性态与非工具配置合法缺席） */
   readonly ledger?: readonly LedgerEntry[];
+  /** config B 注入层记账（POC1 RunAudit.prefetch 契约；非预取配置合法缺席） */
+  readonly prefetch?: readonly PrefetchLayerRecord[];
 }
 
 /** 一次检视会话的产出 */
@@ -135,13 +144,18 @@ export const reviewRuntime: Plugin.Object = {
 async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResult> {
   const policy = ctx.reviewPolicy;
   const startedAt = new Date();
-  const runId = buildRunId(startedAt, CONFIG_ID, input.caseId);
+  const configId = deriveConfigId(policy);
+  const runId = buildRunId(startedAt, configId, input.caseId);
 
   // 工具挂载（toolsEnabled）：run 私有工具箱（独立 Ledger），先于 agent 创建构建——
   // setup 闭包经 DSH 注册面（scoped tools + guard）把它接入该 agent 的世界
   const toolkit = policy.toolsEnabled
     ? ctx.reviewContext.buildToolkit(input, { ledger: policy.ledger })
     : undefined;
+
+  // config B 预取（prefetch）：Zone B + 三层注入材料（同仓库同 diff 字节级相同），
+  // 同样先于 agent 创建构建——失败即 run 失败（POC1：run 启动期装配上下文）
+  const prefetch = policy.prefetch ? await ctx.reviewContext.buildPrefetch(input) : undefined;
 
   // 预算守卫（run 私有闭包计数）：放行数 = 实际发生的工具调用数——POC1 toolCalls
   // 语义（执行 + 失败计入、被拒不计、恒 ≤ max），审计经 allowedCount() 读取
@@ -169,12 +183,20 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
   const agent = handle.agent;
   const session = agent.session;
 
-  // 会话启动注入：MR intro（Zone C 起点材料，非指令；留待首条 followup 同批入请求）
+  // 会话启动注入（#18 落锤：inject 不唤醒 idle driver，留待首条 followup 同批
+  // 入请求，多连 inject 按调用序）：Zone B → MR intro（Zone C 起点材料）→ 三层
+  // 预取——POC1 请求 1 布局 [system, Zone B, MR intro, Symbol, Reference, Call chain]
+  if (prefetch !== undefined) {
+    agent.inject(userTextMessage(prefetch.zoneBMessage.content));
+  }
   agent.inject(ctx.reviewContext.buildMrIntro(input));
+  for (const layer of prefetch?.layerMessages ?? []) {
+    agent.inject(userTextMessage(layer.content));
+  }
 
   // 回复与计量收集（kernel 侧：session 事件）
   const replies = new Map<number, string>();
-  const usageTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+  const usageEvents: TokenUsage[] = [];
   const toolCallLog: ToolCallRecord[] = [];
   const openToolCalls = new Map<string, { readonly name: string; readonly argumentsJson: string }>();
   // 预算拒绝按 turn 归因：POC1 把溢出 note 记在发生阶段的 phaseLog 条目上
@@ -183,11 +205,8 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
     if (eventSession !== session) return;
     if (event.type === "assistant/message") {
       replies.set(event.data.turn, messageText(event.data.message));
-      const usage = event.data.usage;
-      if (usage !== undefined) {
-        usageTotals.inputTokens += usage.inputTokens;
-        usageTotals.outputTokens += usage.outputTokens;
-        usageTotals.cacheReadTokens += usage.cacheReadTokens ?? 0;
+      if (event.data.usage !== undefined) {
+        usageEvents.push(event.data.usage);
       }
     } else if (event.type === "tool/call") {
       openToolCalls.set(event.data.callId, {
@@ -221,7 +240,7 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       const turn = index + 1;
       const turnEnded = awaitTurnEnd(ctx, session, turn, policy.turnTimeoutMs);
       const requestsBefore = ctx.reviewCache.requests.length;
-      agent.followup(phaseUserMessage(policy.phaseInstruction(phase)));
+      agent.followup(userTextMessage(policy.phaseInstruction(phase)));
       const reason = await turnEnded;
       if (reason.kind !== "completed") {
         throw new Error(`review-runtime: turn ${turn} (${phase}) ended with reason "${reason.kind}"`);
@@ -273,10 +292,15 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       }
       return notes.length > 0 ? { ...entry, note: notes.join("; ") } : entry;
     });
+    const auditRequests = toAuditRequests(
+      ctx.reviewCache.requests,
+      ctx.reviewCache.wireRequests,
+      ctx.reviewCache.wireCaptureEnabled,
+    );
     const audit: ReviewAudit = {
       runId,
       caseId: input.caseId,
-      configId: CONFIG_ID,
+      configId,
       model: policy.model,
       effort: policy.effortLabel,
       startedAt: startedAt.toISOString(),
@@ -289,23 +313,19 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       // truncationReason，不翻转 truncated
       truncated: false,
       truncationReasons: toolBudget.deniedCount() > 0 ? [TRUNCATION_TOOL_BUDGET] : [],
-      usage: {
-        inputTokens: usageTotals.inputTokens,
-        outputTokens: usageTotals.outputTokens,
-        ...(usageTotals.cacheReadTokens > 0 ? { cacheReadTokens: usageTotals.cacheReadTokens } : {}),
-      },
+      // 冻结 addUsage 直用（reduce + ZERO_USAGE）：聚合语义单一来源——可选字段
+      // 任一事件定义即在，含 0（网关显式回报 cached_tokens: 0 是有信息量的记账）
+      usage: usageEvents.reduce(addUsage, ZERO_USAGE),
       findings: gate.findings,
       phaseLog: phaseLogWithNotes,
       rejections: gate.rejections,
-      cacheBreaks: [],
-      requests: toAuditRequests(
-        ctx.reviewCache.requests,
-        ctx.reviewCache.wireRequests,
-        ctx.reviewCache.wireCaptureEnabled,
-      ),
+      cacheBreaks: classifyAuditCacheBreaks(auditRequests),
+      requests: auditRequests,
       toolCallLog,
       // 功能态 Ledger 留痕（POC1 契约：config.ledger 且 toolkit 在场；惰性态缺席）
       ...(toolkit !== undefined && policy.ledger ? { ledger: toolkit.ledger.snapshot() } : {}),
+      // config B 注入层记账（POC1 RunAudit.prefetch 契约；非预取配置缺席）
+      ...(prefetch !== undefined ? { prefetch: prefetch.records } : {}),
     };
 
     return { findings: gate.findings, phaseLog: audit.phaseLog, audit };
@@ -317,9 +337,10 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
   }
 }
 
-function phaseUserMessage(instruction: string): UserMessage {
+/** 纯文本 user 消息（阶段指令、Zone B 与预取层注入共用的 DSH 形态转换） */
+function userTextMessage(text: string): UserMessage {
   return createUserMessage({
-    content: [{ type: "text", text: instruction }],
+    content: [{ type: "text", text }],
     source: { kind: "user" },
   });
 }
@@ -424,8 +445,46 @@ function toAuditRequest(request: CapturedKernelRequest, wire?: CapturedWireReque
   };
 }
 
+/** configId 推导（既有政策开关 → A–E 标签；#25 preset 注册表落地前的最小诚实化）：
+ * prefetch → B；toolsEnabled → ledger ? E : C；缺省 → A。D（stablePrefix）随其票
+ * 获得开关。政策互斥校验（review-policy）保证组合空间内标签无歧义。
+ */
+function deriveConfigId(policy: {
+  readonly prefetch: boolean;
+  readonly toolsEnabled: boolean;
+  readonly ledger: boolean;
+}): MetricsConfigId {
+  if (policy.prefetch) {
+    return "B";
+  }
+  if (policy.toolsEnabled) {
+    return policy.ledger ? "E" : "C";
+  }
+  return "A";
+}
+
+/** 审计请求 → POC1 LlmRequest 形态（tools 的 parameters 对象经 JSON 序列化还原
+ * parametersJson——round-trip 字节 = 注册表 canonical，#20 已锁定该等价） */
+function toPoc1Request(request: AuditLlmRequest): LlmRequest {
+  return {
+    model: request.model,
+    effort: request.effort,
+    messages: [...request.messages],
+    tools: request.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parametersJson: JSON.stringify(tool.parameters),
+    })),
+  };
+}
+
+/** 审计请求序列 → Cache Break 归因（POC1 冻结分类器 1:1；纯观测，不改变请求字节） */
+export function classifyAuditCacheBreaks(requests: readonly AuditLlmRequest[]): readonly CacheBreakRecord[] {
+  return classifyCacheBreaks(requests.map(toPoc1Request));
+}
+
 /** POC1 runId：`<ISO 去连字符与冒号去 Z>-<configId>-<caseId 清洗>`（对齐冻结 audit-writer） */
-function buildRunId(startedAt: Date, configId: string, caseId: string): string {
+function buildRunId(startedAt: Date, configId: MetricsConfigId, caseId: string): string {
   const stamp = startedAt.toISOString().replace(/[-:]/g, "").replace("Z", "");
   return `${stamp}-${configId}-${sanitizeId(caseId)}`;
 }

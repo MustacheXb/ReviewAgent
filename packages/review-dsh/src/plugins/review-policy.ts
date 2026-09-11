@@ -132,6 +132,12 @@ export interface ReviewPolicyConfig {
    * 校验拒绝「ledger 而无工具」的静默空转组合）。
    */
   readonly ledger?: boolean;
+  /**
+   * config B 确定性预取（Zone B + Symbol/Reference/Call Chain 三层注入）；
+   * 缺省 false。与 toolsEnabled 互斥（组装期校验拒绝——不在 A–E 实验矩阵，
+   * 且杂交形态无法诚实标注 configId；config B 零工具，C/D/E 零预取）。
+   */
+  readonly prefetch?: boolean;
 }
 
 /** reviewPolicy 服务：config A 政策的唯一持有者（核内其他插件经 inject 消费） */
@@ -156,6 +162,8 @@ export interface ReviewPolicyService {
   readonly toolsEnabled: boolean;
   /** Context Ledger 功能态开关（config E true；A/B/C/D false 惰性态） */
   readonly ledger: boolean;
+  /** config B 确定性预取开关（B true；A/C/D/E false） */
+  readonly prefetch: boolean;
 }
 
 declare module "@deepseek-ai/cordis" {
@@ -173,6 +181,11 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
     if (config.ledger === true && config.toolsEnabled !== true) {
       throw new Error(
         "review-policy: ledger requires toolsEnabled (config E mounts the 7 review.* tools; a ledger without tools has no effect — set toolsEnabled: true or drop ledger)",
+      );
+    }
+    if (config.prefetch === true && config.toolsEnabled === true) {
+      throw new Error(
+        "review-policy: prefetch and toolsEnabled are mutually exclusive (config B is deterministic prefetch with zero tools; C/D/E mount the 7 review.* tools — choose one form; the hybrid is not in the A–E matrix and cannot be labeled honestly)",
       );
     }
 
@@ -195,6 +208,7 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
       effortLabel: "default",
       toolsEnabled: config.toolsEnabled === true,
       ledger: config.ledger === true,
+      prefetch: config.prefetch === true,
     };
 
     const disposeService = ctx.provide("reviewPolicy", service);

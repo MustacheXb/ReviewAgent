@@ -22,3 +22,10 @@ Phase 1 的内核组装方式（Round 3 定）：六阶段骨架**不**通过 `c
 - **A–E 参数化的实际形态修正**：Considered Options 否决「插件 config 字段」的理由（"工具开/关是改变 Zone A 字节的组装级差异，config 字段表达不了"）已被 #20 实现修正——工具 schema 挂在请求的 `tools` 字段（Zone A 外），开关经 `ReviewPolicyConfig.toolsEnabled/ledger` 表达即可；agent-preset 的实质（每 agent 独立工具世界）由 `createAgent` 的 per-agent scoped setup + run 私有 toolkit/Ledger 保住。五 agent preset 仍是评测单元的编排形态，内核开关面收敛到政策字段。
 - **MAX_TOOL_CALLS 的强制点**：正文「由 `tools/execute` 包裹层强制」在实现中为预分发 `ToolGuard`（`agentCtx.tools.guard`）——同步守卫在 JS 单线程下计数原子，语义等价（放行数 = 实际执行数，≤ 上界），且天然覆盖并行组。
 - **预算拒绝的物化形态（对 ADR-0005 1:1 姿态的登记偏离）**：POC1 把超预算调用记为 `SKIPPED: <reason>` 普通消息并强制收尾该阶段；DSH 注册面把守卫拒绝物化为 `Error: <reason>` 工具错误结果（isError），阶段收尾交给模型。审计侧已对齐 POC1 契约：`toolCalls` = 实际发生数（执行 + 失败，被拒不计）、被拒调用全量留痕 `toolCallLog`、耗尽记 `truncationReasons=["TOOL_BUDGET_EXHAUSTED"]` 与发生阶段 phaseLog note；剩余不可消除的差异仅为控制流（模型自愿收尾 vs 强制收尾，可能多一次 LLM 往返）。
+
+### 实现注记（#22 缓存纪律落地后补记，2026-09-11）
+
+- **Consequences 首条的落锤（Zone B 注入顺序）**：多连 inject（Zone B → MR intro → 三层预取）在 0.1.2-rc.1 上按调用序进入首条 followup 的 claim 批，请求 1 布局与 POC1 逐字节对齐——正文预留的退路（Zone B 并入首条 followup）确认不需要启用（inject 机制细节与 #22 多连扩展实证见《DSH 内核机制偏差清单》§4）。注入材料由冻结 `buildPrefetchContext` 1:1 供给（`ReviewPolicyConfig.prefetch` 开关，与 `toolsEnabled` 组装期互斥：杂交形态不在 A–E 矩阵、无法诚实标注 configId）。
+- **Cache Break 观测点**：run 末纯观测分类（冻结 `classifyCacheBreaks` 桥接，绝不改请求字节）；审计请求 → POC1 LlmRequest 的桥接经 `JSON.stringify(parameters)` 还原 `parametersJson`（round-trip 等价由 #20 测试锁定）。
+- **usage 聚合的在场语义**：事件流 usage → `audit.usage` 直接经冻结 `addUsage` 聚合（reduce + `ZERO_USAGE`，不设 >0 门）——可选字段任一事件定义即在，含 0：「网关回报 cached_tokens: 0」是有信息量的记账，不应在内核侧被吞掉；冒烟「存在即必为正」断言由适配器 `mapUsage`（命中为 0 时不臆造零值条目）继续兜底。工具成本的计价留在核外（`audit.toolCallLog` 即账本，冻结 `computeToolCostTokens` 直接消费）。
+- **configId 最小诚实化**：`deriveConfigId`（既有开关 → B/C/E/A）先行落位，#25 preset 注册表落地时收敛——审计与 runId 携带的形态标签必须与实际装配一致，D（stablePrefix）随其开关票补位。
