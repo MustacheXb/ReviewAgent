@@ -28,6 +28,8 @@ data/clean-mr/.cache/
 
 # 脚本编译临时目录（T02/T09 采集脚本的 tsc outDir）
 .tmp-gen/
+# kernel host 编译产物树（#27：与 CLI 树隔离，防并行烟测竞争）
+.tmp-gen-host/
 
 # /implement-spec 子代理 worktree 临时目录
 .claude/worktrees/

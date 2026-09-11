@@ -6,7 +6,8 @@ import type { LlmClient } from "../contracts/llm-client.js";
 import type { MRCase } from "../contracts/mr-case.js";
 import type { RunResult } from "../contracts/run.js";
 import { addUsage } from "../loop/usage.js";
-import { DEFAULT_EFFORT, runReview } from "../run/run-review.js";
+import { DEFAULT_EFFORT, DEFAULT_MODEL, runReview } from "../run/run-review.js";
+import type { DshKernelDriver } from "./dsh-kernel.js";
 import type { ExperimentPlan, ExpandedPlan, RunUnit } from "./plan.js";
 import { expandPlan } from "./plan.js";
 import type { RunRecord, RunSnapshot } from "./run-store.js";
@@ -32,6 +33,12 @@ export interface RunnerPaths {
 
 export interface ExperimentDeps {
   readonly llmClient: LlmClient;
+  /**
+   * DSH 内核驱动（#27，可选）：在场时检视单元改经长驻内核 host 进程执行
+   * （SDK JSON-RPC wire），llmClient 仅服务核外工具链（Verifier 二遍）。
+   * 模型路由被内核策略锁死（deepseek-v4-flash）——plan.model 不符时启动即报错。
+   */
+  readonly dshKernel?: DshKernelDriver;
   readonly now?: () => Date;
   /** 单元级进度回调（CLI 打印 / 测试观测；异常由运行器捕获后继续） */
   readonly onUnit?: (event: UnitEvent) => void;
@@ -86,6 +93,14 @@ export async function runExperiment(
   paths: RunnerPaths,
 ): Promise<ExperimentOutcome> {
   const expanded = expandPlan(plan, cases);
+  if (deps.dshKernel !== undefined && plan.model !== DEFAULT_MODEL) {
+    // 内核策略路由锁死 deepseek-v4-flash（ReviewPolicyService）；不符即拒，
+    // 防止「计划以为在跑 pro、实际内核在跑 flash」的静默口径漂移
+    throw new Error(
+      `experiment "${plan.experimentId}" runs on the DSH kernel, whose model route is locked to ` +
+        `"${DEFAULT_MODEL}" (plan.model = "${plan.model}"): use --model flash, or run POC1 mode.`,
+    );
+  }
   const store = new RunStore(path.join(paths.experimentRoot, "runs"));
   await persistPlanAndCases(paths.experimentRoot, plan, expanded.cases);
   const existing = await loadCompatibleRecords(store, plan, expanded.units);
@@ -129,7 +144,7 @@ export async function runExperiment(
   };
 }
 
-/** 单元执行：runReview（基线）→ 可选二遍 Verifier → 记录落盘；失败留痕不拖垮整批 */
+/** 单元执行：检视（DSH 内核 / POC1 基线，RunResult 同构）→ 可选二遍 Verifier → 记录落盘；失败留痕不拖垮整批 */
 async function executeUnit(
   unit: RunUnit,
   mrCase: MRCase,
@@ -148,11 +163,24 @@ async function executeUnit(
     `rep-${unit.rep}`,
   );
   try {
-    const baseline = await runReview(CONFIGS[unit.configId], mrCase, deps.llmClient, {
-      auditDir,
-      model: plan.model,
-      effort: DEFAULT_EFFORT,
-    });
+    // DSH 路径（#27）：单元经长驻 host 进程执行（review/run；configId 逐单元切
+    // preset，审计由 host 落盘、auditPath 随响应回传）——返回 POC1 RunResult，
+    // 下游 composeRecord / store 零改动
+    const baseline =
+      deps.dshKernel !== undefined
+        ? await deps.dshKernel.runUnit({
+            configId: unit.configId,
+            caseId: mrCase.caseId,
+            issueDescription: mrCase.issueDescription,
+            diff: mrCase.diff,
+            repoPath: mrCase.repoPath,
+            auditDir,
+          })
+        : await runReview(CONFIGS[unit.configId], mrCase, deps.llmClient, {
+            auditDir,
+            model: plan.model,
+            effort: DEFAULT_EFFORT,
+          });
     const { record } = await composeRecord(unit, mrCase, plan, baseline, deps, now);
     await store.save(record);
     emit(deps, { kind: "completed", unit, findings: record.effective?.findings.length ?? record.baseline.findings.length });

@@ -19,6 +19,7 @@ import {
 import { loadEnvLocalFile, type EnvLocalLoadResult } from "../shared/env-local.js";
 import { renderDashboardMarkdown } from "./dashboard.js";
 import { loadExperimentCases } from "./datasets.js";
+import { createDshKernelDriver, type DshKernelDriver } from "./dsh-kernel.js";
 import { checkExperimentEnv, envErrorMessage } from "./env.js";
 import {
   DEFAULT_EXPERIMENT_MODEL,
@@ -50,6 +51,9 @@ import { writeFile, mkdir } from "node:fs/promises";
  * key 只经环境变量注入（启动统一校验并给缺失清单；输出不回显 key 值）。
  */
 
+/** 检视执行内核（#27）：poc1 = 进程内 runReview（基线）；dsh = 长驻 DSH 内核 host 进程 */
+export type KernelMode = "poc1" | "dsh";
+
 /** CLI 解析结果（ExperimentPlan 的原料 + 装载/运行控制项） */
 export interface ExperimentCliOptions {
   readonly experimentId: string;
@@ -58,6 +62,7 @@ export interface ExperimentCliOptions {
   readonly reps: number;
   readonly verifier: VerifierMode;
   readonly model: ExperimentModel;
+  readonly kernel: KernelMode;
   readonly highRiskOnly: boolean;
   readonly perSourceLimit: number | null;
   readonly caseFilter: readonly string[];
@@ -96,6 +101,7 @@ export function experimentCliUsage(): string {
     "  --reps <n>                repetitions per MR, rep1 cold / rep2+ hot (default: 3)",
     "  --verifier <off|on>       second-pass verifier ablation (default: off)",
     "  --model <flash|pro>       deepseek-v4-flash | deepseek-v4-pro (default: flash)",
+    "  --kernel <poc1|dsh>       review execution kernel (default: poc1; dsh locks model to flash)",
     "  --high-risk-only          only riskClass=High cases (required for v4-pro)",
     "  --limit <n>               per-source case cap (default: none)",
     "  --case <id>               exact caseId filter (repeatable)",
@@ -116,6 +122,7 @@ type CliValues = {
   reps: number;
   verifier: VerifierMode;
   model: ExperimentModel;
+  kernel: KernelMode;
   highRiskOnly: boolean;
   perSourceLimit: number | null;
   caseFilter: string[];
@@ -161,6 +168,10 @@ const VALUE_FLAGS: Readonly<Record<string, ValueFlagParser<CliValues>>> = {
           `--model must be one of flash, deepseek-v4-flash, pro, deepseek-v4-pro (got ${JSON.stringify(value)})`,
         );
   },
+  "--kernel": (value) =>
+    value === "poc1" || value === "dsh"
+      ? flagOk({ kernel: value })
+      : flagFail(`--kernel must be "poc1" or "dsh" (got ${JSON.stringify(value)})`),
   "--case": (value, current) =>
     value.length === 0
       ? flagFail("--case requires a non-empty caseId")
@@ -199,6 +210,7 @@ function defaultCliValues(): CliValues {
     reps: DEFAULT_REPS,
     verifier: "off",
     model: DEFAULT_EXPERIMENT_MODEL,
+    kernel: "poc1",
     highRiskOnly: false,
     perSourceLimit: null,
     caseFilter: [],
@@ -235,6 +247,7 @@ function finalizeCliValues(
       reps: values.reps,
       verifier: values.verifier,
       model: values.model,
+      kernel: values.kernel,
       highRiskOnly: values.highRiskOnly,
       perSourceLimit: values.perSourceLimit,
       caseFilter: values.caseFilter,
@@ -289,6 +302,8 @@ export interface CliRunDeps {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly createLlmClient: () => DeepSeekClient;
   readonly createJudgeClient: () => JudgeClient;
+  /** DSH 内核驱动工厂（--kernel dsh 时调用一次；缺省 = 真实 host 进程驱动） */
+  readonly createDshKernel: () => DshKernelDriver;
   readonly log: (line: string) => void;
   /** 启动期装载 .env.local（注入 process.env）；缺省读仓库根 .env.local 并打印键名摘要 */
   readonly loadEnvLocal: () => EnvLocalLoadResult;
@@ -300,6 +315,7 @@ export function defaultCliRunDeps(): CliRunDeps {
     env: process.env,
     createLlmClient: () => new DeepSeekClient(),
     createJudgeClient: () => new GptJudgeClient(),
+    createDshKernel: () => createDshKernelDriver(),
     log,
     loadEnvLocal: () => {
       const result = loadEnvLocalFile(path.resolve(".env.local"), process.env);
@@ -448,12 +464,24 @@ async function runReviewMatrix(
   }
   deps.log(
     `[experiment ${plan.experimentId}] ${dataset.cases.length} case(s) loaded; ` +
-      `model=${plan.model} verifier=${plan.verifier} reps=${plan.reps} configs=${plan.configs.join("")}`,
+      `model=${plan.model} kernel=${options.kernel} verifier=${plan.verifier} ` +
+      `reps=${plan.reps} configs=${plan.configs.join("")}`,
   );
-  return await runExperiment(plan, dataset.cases, {
-    llmClient: deps.createLlmClient(),
-    onUnit: unitEventLogger(deps),
-  }, { experimentRoot });
+  const dshKernel = options.kernel === "dsh" ? deps.createDshKernel() : undefined;
+  try {
+    return await runExperiment(
+      plan,
+      dataset.cases,
+      {
+        llmClient: deps.createLlmClient(),
+        ...(dshKernel !== undefined ? { dshKernel } : {}),
+        onUnit: unitEventLogger(deps),
+      },
+      { experimentRoot },
+    );
+  } finally {
+    await dshKernel?.close();
+  }
 }
 
 /** 报告/dashboard 落盘 + 收尾日志 → 退出码（0 = 完成；1 = 零记录全量失败） */

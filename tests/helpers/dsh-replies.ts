@@ -1,11 +1,11 @@
 /**
- * #26 CLI 测试共享夹具：F001 候选 + config A 六阶段回复。
+ * DSH 内核 config A 剧本 + chat/completions wire 构造器（跨树共用夹具）。
  *
- * 进程内契约测试（cli-contract）与进程级烟测（cli-smoke）共用同一脚本——
- * 同一份 config A 剧本驱动两条验收轴，不在两个文件里各抄一份。
+ * 消费方：review-dsh 包的进程内契约测试 / 进程级烟测 / kernel-host 测试（经
+ * 4 级相对引用）与根的 DSH 内核 e2e——同一份剧本驱动所有验收轴，不各抄一份。
  */
 
-import type { Finding } from "../../../../src/contracts/finding.js";
+import type { Finding } from "../../src/contracts/finding.js";
 
 export const FINDING_F001: Finding = {
   id: "F001",

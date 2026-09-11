@@ -20,7 +20,6 @@
  */
 
 import { execFile } from "node:child_process";
-import { createServer, type Server } from "node:http";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,45 +27,13 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
-import { chatResponse, CONFIG_A_REPLIES, configAResponses } from "./cli-fixtures.js";
+import { chatResponse, CONFIG_A_REPLIES, configAResponses } from "../../../../tests/helpers/dsh-replies.js";
+import { startStubLlmServer } from "../../../../tests/helpers/stub-llm-server.js";
 
 const PACKAGE_DIR = fileURLToPath(new URL("../..", import.meta.url));
 const BIN_ENTRY = join(PACKAGE_DIR, "bin", "review-agent.js");
 
 const TEST_TIMEOUT_MS = 180_000;
-
-/**
- * 本地 stub 端点（零外网）：按序回放响应体；脚本耗尽后若有 fallback 则持续
- * 供给（无 fallback 时 500——成功路径以此兜住「多发了未脚本化的请求」）。
- */
-function startStubServer(responses: string[], fallback?: string): Promise<{ server: Server; url: string }> {
-  let next = 0;
-  const server = createServer((request, response) => {
-    if (request.method !== "POST" || !request.url?.endsWith("/chat/completions")) {
-      response.writeHead(404, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: `unexpected ${request.method} ${request.url}` }));
-      return;
-    }
-    const body = next < responses.length ? responses[next] : fallback;
-    next += 1;
-    if (body === undefined) {
-      response.writeHead(500, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: "script exhausted" }));
-      return;
-    }
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(body);
-  });
-  return new Promise((resolvePromise) => {
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        throw new Error("stub server has no port");
-      }
-      resolvePromise({ server, url: `http://127.0.0.1:${address.port}` });
-    });
-  });
-}
 
 /** 截断剧本：round 1 六阶段照常但 verdict complete=false，之后 stub fallback 永不完成 */
 function configATruncatingResponses(): string[] {
@@ -114,7 +81,7 @@ describe("CLI 进程级烟测（#26）", () => {
   it(
     "成功路径：本地 stub 端点 → 退出码 0 + stdout JSON 形状 + 审计文件落盘，key 不落日志",
     async () => {
-      const { server, url } = await startStubServer(configAResponses());
+      const stub = await startStubLlmServer(configAResponses());
       try {
         const outDir = await mkdtemp(join(tmpdir(), "review-agent-cli-smoke-"));
         workDirs.push(outDir);
@@ -124,7 +91,7 @@ describe("CLI 进程级烟测（#26）", () => {
 
         const run = await runCli(
           ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", outDir],
-          { ...process.env, DEEPSEEK_URL: url, DEEPSEEK_API_KEY: sentinelKey },
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: sentinelKey },
         );
 
         // —— 退出码契约：完成 0
@@ -157,7 +124,7 @@ describe("CLI 进程级烟测（#26）", () => {
         expect(run.stdout).not.toContain(sentinelKey);
         expect(run.stderr).not.toContain(sentinelKey);
       } finally {
-        await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+        await stub.close();
       }
     },
     TEST_TIMEOUT_MS,
@@ -166,7 +133,7 @@ describe("CLI 进程级烟测（#26）", () => {
   it(
     "截断路径：verdict 永不 complete → MAX_ROUNDS 耗尽 → 退出码 0 + truncated=true + rounds=5 + 30 请求",
     async () => {
-      const { server, url } = await startStubServer(
+      const stub = await startStubLlmServer(
         configATruncatingResponses(),
         chatResponse('{"verdicts":[],"complete":false}'),
       );
@@ -178,7 +145,7 @@ describe("CLI 进程级烟测（#26）", () => {
 
         const run = await runCli(
           ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", outDir],
-          { ...process.env, DEEPSEEK_URL: url, DEEPSEEK_API_KEY: "sk-cli-smoke-trunc-key" },
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-smoke-trunc-key" },
         );
 
         // —— 退出码契约的边界：诚实截断 = 产出了结果与审计（POC1 record 语义），
@@ -203,7 +170,7 @@ describe("CLI 进程级烟测（#26）", () => {
         expect(audit.requests).toHaveLength(30);
         expect(audit.truncationReasons).toContain("MAX_ROUNDS_REACHED");
       } finally {
-        await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+        await stub.close();
       }
     },
     TEST_TIMEOUT_MS,

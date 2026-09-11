@@ -26,7 +26,7 @@ import {
   USAGE_TEXT,
 } from "../../src/cli/args.js";
 import { renderReviewOutcome, type ReviewOutcome } from "../../src/cli/render.js";
-import { FINDING_F001 } from "./cli-fixtures.js";
+import { FINDING_F001 } from "../../../../tests/helpers/dsh-replies.js";
 
 // ---------- 参数解析 ----------
 
