@@ -35,6 +35,7 @@ import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
 
 import type { FakeLlmScriptStep } from "../../src/llm/fake-adapter.js";
 import type { MrInput } from "../../src/plugins/review-context.js";
+import { REVIEW_PRESETS } from "../../src/presets/review-presets.js";
 import type { AuditLlmRequest } from "../../src/plugins/review-runtime.js";
 import { mount } from "../helpers/mount-profile.js";
 
@@ -150,7 +151,9 @@ describe("Zone A 对照（#23：DSH 组装 × 冻结薄 harness，差异集显�
   });
 
   it("config C（7 工具 schema）：system + 工具面与冻结 buildReviewToolkit 逐字段一致，差异集 = ∅", async () => {
-    const { ctx } = await mount(phaseScript(), { policy: { toolsEnabled: true } });
+    // #25 起 preset C = 工具 + 全仓（请求 1 较裸工具形态多一条全仓注入消息；
+    // Zone A 对照面只看 system 与工具 schema，注入消息不进差异集）
+    const { ctx } = await mount(phaseScript(), { policy: REVIEW_PRESETS.C });
 
     const result = await ctx.reviewRuntime.run(INPUT);
 
@@ -159,7 +162,7 @@ describe("Zone A 对照（#23：DSH 组装 × 冻结薄 harness，差异集显�
   });
 
   it("config E（C + Ledger）：Ledger 不入请求字节，工具 schema 与 C 同源，差异集 = ∅", async () => {
-    const { ctx } = await mount(phaseScript(), { policy: { toolsEnabled: true, ledger: true } });
+    const { ctx } = await mount(phaseScript(), { policy: REVIEW_PRESETS.E });
 
     const result = await ctx.reviewRuntime.run(INPUT);
 

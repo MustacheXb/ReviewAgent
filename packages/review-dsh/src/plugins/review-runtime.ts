@@ -6,11 +6,12 @@
  * complete=false 时 followup 开启下一轮，耗尽显式截断；Evidence Gate 在每轮
  * 第六阶段 turn/end 边界（serial）执行 join + 跨轮去重。
  *
- * 会话启动注入（#18 落锤 + #22 生产化）：MR intro 以 agent.inject 注入（idle
+ * 会话启动注入（#18 落锤 + #22/#25 生产化）：MR intro 以 agent.inject 注入（idle
  * driver 留待首条 followup 唤醒，同批进入请求）；config B 预取开启时，Zone B
- * 消息在 MR intro 前、三层预取消息在其后，多连 inject 按调用序排列——与 POC1
- * 请求 1 布局 [system(Zone A), Zone B, MR intro, Symbol, Reference, Call chain,
- * Phase 1] 逐字节对齐。
+ * 消息在 MR intro 前、三层预取消息在其后；config C 全仓消息在 MR intro 之后——
+ * 多连 inject 按调用序排列，与 POC1 请求 1 布局 [system(Zone A), Zone B, MR
+ * intro, Symbol, Reference, Call chain, Phase 1] / [system(Zone A), MR intro,
+ * 全仓消息, Phase 1] 逐字节对齐。
  */
 
 import type { Context, Plugin } from "@deepseek-ai/cordis";
@@ -22,7 +23,7 @@ import { SessionId } from "@deepseek-ai/dsh-session";
 import type { MetricsConfigId } from "../../../../src/contracts/config.js";
 import type { LlmRequest, LlmUsage } from "../../../../src/contracts/llm-client.js";
 import type { PrefetchLayerRecord } from "../../../../src/contracts/prefetch.js";
-import type { CacheBreakRecord } from "../../../../src/contracts/run.js";
+import type { CacheBreakRecord, FullRepoRecord } from "../../../../src/contracts/run.js";
 import type { LedgerEntry } from "../../../../src/contracts/ledger.js";
 import { classifyCacheBreaks } from "../../../../src/loop/cache-break.js";
 import { MAX_ROUNDS, TRUNCATION_MAX_ROUNDS, TRUNCATION_TOOL_BUDGET } from "../../../../src/loop/constants.js";
@@ -31,6 +32,7 @@ import { createToolBudgetGuard, toDshToolDefinitions, TOOL_BUDGET_DENIED_TEXT } 
 import { LOCKED_EFFORT_LABEL, joinTextBlocks } from "../llm/wire.js";
 import type { CapturedWireRequest } from "../llm/wire-log.js";
 import { parseCandidatesReply, parseVerificationReply } from "../loop/parse.js";
+import { deriveConfigId } from "../presets/review-presets.js";
 import type { CapturedKernelRequest } from "./review-cache.js";
 import type { MrInput } from "./review-context.js";
 import type { CandidateRejection, Finding } from "./review-evidence.js";
@@ -106,6 +108,8 @@ export interface ReviewAudit {
   readonly ledger?: readonly LedgerEntry[];
   /** config B 注入层记账（POC1 RunAudit.prefetch 契约；非预取配置合法缺席） */
   readonly prefetch?: readonly PrefetchLayerRecord[];
+  /** config C 全仓注入记账（POC1 RunAudit.fullRepo 契约；非全仓配置合法缺席） */
+  readonly fullRepo?: FullRepoRecord;
 }
 
 /** 一次检视会话的产出 */
@@ -145,18 +149,28 @@ export const reviewRuntime: Plugin.Object = {
 async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResult> {
   const policy = ctx.reviewPolicy;
   const startedAt = new Date();
+  // configId 经 preset 注册表推导（#25）：政策开关对照冻结 CONFIGS 矩阵回环——
+  // A–E 之外组合已在组装期被 review-policy 拒绝，此处只会命中五形态
   const configId = deriveConfigId(policy);
   const runId = buildRunId(startedAt, configId, input.caseId);
 
-  // 工具挂载（toolsEnabled）：run 私有工具箱（独立 Ledger），先于 agent 创建构建——
-  // setup 闭包经 DSH 注册面（scoped tools + guard）把它接入该 agent 的世界
-  const toolkit = policy.toolsEnabled
-    ? ctx.reviewContext.buildToolkit(input, { ledger: policy.ledger })
-    : undefined;
-
   // config B 预取（prefetch）：Zone B + 三层注入材料（同仓库同 diff 字节级相同），
-  // 同样先于 agent 创建构建——失败即 run 失败（POC1：run 启动期装配上下文）
+  // 先于 agent 创建构建——失败即 run 失败（POC1：run 启动期装配上下文）
   const prefetch = policy.prefetch ? await ctx.reviewContext.buildPrefetch(input) : undefined;
+
+  // config C 全仓上下文（fullRepo）：全仓消息 + 记账 + 共享 RepoContext——
+  // 仓库快照经 toolkit options 传回（POC1 同构：一次加载，注入与 get_file 同源）
+  const fullRepo = policy.fullRepo ? await ctx.reviewContext.buildFullRepo(input) : undefined;
+
+  // 工具挂载（toolsEnabled）：run 私有工具箱（独立 Ledger），先于 agent 创建构建——
+  // setup 闭包经 DSH 注册面（scoped tools + guard）把它接入该 agent 的世界；
+  // config C 的 RepoContext 已随全仓注入加载时共享同一快照
+  const toolkit = policy.toolsEnabled
+    ? ctx.reviewContext.buildToolkit(input, {
+        ledger: policy.ledger,
+        ...(fullRepo !== undefined ? { repo: fullRepo.repo } : {}),
+      })
+    : undefined;
 
   // 预算守卫（run 私有闭包计数）：放行数 = 实际发生的工具调用数——POC1 toolCalls
   // 语义（执行 + 失败计入、被拒不计、恒 ≤ max），审计经 allowedCount() 读取
@@ -186,13 +200,18 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
 
   // 会话启动注入（#18 落锤：inject 不唤醒 idle driver，留待首条 followup 同批
   // 入请求，多连 inject 按调用序）：Zone B → MR intro（Zone C 起点材料）→ 三层
-  // 预取——POC1 请求 1 布局 [system, Zone B, MR intro, Symbol, Reference, Call chain]
+  // 预取 / 全仓消息——POC1 请求 1 布局 [system, Zone B, MR intro, Symbol,
+  // Reference, Call chain] / [system, MR intro, 全仓消息]（fullRepo 在 MR intro
+  // 之后；B 与 C 互斥，两形态不叠放）
   if (prefetch !== undefined) {
     agent.inject(userTextMessage(prefetch.zoneBMessage.content));
   }
   agent.inject(ctx.reviewContext.buildMrIntro(input));
   for (const layer of prefetch?.layerMessages ?? []) {
     agent.inject(userTextMessage(layer.content));
+  }
+  if (fullRepo !== undefined) {
+    agent.inject(userTextMessage(fullRepo.message.content));
   }
 
   // 回复与计量收集（kernel 侧：session 事件）
@@ -356,6 +375,8 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       ...(toolkit !== undefined && policy.ledger ? { ledger: toolkit.ledger.snapshot() } : {}),
       // config B 注入层记账（POC1 RunAudit.prefetch 契约；非预取配置缺席）
       ...(prefetch !== undefined ? { prefetch: prefetch.records } : {}),
+      // config C 全仓注入记账（POC1 RunAudit.fullRepo 契约；非全仓配置缺席）
+      ...(fullRepo !== undefined ? { fullRepo: fullRepo.record } : {}),
     };
 
     return { findings, phaseLog: audit.phaseLog, audit };
@@ -473,24 +494,6 @@ function toAuditRequest(request: CapturedKernelRequest, wire?: CapturedWireReque
     tools: request.tools,
     ...(wire !== undefined ? { wireBody: wire.text } : {}),
   };
-}
-
-/** configId 推导（既有政策开关 → A–E 标签；#25 preset 注册表落地前的最小诚实化）：
- * prefetch → B；toolsEnabled → ledger ? E : C；缺省 → A。D（stablePrefix）随其票
- * 获得开关。政策互斥校验（review-policy）保证组合空间内标签无歧义。
- */
-function deriveConfigId(policy: {
-  readonly prefetch: boolean;
-  readonly toolsEnabled: boolean;
-  readonly ledger: boolean;
-}): MetricsConfigId {
-  if (policy.prefetch) {
-    return "B";
-  }
-  if (policy.toolsEnabled) {
-    return policy.ledger ? "E" : "C";
-  }
-  return "A";
 }
 
 /** 审计请求 → POC1 LlmRequest 形态（tools 的 parameters 对象经 JSON 序列化还原

@@ -26,6 +26,7 @@ import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
 
 import type { FakeLlmScriptStep } from "../../src/llm/fake-adapter.js";
 import type { MrInput } from "../../src/plugins/review-context.js";
+import { REVIEW_PRESETS } from "../../src/presets/review-presets.js";
 import { buildMrIntroText } from "../../src/plugins/review-context.js";
 import { PHASE_INSTRUCTIONS } from "../../src/plugins/review-policy.js";
 import type { ReviewAudit } from "../../src/plugins/review-runtime.js";
@@ -151,7 +152,9 @@ describe("工具成本数据源（audit.toolCallLog → 冻结 computeToolCostTo
       { kind: "reply", content: PHASE_REPLIES[4] ?? "" },
       { kind: "reply", content: PHASE_REPLIES[5] ?? "" },
     ];
-    const { ctx } = await mount(script, { policy: { toolsEnabled: true } });
+    // #25 起 preset C = 工具 + 全仓（run 启动加载仓库并注入全仓消息；工具成本
+    // 计价只消费 toolCallLog / toolCalls，注入不改变计价口径）
+    const { ctx } = await mount(script, { policy: REVIEW_PRESETS.C });
 
     const result = await ctx.reviewRuntime.run(INPUT);
     const audit = result.audit;

@@ -9,6 +9,8 @@
 
 import type { Context, Plugin } from "@deepseek-ai/cordis";
 
+import { deriveConfigId } from "../presets/review-presets.js";
+
 /** POC1 Zone A 字节（1:1 移植自冻结 harness src/loop/messages.ts SYSTEM_PROMPT） */
 export const ZONE_A = [
   "You are a senior Java code reviewer running inside a controlled review harness.",
@@ -138,6 +140,18 @@ export interface ReviewPolicyConfig {
    * 且杂交形态无法诚实标注 configId；config B 零工具，C/D/E 零预取）。
    */
   readonly prefetch?: boolean;
+  /**
+   * config C 全仓上下文注入（冻结 buildFullRepoInjection，80k 字符前锋装填）；
+   * 缺省 false。仅与 toolsEnabled 同启（C = 工具 + 全仓；矩阵收口见
+   * REVIEW_PRESETS / deriveConfigId）。
+   */
+  readonly fullRepo?: boolean;
+  /**
+   * config D/E 声明开关（POC1 实测无行为读取它——DSH 原生前缀机制按
+   * ADR-0005 后置为独立消融票）。纯声明：存在意义是让 D/E 可被诚实标注
+   * configId；仅与 toolsEnabled 同启。
+   */
+  readonly stablePrefix?: boolean;
 }
 
 /** reviewPolicy 服务：config A 政策的唯一持有者（核内其他插件经 inject 消费） */
@@ -164,6 +178,10 @@ export interface ReviewPolicyService {
   readonly ledger: boolean;
   /** config B 确定性预取开关（B true；A/C/D/E false） */
   readonly prefetch: boolean;
+  /** config C 全仓上下文注入开关（C true；A/B/D/E false） */
+  readonly fullRepo: boolean;
+  /** config D/E 声明开关（纯声明，无行为读取；A/B/C false） */
+  readonly stablePrefix: boolean;
 }
 
 declare module "@deepseek-ai/cordis" {
@@ -188,6 +206,9 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
         "review-policy: prefetch and toolsEnabled are mutually exclusive (config B is deterministic prefetch with zero tools; C/D/E mount the 7 review.* tools — choose one form; the hybrid is not in the A–E matrix and cannot be labeled honestly)",
       );
     }
+    // A–E 矩阵收口（#25）：五开关组合必须命中冻结 CONFIGS 五形态之一——
+    // 裸工具、无工具全仓、无工具前缀、C/D 杂交等组合在这里统一拒绝
+    assertInMatrix(config);
 
     const disposer = ctx.systemPrompt.section({
       name: "review-zone-a",
@@ -209,6 +230,8 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
       toolsEnabled: config.toolsEnabled === true,
       ledger: config.ledger === true,
       prefetch: config.prefetch === true,
+      fullRepo: config.fullRepo === true,
+      stablePrefix: config.stablePrefix === true,
     };
 
     const disposeService = ctx.provide("reviewPolicy", service);
@@ -228,4 +251,9 @@ function resolveTurnTimeoutMs(value: number | undefined): number {
     throw new Error(`review-policy: turnTimeoutMs must be a positive integer (got ${JSON.stringify(value)})`);
   }
   return value;
+}
+
+/** 矩阵收口断言：非矩阵组合让 deriveConfigId 抛错（推导值此处无用途，仅取其拒绝） */
+function assertInMatrix(config: ReviewPolicyConfig): void {
+  deriveConfigId(config);
 }

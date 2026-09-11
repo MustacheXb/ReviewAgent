@@ -19,6 +19,7 @@ import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
 
 import type { FakeLlmScriptStep } from "../../src/llm/fake-adapter.js";
 import type { MrInput } from "../../src/plugins/review-context.js";
+import { REVIEW_PRESETS } from "../../src/presets/review-presets.js";
 import type { ReviewPolicyConfig } from "../../src/plugins/review-policy.js";
 import type { AuditLlmRequest, ReviewAudit } from "../../src/plugins/review-runtime.js";
 import { runIsolated } from "../helpers/mount-profile.js";
@@ -29,7 +30,8 @@ const INPUT: MrInput = {
   diff: "--- a/src/main/java/Example.java\n+++ b/src/main/java/Example.java\n@@ -1,1 +1,1 @@\n-old\n+new",
 };
 
-/** config C 稳定门的输入：工具挂载需要 repoPath 作数据源（不进请求字节） */
+/** config C 稳定门的输入：repoPath 双重角色——工具数据源 + 全仓注入材料（注入
+ * 消息进请求字节；#25 起 preset C = 工具 + 全仓，不再是最初的裸工具形态） */
 const CONFIG_C_INPUT: MrInput = {
   ...INPUT,
   repoPath: SAMPLE_MR_CASE.repoPath,
@@ -85,8 +87,8 @@ describe("spike：Zone A 字节稳定（同单元两次运行）", () => {
   });
 
   it("config C（工具挂载）：两次独立运行全部请求（含 7 工具 schema）逐字节相等", async () => {
-    const first = await runOnce({ toolsEnabled: true }, CONFIG_C_INPUT);
-    const second = await runOnce({ toolsEnabled: true }, CONFIG_C_INPUT);
+    const first = await runOnce(REVIEW_PRESETS.C, CONFIG_C_INPUT);
+    const second = await runOnce(REVIEW_PRESETS.C, CONFIG_C_INPUT);
 
     expect(first.audit.requests).toHaveLength(6);
     // 每请求携带 7 个工具 schema（Zone A 工具面的字节稳定）

@@ -41,3 +41,9 @@ Phase 1 的内核组装方式（Round 3 定）：六阶段骨架**不**通过 `c
 - **契约的编译期收口**：`Finding` / `CandidateRejection` / `RejectionStage` 不再在核内重声明，type-only import 冻结 contracts（`src/contracts/finding.ts` / `run.ts`）——「直接复用现有 contracts」从形状巧合升级为编译期保证，漂移即报错。
 - **事件流可验证性的落位**：Gate 不注册新内核事件——边界行为经既有可观测面验证（turn/end 序列恰好 2 轮 × 6 turn 全 completed、round-2 首请求携带 round-1 全部历史、审计 rounds / phaseLog / rejections），测试不窥探内核内部状态。
 - **phaseLog note 落位的 POC1 对齐**：candidates 解析 note 落 Deep Reasoning 条目、verification note 落 Evidence Verification 条目（先前单轮形态把两者合并落 verification 条目——随按轮解析修正为逐条目同位）。上界截断测试用 fake 适配器的 `fallback` 步（脚本耗尽后持续供给「永不完成」回复）驱动 5 轮耗尽路径。
+
+### 实现注记（#25 A–E 五 preset 落地后补记，2026-09-11）
+
+- **矩阵真源与收口点**：A–E 配置表的真源 = 冻结 `CONFIGS`（spec #1）；`REVIEW_PRESETS` 注册表逐字段对照它测试锁定，`deriveConfigId` 逐字段遍历它回环 configId。收口点在 review-policy 组装期（pairwise 互斥规则保留原消息，矩阵检查兜住其余组合：裸工具、无工具全仓、无工具前缀、C/D 杂交）——`deriveConfigId` 在 review-runtime 的审计侧只做推导不再自带分支逻辑（#22 的最小诚实化实现退役）。
+- **config C 的全仓注入形态**：`buildFullRepoInjection` 冻结复用（80k 预算不可覆盖），注入位次 = MR intro 之后（POC1 `buildInitialMessages` 布局）；RepoContext 经 toolkit `options.repo` 共享（一次加载，注入字节与 `get_file` 读取同源——POC1 run-review 同构）。`RunAudit.fullRepo` 记账字段随票补齐。
+- **stablePrefix 的诚实标注**：D/E 的 `stablePrefix` 是纯声明开关（服务面与审计 configId 可标注，行为零读取）——#22 注记预告的「D 随其开关票补位」落位；DSH 原生前缀机制仍按 ADR-0005 后置。

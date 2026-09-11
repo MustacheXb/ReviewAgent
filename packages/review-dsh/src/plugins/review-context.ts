@@ -20,7 +20,9 @@ import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
 import { REVIEW_TOOL_ORDER } from "../../../../src/tools/registry.js";
 import { buildReviewToolkit, type ReviewToolkit } from "../../../../src/tools/toolkit.js";
+import type { RepoContext } from "../../../../src/zoneb/repo-context.js";
 import { buildPrefetchInjection, type PrefetchInjection } from "../context/prefetch-context.js";
+import { buildFullRepoAssembly, type FullRepoAssembly } from "../context/full-repo-context.js";
 
 /** MR 输入（Zone C 起点的全部材料） */
 export interface MrInput {
@@ -55,9 +57,14 @@ export interface ReviewContextService {
   /**
    * 工具挂载（toolsEnabled 政策）：MR 输入 → POC1 工具箱（run 私有 Ledger；
    * ledger=true 为功能态 config E 语义，缺省惰性态 A/B/C/D 行为零变化）。
+   * repo 缺席时工具箱自行懒加载；config C 全仓注入已加载 RepoContext 时经
+   * options.repo 共享（POC1 同构：一次加载，注入与 get_file 同源）。
    * repoPath 缺失时 fail fast（工具已启用但无仓库可读是装配错误，不静默）。
    */
-  buildToolkit(input: MrInput, options: { readonly ledger: boolean }): ReviewToolkit;
+  buildToolkit(
+    input: MrInput,
+    options: { readonly ledger: boolean; readonly repo?: RepoContext },
+  ): ReviewToolkit;
   /**
    * config B 确定性预取（prefetch 政策）：MR 输入 → Zone B 消息 + 三层预取
    * 消息 + 注入层记账（POC1 buildPrefetchContext 1:1；同仓库同 diff 字节级
@@ -65,6 +72,13 @@ export interface ReviewContextService {
    * repoPath 缺失时 fail fast。
    */
   buildPrefetch(input: MrInput): Promise<PrefetchInjection>;
+  /**
+   * config C 全仓上下文（fullRepo 政策）：MR 输入 → 全仓消息 + FullRepoRecord
+   * 记账 + 共享 RepoContext（POC1 buildFullRepoInjection 1:1，80k 预算前锋
+   * 装填）。注入位次由运行时编排（MR intro 之后——POC1 fullRepo 注入位次）。
+   * repoPath 缺失时 fail fast。
+   */
+  buildFullRepo(input: MrInput): Promise<FullRepoAssembly>;
 }
 
 declare module "@deepseek-ai/cordis" {
@@ -98,9 +112,11 @@ export const reviewContext: Plugin.Object = {
           repoPath: input.repoPath,
           diff: input.diff,
           ...(options.ledger ? { ledger: true } : {}),
+          ...(options.repo !== undefined ? { repo: options.repo } : {}),
         });
       },
       buildPrefetch: (input) => buildPrefetchInjection(input),
+      buildFullRepo: (input) => buildFullRepoAssembly(input),
     };
     const disposeService = ctx.provide("reviewContext", service);
     return () => {

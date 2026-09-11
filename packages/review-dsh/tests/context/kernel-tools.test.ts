@@ -19,6 +19,7 @@ import { buildReviewReadTools, buildReviewToolkit } from "../../../../src/tools/
 import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
 import type { FakeLlmScriptStep } from "../../src/llm/fake-adapter.js";
 import type { MrInput } from "../../src/plugins/review-context.js";
+import { REVIEW_PRESETS } from "../../src/presets/review-presets.js";
 import type { AuditMessage } from "../../src/plugins/review-runtime.js";
 import { mount } from "../helpers/mount-profile.js";
 
@@ -82,7 +83,7 @@ describe("kernel 工具挂载：toolsEnabled + ledger 全链路", () => {
       NOTES_REPLY,
       ...PHASE_5_TO_6,
     ];
-    const { ctx } = await mount(script, { policy: { toolsEnabled: true, ledger: true } });
+    const { ctx } = await mount(script, { policy: REVIEW_PRESETS.E });
 
     const result = await ctx.reviewRuntime.run(TOOLS_INPUT);
     const audit = result.audit;
@@ -143,7 +144,7 @@ describe("kernel 工具挂载：toolsEnabled + ledger 全链路", () => {
       NOTES_REPLY,
       ...PHASE_5_TO_6,
     ];
-    const { ctx } = await mount(script, { policy: { toolsEnabled: true, ledger: true } });
+    const { ctx } = await mount(script, { policy: REVIEW_PRESETS.E });
 
     const result = await ctx.reviewRuntime.run(TOOLS_INPUT);
     const audit = result.audit;
@@ -175,7 +176,7 @@ describe("kernel 工具挂载：toolsEnabled + ledger 全链路", () => {
       NOTES_REPLY,
       ...PHASE_5_TO_6,
     ];
-    const { ctx } = await mount(script, { policy: { toolsEnabled: true, ledger: true } });
+    const { ctx } = await mount(script, { policy: REVIEW_PRESETS.E });
 
     const result = await ctx.reviewRuntime.run(TOOLS_INPUT);
     const audit = result.audit;
@@ -215,7 +216,7 @@ describe("kernel 工具挂载：toolsEnabled + ledger 全链路", () => {
       NOTES_REPLY,
       ...PHASE_5_TO_6,
     ];
-    const { ctx } = await mount(script, { policy: { toolsEnabled: true, ledger: true } });
+    const { ctx } = await mount(script, { policy: REVIEW_PRESETS.E });
 
     const result = await ctx.reviewRuntime.run(TOOLS_INPUT);
     const audit = result.audit;

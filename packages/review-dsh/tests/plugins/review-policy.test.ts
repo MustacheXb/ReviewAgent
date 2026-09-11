@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_TURN_TIMEOUT_MS } from "../../src/plugins/review-policy.js";
 import type { MrInput } from "../../src/plugins/review-context.js";
+import { REVIEW_PRESETS } from "../../src/presets/review-presets.js";
 import { mount, mountAdapter } from "../helpers/mount-profile.js";
 
 const INPUT: MrInput = {
@@ -111,5 +112,35 @@ describe("prefetch 开关（config B 形态）", () => {
     await expect(mount([], { policy: { prefetch: true, toolsEnabled: true } })).rejects.toThrow(
       /mutually exclusive/,
     );
+  });
+});
+
+describe("A–E 矩阵收口（#25：内核只装五形态，非矩阵组合组装期拒绝）", () => {
+  it("fullRepo 而无 toolsEnabled → 拒绝（矩阵上 C = 工具 + 全仓，无零工具全仓形态）", async () => {
+    await expect(mount([], { policy: { fullRepo: true } })).rejects.toThrow(/outside the A-E matrix/);
+  });
+
+  it("stablePrefix 而无 toolsEnabled → 拒绝（矩阵上 D/E 均挂工具）", async () => {
+    await expect(mount([], { policy: { stablePrefix: true } })).rejects.toThrow(/outside the A-E matrix/);
+  });
+
+  it("toolsEnabled 而无 fullRepo/stablePrefix → 拒绝（裸工具形态不在矩阵：C 需全仓、D/E 需 stablePrefix）", async () => {
+    await expect(mount([], { policy: { toolsEnabled: true } })).rejects.toThrow(/outside the A-E matrix/);
+  });
+
+  it("工具 + fullRepo + stablePrefix 杂交 → 拒绝（C 与 D/E 的混合形态）", async () => {
+    await expect(
+      mount([], { policy: { toolsEnabled: true, fullRepo: true, stablePrefix: true } }),
+    ).rejects.toThrow(/outside the A-E matrix/);
+  });
+
+  it("preset 直通：REVIEW_PRESETS.E 经组装校验，服务开关面逐字段直达", async () => {
+    const { ctx } = await mount([], { policy: REVIEW_PRESETS.E });
+
+    expect(ctx.reviewPolicy.toolsEnabled).toBe(true);
+    expect(ctx.reviewPolicy.stablePrefix).toBe(true);
+    expect(ctx.reviewPolicy.ledger).toBe(true);
+    expect(ctx.reviewPolicy.fullRepo).toBe(false);
+    expect(ctx.reviewPolicy.prefetch).toBe(false);
   });
 });
