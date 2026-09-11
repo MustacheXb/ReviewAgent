@@ -29,3 +29,8 @@ Phase 1 的内核组装方式（Round 3 定）：六阶段骨架**不**通过 `c
 - **Cache Break 观测点**：run 末纯观测分类（冻结 `classifyCacheBreaks` 桥接，绝不改请求字节）；审计请求 → POC1 LlmRequest 的桥接经 `JSON.stringify(parameters)` 还原 `parametersJson`（round-trip 等价由 #20 测试锁定）。
 - **usage 聚合的在场语义**：事件流 usage → `audit.usage` 直接经冻结 `addUsage` 聚合（reduce + `ZERO_USAGE`，不设 >0 门）——可选字段任一事件定义即在，含 0：「网关回报 cached_tokens: 0」是有信息量的记账，不应在内核侧被吞掉；冒烟「存在即必为正」断言由适配器 `mapUsage`（命中为 0 时不臆造零值条目）继续兜底。工具成本的计价留在核外（`audit.toolCallLog` 即账本，冻结 `computeToolCostTokens` 直接消费）。
 - **configId 最小诚实化**：`deriveConfigId`（既有开关 → B/C/E/A）先行落位，#25 preset 注册表落地时收敛——审计与 runId 携带的形态标签必须与实际装配一致，D（stablePrefix）随其开关票补位。
+
+### 实现注记（#23 Zone A 对照落地后补记，2026-09-11）
+
+- **迁移审计的落位形态**：对照面 = DSH 审计请求（POC1 形态投影）× 冻结薄 harness 自有装配函数——Zone A 字节（`buildSystemMessage`；工具面 `buildReviewToolkit().tools`，canonical parameters 字节经 round-trip）+ 同配置路由（`DEFAULT_MODEL` / `DEFAULT_EFFORT`；路由非 Zone A 组成部分，作同配置对照的旁证位）。`zone-a-parity.test.ts` 覆盖 config A / C / E 三形态（E 的 Ledger 不入请求字节，工具 schema 与 C 同源）；`diffZoneA` 的字段敏感性由负面对照用例自动化锁定。
+- **差异集登记契约**：允许类别两类（`ASSEMBLY_WRAPPING` / `TOOL_NAME_WIRE_MAPPING`），但本对照面只有组装包裹物化为键（`SYSTEM_PROMPT_BYTES[*]`），wire 映射只出现在 wire 序列化点（#19 适配器测试持有）——可登记键形态经模板字面量类型收口：工具名 / 路由 / schema 字段的漂移无键可登记，唯一出路是修实现。实际差异集当前为空；计算差异与登记差异由 `expectParity` 强制相等，出现漂移必须同变更登记（key + reason）。
