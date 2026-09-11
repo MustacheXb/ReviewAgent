@@ -70,3 +70,10 @@ Phase 1 的内核组装方式（Round 3 定）：六阶段骨架**不**通过 `c
 - **模型门**：内核策略路由锁死 deepseek-v4-flash（ReviewPolicyService），请求不携带模型——runner 在 `dshKernel` 在场时启动即校验 `plan.model === DEFAULT_MODEL`（先过 v4-pro 既有 highRiskOnly 护栏，再由本门接住），防「计划以为跑 pro、内核实际跑 flash」的口径漂移。
 - **测试轴的三层**：裸 wire 测试手写 JSON-RPC 行直打 host bin（协议契约独立于任何 SDK 消费端件）；驱动器测试覆盖 config A 全链路（审计 wireBody + sessions 树）、同进程 preset 切换 A→B（B 带预取留痕）、错误帧隔离、凭据缺失 fail fast；根 e2e 以 3 case × A,B × rep1 = 6 单元经单一 host 进程跑 `runExperiment` → 报告 / dashboard，`llmClient` 注入空脚本 FakeLlmClient 作**隐式变异护栏**（DSH 分支若翻回 runReview 即烧穿）。共享夹具（六阶段剧本 + stub HTTP 端点）提升 root `tests/helpers/`，包测试按既有 4 级方向引用。
 - **bin 形态与编译树隔离**：`bin/review-kernel-host.js` 与 review-agent 同款（在位检查 + 按需编译 + 透传），但编译树独立 `.tmp-gen-host`（`tsconfig.kernel-host.json` 单源）——vitest 并行 worker 下 cli-smoke 的 beforeAll `rm .tmp-gen` 不会与 host 的按需编译竞争。
+
+### 实现注记（#28 确定性纪律门进 CI 落地后补记，2026-09-11）
+
+- **门的形态：具名 vitest 配置而非新测试**：Ticket 1–8 途中积累的迁移验收断言不新造——`vitest.gate.config.ts` 按「五族断言 → 入选文件」映射收口 9 件测试（8 件既有 + 1 件本票新增的零网络自检 net-guard；Zone A 字节稳定 / 无变更零 Cache Break / 审计可重放 / 六阶段骨架与两上界 / Evidence Gate 生效，presets 件覆盖 A–E 全配置），全部断言从主缝观测（fake 适配器捕获的请求字节 / 导出审计与结果对象（Finding、phaseLog）），与既有「不窥探内核内部状态」纪律同源。门经 `pnpm --filter review-dsh gate:discipline` 运行，CI 具名 job `discipline-gate` 直跑。
+- **零网络强制的收口点**：进程内出站拦截落在 `Socket#connect`（net.connect / createConnection / http(s).request / undici 建连的共同咽喉）+ `globalThis.fetch` 双点——不放行 loopback（门内断言全 fake LLM，连产品面烟测的 127.0.0.1 stub 形态都不需要）。收口范围如实声明：TCP 建连 + fetch 两条主出站路径，dgram（UDP）等非 TCP 通道不在内（门内测试形态不涉及）。拦截同时是「断网模拟」与「断言放大器」：入选测试若意外依赖网络，会以 net-guard 锁定的错误形态当场变红。`http.request` 对 IP 字面量在 Node 24 上于调用内**同步**建连（拦截错误同步冒出而非 error 事件）——自检断言兼容两种表现，跨 CI Node 22 / 本地 24 成立。
+- **gate 自检与常规套件的分轴**：`tests/gate/net-guard.test.ts` 断言的是门环境不变量（出站被拦截），只在 gate 配置的 setupFiles 之上有意义——包常规 vitest 配置显式排除 `tests/gate/**`（无拦截环境必然红，非坏测试）。RED/GREEN 对即变异证据：无拦截跑门 → 3 项自检以真实网络错误（ECONNREFUSED）变红；挂拦截 → 44/44 绿（41 项纪律断言在拦截下照常绿 = 其天然零网络的运行时证明）。
+- **CI 两层门**：`discipline-gate`（具名纪律门，拦截下 9 件套）+ `suites`（全量回归：两包 typecheck + 两包测试）并行 job；进程级烟测（cli-smoke / kernel-host 的 loopback stub）留在 suites 轴——既定零网络形态，不属进程内拦截之列。真实 API 路径（test:e2e / deepseek-smoke env 门控冒烟、#29 指标对齐门）不进 CI。

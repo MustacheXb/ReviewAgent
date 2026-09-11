@@ -14,6 +14,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "gate:discipline": "vitest run --config vitest.gate.config.ts",
     "typecheck": "tsc --noEmit",
     "cli": "node bin/review-agent.js"
   },

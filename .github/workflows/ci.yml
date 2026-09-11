@@ -1,0 +1,69 @@
+# CI（#28）：两层门。
+#
+# - discipline-gate：具名纪律门——门构成、五族断言映射与零网络收口点的
+#   真源见 packages/review-dsh/vitest.gate.config.ts 头注与 ADR-0006 #28 注记。
+# - suites：全量回归——两包 typecheck + 测试（root 含进程级烟测 cli-smoke /
+#   kernel-host，loopback stub 为既定零网络形态，不在纪律门的进程内拦截之列）。
+#
+# 真实 API 的指标对齐门（#29）走本地脚本按需执行，不进 CI。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  discipline-gate:
+    name: discipline-gate (确定性纪律门·零网络)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm 版本单源：root package.json 的 packageManager 字段
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (review-dsh)
+        run: pnpm --filter review-dsh typecheck
+
+      - name: Discipline gate (zero-network)
+        run: pnpm --filter review-dsh gate:discipline
+
+  suites:
+    name: suites (全量回归)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (root)
+        run: pnpm typecheck
+
+      - name: Typecheck (review-dsh)
+        run: pnpm --filter review-dsh typecheck
+
+      - name: Test (review-dsh)
+        run: pnpm --filter review-dsh test
+
+      - name: Test (root)
+        run: pnpm test
