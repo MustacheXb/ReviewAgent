@@ -7,10 +7,14 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "review-agent": "./bin/review-agent.js"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "cli": "node bin/review-agent.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

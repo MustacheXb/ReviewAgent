@@ -53,3 +53,11 @@ Phase 1 的内核组装方式（Round 3 定）：六阶段骨架**不**通过 `c
 - **导出零漂移的形态**：`AuditFileContent` / `RunResult` 的组装 1:1 经冻结件（`buildAuditFileContent`；`toPoc1RunResult` 只重排 DSH 审计字段，不新造语义）；请求投影复用 review-runtime 的 `toPoc1Request`（单一来源，#22 注记预告的 parametersJson 桥接随之收敛到该函数）。DSH 侧唯一增量 = 请求级 `wireBody` 扩展（真实适配器序列化点原文），POC1 读取端按结构化字段消费、扩展被忽略——「核外工具链零改动」从形状巧合升级为类型即契约（DSH 导出可直接装填 POC1 `AuditFileContent`）。
 - **wire 反解的命名约定**：wire.ts 的正映射 `toWireToolName`（点号→下划线）是不可逆折叠；反解按内核工具名约定（单点号命名空间 + snake_case 后缀，如 `review.get_diff`）只还原**首个**下划线。约定被破坏（多级点号名）时往返不等，由 `replayAuditRequest` 的 wire↔结构化逐字段对照 fail fast 兜底——重放的「重建」半边（从 wire 字节独立重建）与「校验」半边（强制等价）互为锚点。
 - **phaseLog 阶段名与 configId 的收窄**：DSH `PhaseLogEntry.phase` 为 string，导出时收窄为 POC1 `ReviewPhase` 六名之一（未知名 fail fast）；configId 收窄为 A–E（`"claude-code"` 核外参照标签出现在内核审计即装配事故）——内核矩阵收口（#25）在导出边界再守一道。
+
+### 实现注记（#26 CLI wrapper 落地后补记，2026-09-11）
+
+- **「spawn 锁定版」的落地形态**：Considered Options 末行「wrapper 按 Python-SDK 模式 spawn 锁定版 `dsh --profile review`」已被 #26 实现修正——npm 消费线无 `dsh` 二进制，CLI 是 node 进程直跑锁定版 review profile（`assembleReviewProfile` 复用，版本锁定 = 包依赖 pin），进程先例 = repo 既有「tsc → .tmp-gen → node」脚本模式。编译产物必须落**包内** `.tmp-gen`（镜像 repo 根相对结构）：node_modules 解析自产物位置上溯，落根级目录会找不到 `@deepseek-ai/*`（pnpm workspace 的包级依赖隔离）。
+- **产品面命令的成真形态**：`bin/review-agent.js`——在位检查（缺席则按 `tsconfig.cli.json` 编译，编译旗标单一来源）+ argv 透传 + 退出码透传，零行为逻辑；调用形态 = `pnpm --filter review-dsh cli review …`（script 落 bin）或 bin 直跑。用法文案宣告的 `review-agent review` 由此成为可敲出的命令（非仅 npm script 别名）。
+- **退出码契约的边界**：「完成」= 产出结果与审计——**含诚实截断**（`truncated` 是 POC1 record 语义的收敛标注，进入指标管线而非失败；完整性信号在 stdout 顶层 `truncated` 字段）→ 0；中止或错误（进程异常、用法、凭据缺失）→ 1。截断路径（verdict 永不 complete，脚本耗尽后 stub 持续供给 fallback 回复——镜像 fake 适配器为上界截断预留的形态）由烟测锁定：退出码 0 + `truncated=true` + `rounds=5` + 审计 30 请求（5 轮 × 6 阶段）。
+- **烟测的零网络真路径**：spawn 产品面 bin（编译与运行都是真路径），不注入 fetchFn（wrapper 无测试钩子，AC4 薄度），以 `DEEPSEEK_URL` 指向本地 127.0.0.1 stub 端点驱动**真实适配器代码路径**（wire 序列化、重试、usage 映射全真），外网零依赖；凭据不落日志以哨兵 key 断言（stdout/stderr 全文不含）。
+- **薄度的落位**：main.ts 只胶水（解析 → env 凭据适配器 → 装配 → run → 导出 → stdout 呈现 → 退出码），参数/呈现契约在 args.ts / render.ts 进程内锁定，检视行为本体全部在内核（已测）。caseId 派生（--mr 文件名去扩展名）落位 args.ts 解析缝（契约测试锁定，wrapper 不自带身份政策）；重复旗标与「值吞旗标」在解析层 fail fast；cmdline 行的 `requestedExitCode`（若曾请求）由 wrapper 消费。stdout 单 JSON 文档形状（`ReviewOutcome` 经 `Pick<AuditFileContent, …>` 锚定字段名，审计字段漂移即编译错）由进程级烟测锁定。
