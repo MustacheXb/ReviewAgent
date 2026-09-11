@@ -17,7 +17,8 @@ import type { Session, SessionEvent, TurnEndReason } from "@deepseek-ai/dsh-sess
 import { SessionId } from "@deepseek-ai/dsh-session";
 
 import type { LedgerEntry } from "../../../../src/contracts/ledger.js";
-import { createToolBudgetGuard, toDshToolDefinitions } from "../context/review-tools.js";
+import { TRUNCATION_TOOL_BUDGET } from "../../../../src/loop/constants.js";
+import { createToolBudgetGuard, toDshToolDefinitions, TOOL_BUDGET_DENIED_TEXT } from "../context/review-tools.js";
 import { LOCKED_EFFORT_LABEL, joinTextBlocks } from "../llm/wire.js";
 import type { CapturedWireRequest } from "../llm/wire-log.js";
 import { parseCandidatesReply, parseVerificationReply } from "../loop/parse.js";
@@ -82,6 +83,7 @@ export interface ReviewAudit {
   readonly finishedAt: string;
   readonly durationMs: number;
   readonly rounds: number;
+  /** POC1 契约：实际发生的工具调用数（≤ maxToolCalls；执行 + 失败计入，预算拒绝不计——拒绝只进 toolCallLog） */
   readonly toolCalls: number;
   readonly truncated: boolean;
   readonly truncationReasons: readonly string[];
@@ -141,6 +143,10 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
     ? ctx.reviewContext.buildToolkit(input, { ledger: policy.ledger })
     : undefined;
 
+  // 预算守卫（run 私有闭包计数）：放行数 = 实际发生的工具调用数——POC1 toolCalls
+  // 语义（执行 + 失败计入、被拒不计、恒 ≤ max），审计经 allowedCount() 读取
+  const toolBudget = createToolBudgetGuard(policy.maxToolCalls);
+
   const handle = await ctx.agentLoop.createAgent(ctx, {
     sessionId: SessionId(sanitizeId(runId)),
     agentOptions: {
@@ -155,7 +161,7 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
             for (const definition of toDshToolDefinitions(toolkit)) {
               agentCtx.tools.register(definition);
             }
-            agentCtx.tools.guard(createToolBudgetGuard(policy.maxToolCalls));
+            agentCtx.tools.guard(toolBudget.guard);
           },
         }
       : {}),
@@ -171,7 +177,8 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
   const usageTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
   const toolCallLog: ToolCallRecord[] = [];
   const openToolCalls = new Map<string, { readonly name: string; readonly argumentsJson: string }>();
-  let toolCalls = 0;
+  // 预算拒绝按 turn 归因：POC1 把溢出 note 记在发生阶段的 phaseLog 条目上
+  const deniedByTurn = new Map<number, number>();
   const offEvents = ctx.on("session/event", (eventSession: Session, event: SessionEvent) => {
     if (eventSession !== session) return;
     if (event.type === "assistant/message") {
@@ -183,7 +190,6 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
         usageTotals.cacheReadTokens += usage.cacheReadTokens ?? 0;
       }
     } else if (event.type === "tool/call") {
-      toolCalls += 1;
       openToolCalls.set(event.data.callId, {
         name: event.data.name,
         argumentsJson: event.data.arguments,
@@ -195,7 +201,13 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
         const open = openToolCalls.get(result.toolCallId);
         if (open !== undefined) {
           openToolCalls.delete(result.toolCallId);
-          toolCallLog.push({ ...open, resultSummary: toolResultText(result) });
+          const text = toolResultText(result);
+          toolCallLog.push({ ...open, resultSummary: text });
+          // 预算拒绝辨识（isError + 守卫物化文本双因子；被拒调用计入 toolCallLog
+          // 但不计入 toolCalls——放行数由守卫闭包持有，不经事件流计数）
+          if (result.isError === true && text === TOOL_BUDGET_DENIED_TEXT) {
+            deniedByTurn.set(event.data.turn, (deniedByTurn.get(event.data.turn) ?? 0) + 1);
+          }
         }
       }
     }
@@ -247,6 +259,20 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
     });
 
     const finishedAt = new Date();
+    // phaseLog note 装配（POC1 同位语义）：预算拒绝记 "N tool call(s) skipped:
+    // budget exhausted" 于发生阶段条目，解析 note 落 Evidence Verification——
+    // POC1 把工具周期 note 与解析 note 以 "; " 串联，此处同构
+    const phaseLogWithNotes = phaseLog.map((entry, index) => {
+      const notes: string[] = [];
+      const denied = deniedByTurn.get(index + 1);
+      if (denied !== undefined) {
+        notes.push(`${denied} tool call(s) skipped: budget exhausted`);
+      }
+      if (entry.phase === "Evidence Verification" && parseNote !== undefined) {
+        notes.push(parseNote);
+      }
+      return notes.length > 0 ? { ...entry, note: notes.join("; ") } : entry;
+    });
     const audit: ReviewAudit = {
       runId,
       caseId: input.caseId,
@@ -257,19 +283,19 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       finishedAt: finishedAt.toISOString(),
       durationMs: finishedAt.getTime() - startedAt.getTime(),
       rounds: 1,
-      toolCalls,
+      toolCalls: toolBudget.allowedCount(),
+      // POC1 语义：truncated = 评审未完成（!complete）才置 true——本形态
+      // complete=false 直接显式失败（多轮驱动随轮次票），预算耗尽只追加
+      // truncationReason，不翻转 truncated
       truncated: false,
-      truncationReasons: [],
+      truncationReasons: toolBudget.deniedCount() > 0 ? [TRUNCATION_TOOL_BUDGET] : [],
       usage: {
         inputTokens: usageTotals.inputTokens,
         outputTokens: usageTotals.outputTokens,
         ...(usageTotals.cacheReadTokens > 0 ? { cacheReadTokens: usageTotals.cacheReadTokens } : {}),
       },
       findings: gate.findings,
-      phaseLog:
-        parseNote !== undefined
-          ? phaseLog.map((entry) => (entry.phase === "Evidence Verification" ? { ...entry, note: parseNote } : entry))
-          : phaseLog,
+      phaseLog: phaseLogWithNotes,
       rejections: gate.rejections,
       cacheBreaks: [],
       requests: toAuditRequests(
@@ -331,7 +357,9 @@ function projectMessage(message: Message): AuditMessage[] {
       toolCallId: result.toolCallId,
     }));
   }
-  return [{ role: "user", content: messageText(message) }];
+  // role 透传（DSH Message role = 'system' | 'user' | 'assistant'，assistant 已
+  // 分流）：保真投影而非硬编码 "user"
+  return [{ role: message.role, content: messageText(message) }];
 }
 
 /** 等待指定 turn 结束（政策时限内未结束显式失败；只认本 session 的 turn/end） */

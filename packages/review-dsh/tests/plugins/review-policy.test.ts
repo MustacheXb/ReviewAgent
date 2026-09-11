@@ -88,4 +88,8 @@ describe("turnTimeoutMs 政策化（policy 服务 + runtime 等待上界 + 组�
       /turnTimeoutMs must be a positive integer/,
     );
   });
+
+  it("组合校验 fail fast：ledger=true 而 toolsEnabled 缺省 → 组装期拒绝（不静默空转）", async () => {
+    await expect(mount([], { policy: { ledger: true } })).rejects.toThrow(/ledger requires toolsEnabled/);
+  });
 });

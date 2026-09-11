@@ -71,7 +71,7 @@ export const reviewContext: Plugin.Object = {
   apply(ctx: Context) {
     // 固定 7 工具名单：schema 由 ToolRuntime 按注册面提供（toolsEnabled 时 7 个、
     // 否则零个），knownNames 恒定声明——toolOrder 配置在零注册配置下不 fail
-    const offTools = ctx.systemPrompt.tools(() => ({ schemas: [], knownNames: [...REVIEW_TOOL_ORDER] }));
+    const offKnownNames = ctx.systemPrompt.tools(() => ({ schemas: [], knownNames: [...REVIEW_TOOL_ORDER] }));
 
     const service: ReviewContextService = {
       buildMrIntro: (input) =>
@@ -95,7 +95,7 @@ export const reviewContext: Plugin.Object = {
     const disposeService = ctx.provide("reviewContext", service);
     return () => {
       disposeService();
-      offTools();
+      offKnownNames();
     };
   },
 };

@@ -19,9 +19,20 @@ import { buildReviewReadTools, buildReviewToolkit } from "../../../../src/tools/
 import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
 import type { FakeLlmScriptStep } from "../../src/llm/fake-adapter.js";
 import type { MrInput } from "../../src/plugins/review-context.js";
+import type { AuditMessage } from "../../src/plugins/review-runtime.js";
 import { mount } from "../helpers/mount-profile.js";
 
 const MATH_UTILS = "src/main/java/com/example/math/MathUtils.java";
+
+/** 审计消息中的 tool 应答变体（filter 收窄用） */
+type ToolAuditMessage = Extract<AuditMessage, { readonly role: "tool" }>;
+
+/** 从请求消息中按序取 tool 应答（role:tool 投影行） */
+function toolMessagesOf(request: { readonly messages: readonly AuditMessage[] } | undefined): ToolAuditMessage[] {
+  return (request?.messages ?? []).filter(
+    (message): message is ToolAuditMessage => message.role === "tool",
+  );
+}
 
 const TOOLS_INPUT: MrInput = {
   caseId: "KERNEL-TOOLS-1",
@@ -137,7 +148,7 @@ describe("kernel 工具挂载：toolsEnabled + ledger 全链路", () => {
     const result = await ctx.reviewRuntime.run(TOOLS_INPUT);
     const audit = result.audit;
 
-    const toolMessages = (audit.requests[4]?.messages ?? []).filter((message) => message.role === "tool");
+    const toolMessages = toolMessagesOf(audit.requests[4]);
     expect(toolMessages).toHaveLength(2);
     const first = await oracleResult("review.get_file", getFileArgs);
     expect(toolMessages[0]?.content).toBe(first);
@@ -145,6 +156,50 @@ describe("kernel 工具挂载：toolsEnabled + ledger 全链路", () => {
 
     expect(audit.toolCallLog[1]?.resultSummary).toBe(toolMessages[1]?.content);
     expect(audit.ledger).toHaveLength(1);
+  });
+
+  it("多工具混调：get_diff / get_symbol / get_file 经注册面执行，字节与冻结 executor 一致", async () => {
+    const getSymbolArgs = '{"symbol":"sumFirst"}';
+    const getFileArgs = `{"path":"${MATH_UTILS}","startLine":1,"endLine":40}`;
+    const script: readonly FakeLlmScriptStep[] = [
+      ...PHASE_1_TO_3,
+      {
+        kind: "reply",
+        content: "",
+        toolCalls: [
+          { id: "call-diff", name: "review.get_diff", arguments: "{}" },
+          { id: "call-symbol", name: "review.get_symbol", arguments: getSymbolArgs },
+          { id: "call-file", name: "review.get_file", arguments: getFileArgs },
+        ],
+      },
+      NOTES_REPLY,
+      ...PHASE_5_TO_6,
+    ];
+    const { ctx } = await mount(script, { policy: { toolsEnabled: true, ledger: true } });
+
+    const result = await ctx.reviewRuntime.run(TOOLS_INPUT);
+    const audit = result.audit;
+
+    // —— 三工具经 ToolRuntime 串行执行（含空参 get_diff 的 args ?? {} 路径与
+    // get_symbol 的符号抽取），结果逐字节对齐冻结 executor oracle（首读原文）
+    const toolMessages = toolMessagesOf(audit.requests[4]);
+    expect(toolMessages.map((message) => message.toolCallId)).toEqual([
+      "call-diff",
+      "call-symbol",
+      "call-file",
+    ]);
+    expect(toolMessages[0]?.content).toBe(await oracleResult("review.get_diff", "{}"));
+    expect(toolMessages[1]?.content).toBe(await oracleResult("review.get_symbol", getSymbolArgs));
+    expect(toolMessages[2]?.content).toBe(await oracleResult("review.get_file", getFileArgs));
+
+    // —— 审计账目：实际发生 3；toolCallLog 串行序；Ledger 跨 kind 登记 3 条
+    expect(audit.toolCalls).toBe(3);
+    expect(audit.toolCallLog.map((record) => record.name)).toEqual([
+      "review.get_diff",
+      "review.get_symbol",
+      "review.get_file",
+    ]);
+    expect(audit.ledger?.map((entry) => entry.id)).toEqual(["ctx#001", "ctx#002", "ctx#003"]);
   });
 
   it("max_tool_calls=6：第 7 次调用被守卫拒绝，拒绝理由进入下一请求", async () => {
@@ -165,7 +220,7 @@ describe("kernel 工具挂载：toolsEnabled + ledger 全链路", () => {
     const result = await ctx.reviewRuntime.run(TOOLS_INPUT);
     const audit = result.audit;
 
-    const toolMessages = (audit.requests[4]?.messages ?? []).filter((message) => message.role === "tool");
+    const toolMessages = toolMessagesOf(audit.requests[4]);
     expect(toolMessages).toHaveLength(7);
     for (const [index, message] of toolMessages.entries()) {
       if (index < 6) {
@@ -175,11 +230,15 @@ describe("kernel 工具挂载：toolsEnabled + ledger 全链路", () => {
       }
     }
 
-    // —— 审计账目：尝试数 = 7（含被拒尝试），拒绝同样留痕
-    expect(audit.toolCalls).toBe(7);
+    // —— 审计账目（对齐 POC1 契约）：toolCalls = 实际发生（执行 + 失败，≤ max
+    // ——被拒尝试不计入，= 6）；拒绝全量留痕 toolCallLog（7，POC1 同样把 SKIPPED
+    // 记录进日志）；耗尽记 truncationReason + 发生阶段 phaseLog note
+    expect(audit.toolCalls).toBe(6);
     expect(audit.toolCallLog).toHaveLength(7);
     expect(audit.toolCallLog[6]?.resultSummary).toBe("Error: tool call budget exhausted");
-    // run 未被截断（DSH 形态：拒绝为工具错误结果，模型继续收尾 turn）
+    expect(audit.truncationReasons).toEqual(["TOOL_BUDGET_EXHAUSTED"]);
+    expect(audit.phaseLog[3]?.note).toBe("1 tool call(s) skipped: budget exhausted");
+    // truncated = POC1「评审未完成」语义（!complete）——预算耗尽不翻转它
     expect(audit.truncated).toBe(false);
   });
 
@@ -197,6 +256,8 @@ describe("kernel 工具挂载：toolsEnabled + ledger 全链路", () => {
     for (const request of result.audit.requests) {
       expect(request.tools).toEqual([]);
     }
+    expect(result.audit.toolCalls).toBe(0);
+    expect(result.audit.truncationReasons).toEqual([]);
     expect(result.audit.ledger).toBeUndefined();
     expect(result.audit.toolCallLog).toEqual([]);
   });

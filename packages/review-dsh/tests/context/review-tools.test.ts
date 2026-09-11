@@ -127,16 +127,22 @@ describe("Context Ledger：功能态命中返回引用而非原文", () => {
 
 describe("createToolBudgetGuard：max_tool_calls 计数守卫", () => {
   it("放行前 max 次，其后每次拒绝并返回拒绝理由", () => {
-    const guard = createToolBudgetGuard(2);
+    const budget = createToolBudgetGuard(2);
     const execution = stubExec("review.get_diff", {});
-    expect(guard(execution)).toBeUndefined();
-    expect(guard(execution)).toBeUndefined();
-    expect(guard(execution)).toBe("tool call budget exhausted");
-    expect(guard(execution)).toBe("tool call budget exhausted");
+    expect(budget.guard(execution)).toBeUndefined();
+    expect(budget.guard(execution)).toBeUndefined();
+    expect(budget.allowedCount()).toBe(2);
+    expect(budget.guard(execution)).toBe("tool call budget exhausted");
+    expect(budget.guard(execution)).toBe("tool call budget exhausted");
+    // 拒绝不进放行计数（POC1 toolCalls = 实际发生语义），单独累计
+    expect(budget.allowedCount()).toBe(2);
+    expect(budget.deniedCount()).toBe(2);
   });
 
   it("max=0 时立即拒绝（防呆下界）", () => {
-    const guard = createToolBudgetGuard(0);
-    expect(guard(stubExec("review.get_diff", {}))).toBe("tool call budget exhausted");
+    const budget = createToolBudgetGuard(0);
+    expect(budget.guard(stubExec("review.get_diff", {}))).toBe("tool call budget exhausted");
+    expect(budget.allowedCount()).toBe(0);
+    expect(budget.deniedCount()).toBe(1);
   });
 });

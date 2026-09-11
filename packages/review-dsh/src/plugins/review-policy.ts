@@ -128,7 +128,8 @@ export interface ReviewPolicyConfig {
   readonly toolsEnabled?: boolean;
   /**
    * Context Ledger 功能态（config E 形态开关）；缺省 false = 惰性态（A/B/C/D
-   * 重复读取返回原文，行为与 T05/T06 一致）。仅在 toolsEnabled 时有意义。
+   * 重复读取返回原文，行为与 T05/T06 一致）。需与 toolsEnabled 同启（组装期
+   * 校验拒绝「ledger 而无工具」的静默空转组合）。
    */
   readonly ledger?: boolean;
 }
@@ -169,6 +170,11 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
   inject: ["systemPrompt"],
   apply(ctx: Context, config: ReviewPolicyConfig) {
     const turnTimeoutMs = resolveTurnTimeoutMs(config.turnTimeoutMs);
+    if (config.ledger === true && config.toolsEnabled !== true) {
+      throw new Error(
+        "review-policy: ledger requires toolsEnabled (config E mounts the 7 review.* tools; a ledger without tools has no effect — set toolsEnabled: true or drop ledger)",
+      );
+    }
 
     const disposer = ctx.systemPrompt.section({
       name: "review-zone-a",

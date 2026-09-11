@@ -21,7 +21,13 @@ import type { ToolExecutor } from "../../../../src/loop/tools.js";
 import type { ReviewToolkit } from "../../../../src/tools/toolkit.js";
 
 /** 预算拒绝理由（POC1 SKIPPED 文案去前缀；DSH 物化为 "Error: <reason>" 工具错误结果） */
-export const TOOL_BUDGET_EXHAUSTED_REASON = "tool call budget exhausted";
+const TOOL_BUDGET_EXHAUSTED_REASON = "tool call budget exhausted";
+
+/**
+ * 预算拒绝的物化结果文本（dsh-tools 拒绝路径固定为 `Error: ${reason}` 且
+ * isError=true）——runtime 据此从事件流辨识预算拒绝，归因 phaseLog note。
+ */
+export const TOOL_BUDGET_DENIED_TEXT = `Error: ${TOOL_BUDGET_EXHAUSTED_REASON}`;
 
 /**
  * POC1 工具箱 → 7 个 DSH ToolDefinition（顺序 = toolkit.tools = REVIEW_TOOL_ORDER）。
@@ -50,18 +56,34 @@ function toDshToolDefinition(tool: Poc1ToolSchema, executor: ToolExecutor): Tool
   };
 }
 
+/** max_tool_calls 预算守卫句柄：guard 注册进 DSH 注册面，闭包计数供审计读取 */
+export interface ToolBudgetGuard {
+  /** 预分发守卫：放行 = undefined；拒绝 = 拒绝理由 */
+  readonly guard: ToolGuard;
+  /** 已放行（实际发生）的调用数：POC1 toolCalls 语义（执行 + 失败计入，恒 ≤ max） */
+  allowedCount(): number;
+  /** 被拒次数（预算耗尽后仍尝试的调用：只进 toolCallLog，不计入 toolCalls） */
+  deniedCount(): number;
+}
+
 /**
  * max_tool_calls 守卫（POC1 上界语义的 DSH 注册面形态）：每次放行计数 +1，
  * 达到上界后每次尝试拒绝。守卫在预分发阶段同步运行——同回复内并行组也不可能
  * 超限（JS 单线程下计数自增原子）。
  */
-export function createToolBudgetGuard(maxToolCalls: number): ToolGuard {
-  let used = 0;
-  return (): string | undefined => {
-    if (used >= maxToolCalls) {
-      return TOOL_BUDGET_EXHAUSTED_REASON;
-    }
-    used += 1;
-    return undefined;
+export function createToolBudgetGuard(maxToolCalls: number): ToolBudgetGuard {
+  let allowed = 0;
+  let denied = 0;
+  return {
+    guard: (): string | undefined => {
+      if (allowed >= maxToolCalls) {
+        denied += 1;
+        return TOOL_BUDGET_EXHAUSTED_REASON;
+      }
+      allowed += 1;
+      return undefined;
+    },
+    allowedCount: () => allowed,
+    deniedCount: () => denied,
   };
 }
