@@ -36,7 +36,7 @@ Phase 1 的目标是把 POC1 冻结薄 harness（spec #1，13 票收官）里验
 
 | ADR | 决策 | 一句话理由 |
 |---|---|---|
-| [0005](../adr/0005-dsh-migration-stance.md) | 迁移姿态：核内插件化、薄 harness 冻结、1:1 迁移、npm 版本锁定、两层验收门 | 产品 CLI 与实验平台若各自为政必然双运行时分叉；同时换运行时与机制则指标变化无法归因；正式 benchmark 继续跑冻结 harness 保可复现 |
+| [0005](../adr/0005-phase1-dsh-migration-posture.md) | 迁移姿态：核内插件化、薄 harness 冻结、1:1 迁移、npm 版本锁定、两层验收门 | 产品 CLI 与实验平台若各自为政必然双运行时分叉；同时换运行时与机制则指标变化无法归因；正式 benchmark 继续跑冻结 harness 保可复现 |
 | [0006](../adr/0006-dsh-kernel-shape.md) | 内核形态：标准 agent-loop + 策略驱动器，显式最小树 | `setFactory` 等于重写 agent-loop 且零生产示例；dsh-base 携带 session-title-llm / 遥测等组装件，与 Zone A 字节纪律冲突 |
 
 **实现注记驱动的形态修正**（正文结论 vs 实测落点，详见 ADR-0006 各票注记）：
