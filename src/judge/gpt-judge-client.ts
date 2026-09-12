@@ -9,7 +9,8 @@
  * - 模型异构约束：默认 gpt-5.2-pro（MCR-Bench 论文 LLM-Hit-Judge 的最高人工一致性档，
  *   QWK 0.73），deepseek 系 id 直接拒绝（判定链要求与被测模型不同源；glm 等异构 id 可用，
  *   #33）；
- * - judge 参数锁定论文协议值：temperature 0.2 / top_p 0.95 / max_tokens 8192；
+ * - judge 校准参数锁定论文协议值：temperature 0.2 / top_p 0.95；max_tokens 为
+ *   模型族感知容量上界（gpt-5.2-pro 8192 论文锚 / glm 等推理模型 32768，#39）；
  * - 有界重试：仅 429/500/503 与网络/超时错误重试；响应体异常与请求构造错直接抛。
  */
 

@@ -181,10 +181,11 @@ describe("GptJudgeClient — 请求 wire 形状（协议参数锁定）", () => 
     await client.adjudicate(judgeRequest());
     const body = JSON.parse(stub.requests[0]?.body ?? "{}") as Record<string, unknown>;
     expect(body.model).toBe("glm-5-3-260814");
-    // 协议参数不随模型漂移（论文协议值锁定）
+    // 校准参数不随模型漂移（论文协议值锁定）；max_tokens 是模型族感知容量上界——
+    // glm 推理模型 completion 含 reasoning tokens，8192 会被吃满截断（#39）
     expect(body.temperature).toBe(0.2);
     expect(body.top_p).toBe(0.95);
-    expect(body.max_tokens).toBe(8192);
+    expect(body.max_tokens).toBe(32_768);
   });
 
   it("baseUrl 归一化（尾斜杠合并）", async () => {

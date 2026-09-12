@@ -51,6 +51,8 @@ export {
   JUDGE_MAX_TOKENS,
   JUDGE_TEMPERATURE,
   JUDGE_TOP_P,
+  judgeCompletionCapOf,
+  REASONING_JUDGE_MAX_TOKENS,
   validateModel,
 } from "./gpt-request-mapper.js";
 export {
