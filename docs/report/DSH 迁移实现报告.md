@@ -8,7 +8,7 @@
 
 Phase 1 的目标是把 POC1 冻结薄 harness（spec #1，13 票收官）里验证过的 Review Runtime 迁到 DeepSeek Harness（DSH）内核上：核内五插件（review-policy / review-runtime / review-context / review-cache / review-evidence）挂在 sdk-minimal 式显式最小组装树，六阶段骨架由策略驱动器代码级强制，LLM 走移植的 DeepSeek 适配器（wire 请求字节即审计源），核外研究工具链（dataset / judge / metrics 聚合 / experiment runner）零改动复用；对外两张脸——`review-agent review` 单 MR 检视 CLI 与实验 runner（SDK JSON-RPC 长驻内核进程，agent-per-unit）。验收 = 确定性纪律门（fake LLM、零网络、进 CI）+ 指标对齐门（gateway 45 单元，±1σ 波动带）。
 
-一句话结论：**迁移按 spec 全量交付**——12/12 工单关闭，双门验收一层全绿、一层门不过但归因干净：确定性纪律门 44/44 绿进 CI；指标对齐门池化 ±1σ 口径 18/20 格落带（2 OUT），七项归因证据一致指向协议固有响应非确定性（POC1 自身重跑同模式且摆幅更大）而非 DSH 运行时系统偏差——检验力问题的处置是诊断票 #30（POC1 自身重跑噪声底校准，已批准执行）。
+一句话结论：**迁移按 spec 全量交付**——12/12 工单关闭，双门验收一层全绿、一层门不过但归因干净：确定性纪律门 44/44 绿进 CI；指标对齐门池化 ±1σ 口径 18/20 格落带（2 OUT），七项归因证据一致指向协议固有响应非确定性（POC1 自身重跑同模式且摆幅更大）而非 DSH 运行时系统偏差——检验力问题经诊断票 #30 收口（门把 POC1 自身都判不过，DSH 出带在噪声底量级内；对称 max σ 修订口径下除统计无效格全落带）。
 
 ## 2. 需求与任务结构
 
@@ -107,7 +107,7 @@ A–E 真源 = 冻结 `CONFIGS`（spec #1）：`REVIEW_PRESETS` 注册表逐字�
 
 ## 9. 遗留事项与下一步
 
-- **#30（已批准执行中）**：±1σ 门检验力校准——冻结 POC1 harness 以全新实验 id `poc1-vul4j-gateway-r2` 重跑同 45 单元（2026-09-12 启动，网关与 key 沿用），产出 run2-vs-run1 池化自门 OUT 率，对照 #29 的 DSH-vs-POC1 OUT 率（18/20 IN），给出门协议修订建议（样本量 / 判定口径 / 噪声底扣除）。
+- **#30（已收口，2026-09-12）**：±1σ 门检验力校准——冻结 POC1 harness 以全新实验 id `poc1-vul4j-gateway-r2` 重跑同 45 单元（executed=45 failed=0 一遍全过，总耗 8,405,766 = 基线 0.74×）。结论：**门把 POC1 自身都判不过**（正向 1 OUT / 反向 3 OUT，方向依赖），DSH 的 2 OUT 落在噪声底量级内、OUT 格不重叠、单元配对偏差四指标全部 ≤ 自身重跑；对称 max σ 修订口径下 DSH 19/20 IN（唯一 OUT 为基线 n=2 统计无效格）——**DSH 内核接管实验主数据无系统偏差证据**。见《[DSH 指标对齐门噪声底报告](./DSH%20指标对齐门噪声底报告.md)》。
 - **后置消融票**（spec Out of Scope 登记）：DSH 原生机制采用——compaction seam / `ctx.toolResultPruner` / session seed-fork / request-header 事件，每票带 before/after 指标。
 - **Phase 2+**：策略改进的受控对比自此可在 DSH 内核上进行（实验面 runner 已接内核）；对齐门结论落定后另议冻结薄 harness 删除。
 - review-knowledge 插件（知识引擎）属 Phase 4；AACR-Bench 公开评测接入为独立线程。
