@@ -319,6 +319,7 @@ describe("报告与 dashboard — Cache Break 统计可见", () => {
         perSourceLimit: null,
         caseFilter: [],
         judge: false,
+        judgeModel: null,
         humanReviewRate: 0.1,
         humanReviewSeed: "seed",
       },

@@ -1,10 +1,11 @@
 import path from "node:path";
 import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
+import type { LlmClient } from "../contracts/llm-client.js";
 import { runUnitKeyString } from "../contracts/run-unit.js";
 import { DeepSeekClient } from "../deepseek/deepseek-client.js";
 import type { JudgeClient } from "../judge/index.js";
-import { GptJudgeClient } from "../judge/index.js";
+import { DEFAULT_JUDGE_MODEL, GptJudgeClient } from "../judge/index.js";
 import {
   applyListFlag,
   type CliArgSpec,
@@ -67,6 +68,8 @@ export interface ExperimentCliOptions {
   readonly perSourceLimit: number | null;
   readonly caseFilter: readonly string[];
   readonly judge: boolean;
+  /** 判定链 judge 模型 id（null = DEFAULT_JUDGE_MODEL，论文协议锚；异构约束经计划校验 fail fast，#33） */
+  readonly judgeModel: string | null;
   readonly humanReviewRate: number;
   readonly humanReviewSeed: string;
   readonly casesFile?: string;
@@ -105,7 +108,9 @@ export function experimentCliUsage(): string {
     "  --high-risk-only          only riskClass=High cases (required for v4-pro)",
     "  --limit <n>               per-source case cap (default: none)",
     "  --case <id>               exact caseId filter (repeatable)",
-    "  --judge                   run the GPT judge-chain stage (needs OPENAI_API_KEY)",
+    "  --judge                   run the judge-chain stage (needs OPENAI_API_KEY)",
+    `  --judge-model <id>        judge model id (default: ${DEFAULT_JUDGE_MODEL}; must be`,
+    "                            heterogeneous with the review model, e.g. glm-5-3-260814",
     "  --human-review-rate <r>   sampling rate in (0,1] (default: 0.1)",
     "  --human-review-seed <s>   deterministic sampling seed",
     "  --report-only             rebuild the report from persisted records (no review runs)",
@@ -127,6 +132,7 @@ type CliValues = {
   perSourceLimit: number | null;
   caseFilter: string[];
   judge: boolean;
+  judgeModel: string | null;
   humanReviewRate: number;
   humanReviewSeed: string;
   casesFile: string | undefined;
@@ -176,6 +182,10 @@ const VALUE_FLAGS: Readonly<Record<string, ValueFlagParser<CliValues>>> = {
     value.length === 0
       ? flagFail("--case requires a non-empty caseId")
       : flagOk({ caseFilter: [...current.caseFilter, value] }),
+  "--judge-model": (value) =>
+    value.trim().length === 0
+      ? flagFail("--judge-model must be a non-empty model id")
+      : flagOk({ judgeModel: value }),
   "--human-review-rate": (value) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 && parsed <= 1
@@ -215,6 +225,7 @@ function defaultCliValues(): CliValues {
     perSourceLimit: null,
     caseFilter: [],
     judge: false,
+    judgeModel: null,
     humanReviewRate: DEFAULT_HUMAN_REVIEW_RATE,
     humanReviewSeed: DEFAULT_HUMAN_REVIEW_SEED,
     casesFile: undefined,
@@ -252,6 +263,7 @@ function finalizeCliValues(
       perSourceLimit: values.perSourceLimit,
       caseFilter: values.caseFilter,
       judge: values.judge,
+      judgeModel: values.judgeModel,
       humanReviewRate: values.humanReviewRate,
       humanReviewSeed: values.humanReviewSeed,
       ...(values.casesFile !== undefined ? { casesFile: values.casesFile } : {}),
@@ -290,6 +302,7 @@ export function cliOptionsToPlan(options: ExperimentCliOptions): ExperimentPlan 
     perSourceLimit: options.perSourceLimit,
     caseFilter: options.caseFilter,
     judge: options.judge,
+    judgeModel: options.judgeModel,
     humanReviewRate: options.humanReviewRate,
     humanReviewSeed: options.humanReviewSeed,
   };
@@ -300,8 +313,9 @@ export function cliOptionsToPlan(options: ExperimentCliOptions): ExperimentPlan 
 /** 运行时依赖注入点（测试注入 fake 客户端与环境；缺省为真实客户端 + process.env） */
 export interface CliRunDeps {
   readonly env: Readonly<Record<string, string | undefined>>;
-  readonly createLlmClient: () => DeepSeekClient;
-  readonly createJudgeClient: () => JudgeClient;
+  readonly createLlmClient: () => LlmClient;
+  /** judge 工厂收到计划 judgeModel（null = DEFAULT_JUDGE_MODEL；#33 下传缝） */
+  readonly createJudgeClient: (judgeModel: string | null) => JudgeClient;
   /** DSH 内核驱动工厂（--kernel dsh 时调用一次；缺省 = 真实 host 进程驱动） */
   readonly createDshKernel: () => DshKernelDriver;
   readonly log: (line: string) => void;
@@ -314,7 +328,8 @@ export function defaultCliRunDeps(): CliRunDeps {
   return {
     env: process.env,
     createLlmClient: () => new DeepSeekClient(),
-    createJudgeClient: () => new GptJudgeClient(),
+    createJudgeClient: (judgeModel) =>
+      new GptJudgeClient(judgeModel === null ? {} : { model: judgeModel }),
     createDshKernel: () => createDshKernelDriver(),
     log,
     loadEnvLocal: () => {
@@ -405,7 +420,7 @@ type ReportableOutcome = Parameters<typeof buildExperimentReport>[0];
 function buildJudgeDeps(plan: ExperimentPlan, deps: CliRunDeps): ReportDeps {
   return plan.judge
     ? {
-        judgeClient: deps.createJudgeClient(),
+        judgeClient: deps.createJudgeClient(plan.judgeModel),
         onJudgeUnit: (event) => deps.log(`  judge ${event.unit}: ${event.status}`),
       }
     : {};
@@ -465,6 +480,7 @@ async function runReviewMatrix(
   deps.log(
     `[experiment ${plan.experimentId}] ${dataset.cases.length} case(s) loaded; ` +
       `model=${plan.model} kernel=${options.kernel} verifier=${plan.verifier} ` +
+      `judge=${plan.judge ? (plan.judgeModel ?? DEFAULT_JUDGE_MODEL) : "off"} ` +
       `reps=${plan.reps} configs=${plan.configs.join("")}`,
   );
   const dshKernel = options.kernel === "dsh" ? deps.createDshKernel() : undefined;

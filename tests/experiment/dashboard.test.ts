@@ -49,6 +49,7 @@ function buildReport(options: MetricsOptions = DEFAULT_METRICS_OPTIONS): Experim
     perSourceLimit: null,
     caseFilter: [],
     judge: false,
+    judgeModel: null,
     humanReviewRate: 0.1,
     humanReviewSeed: "seed",
   };

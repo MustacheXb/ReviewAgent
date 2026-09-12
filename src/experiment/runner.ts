@@ -372,7 +372,9 @@ export async function loadPersistedPlan(experimentRoot: string): Promise<Experim
       `no ${PLAN_FILE} found under ${experimentRoot}: run the experiment first (or check the --id)`,
     );
   }
-  return raw as ExperimentPlan;
+  // #33 前的 plan.json 无 judgeModel 字段 → 归一 null（当时即缺省 gpt-5.2-pro 口径）
+  const persisted = raw as ExperimentPlan & { judgeModel?: string | null };
+  return persisted.judgeModel === undefined ? { ...persisted, judgeModel: null } : persisted;
 }
 
 /** 已有实验目录的重建入口：读 cases.json（判定链与人工抽检的评估输入） */

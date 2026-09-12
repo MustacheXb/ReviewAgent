@@ -6,7 +6,7 @@ import type { RunResult } from "../contracts/run.js";
  * 指标计算 + 规则粗筛 + S/A/B 判定的类型契约（Ticket 10 / issue #11）。
  * 本模块全部为纯函数：无网络、无 LLM、无文件系统副作用，输入输出全显式。
  *
- * 判定链位置：原生真值 → 【本模块：规则粗筛】→ GPT 系 LLM-as-judge（Ticket 11）→ 人工抽检。
+ * 判定链位置：原生真值 → 【本模块：规则粗筛】→ LLM-as-judge（与被测模型不同源，Ticket 11）→ 人工抽检。
  * 本模块是判定链第一级，其输出（FindingVerdict / TruthMiss）供 judge 校准复用。
  *
  * 配置键口径（T13 起）：分组键为 MetricsConfigId（A–E 主矩阵 + "claude-code"

@@ -1,7 +1,7 @@
 /**
  * 指标计算 + 规则粗筛 + S/A/B 判定（Ticket 10 / issue #11）——纯函数旁路 ②。
  *
- * 判定链：原生真值 → 【规则粗筛】→ GPT 系 LLM-as-judge（Ticket 11）→ 人工抽检。
+ * 判定链：原生真值 → 【规则粗筛】→ LLM-as-judge（与被测模型不同源，Ticket 11）→ 人工抽检。
  * 复用接口：
  * - Ticket 11（judge 校准）：screenFindings / evaluateRun 产出的 FindingVerdict、TruthMiss 与
  *   计数，judge 在其上做异构复核；computePRF / computeEfficiencyMetrics 可用 judge 复核后的计数重算。

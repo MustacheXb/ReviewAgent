@@ -1,11 +1,16 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { EnvLocalLoadResult } from "../../src/shared/env-local.js";
+import { FakeJudgeClient } from "../../src/judge/fake-judge-client.js";
 import {
   cliOptionsToPlan,
   experimentCliUsage,
   parseExperimentArgs,
   runExperimentCli,
 } from "../../src/experiment/cli.js";
+import { experimentMainCase, judgeAdjudication, scriptedLlmClient } from "./helpers.js";
 
 /**
  * parseExperimentArgs 特征锁定测试（表驱动重构的行为零变化锚点）：
@@ -189,6 +194,22 @@ describe("parseExperimentArgs — 布尔 flag 与可重复参数", () => {
     expect(parsed.ok && parsed.options.casesFile).toBe("ds.json");
     expect(parsed.ok && parsed.options.runsRoot).toBe("out/runs");
   });
+
+  it("--judge-model 下传（#33）：双取值形式、缺省 null、空白拒绝、用法含旗标", () => {
+    const spaced = parseOk(["--id", "a", "--judge-model", "glm-5-3-260814"]);
+    if (!spaced.ok) throw new Error("unreachable");
+    expect(spaced.options.judgeModel).toBe("glm-5-3-260814");
+    const inline = parseOk(["--id=a", "--judge-model=glm-5-3-260814"]);
+    if (!inline.ok) throw new Error("unreachable");
+    expect(inline.options.judgeModel).toBe("glm-5-3-260814");
+    const bare = parseOk(["--id", "a"]);
+    if (!bare.ok) throw new Error("unreachable");
+    expect(bare.options.judgeModel).toBeNull();
+    expect(parseFail(["--id", "a", "--judge-model", "  "]).message).toBe(
+      "--judge-model must be a non-empty model id",
+    );
+    expect(experimentCliUsage()).toContain("--judge-model");
+  });
 });
 
 describe("runExperimentCli — .env.local 装载接线", () => {
@@ -261,5 +282,85 @@ describe("cliOptionsToPlan — 校验透传", () => {
     const parsed = parseOk(["--id", "a", "--model", "pro"]);
     if (!parsed.ok) throw new Error("unreachable");
     expect(() => cliOptionsToPlan(parsed.options)).toThrow(/highRiskOnly/);
+  });
+
+  it("--judge-model 进计划：glm-5.3 通过；deepseek 系由计划校验拦截（启动即失败，不烧检视预算）", () => {
+    const parsed = parseOk(["--id", "a", "--judge", "--judge-model", "glm-5-3-260814"]);
+    if (!parsed.ok) throw new Error("unreachable");
+    expect(cliOptionsToPlan(parsed.options).judgeModel).toBe("glm-5-3-260814");
+    const bad = parseOk(["--id", "a", "--judge-model", "deepseek-chat"]);
+    if (!bad.ok) throw new Error("unreachable");
+    expect(() => cliOptionsToPlan(bad.options)).toThrow(/heterogeneous/);
+  });
+});
+
+describe("runExperimentCli — --judge-model 下传接线（#33）", () => {
+  /** 空装载结果（exists=false 形态；本组测试不依赖 .env.local） */
+  function noFileResult(): EnvLocalLoadResult {
+    return { filePath: ".env.local", exists: false, loadedKeys: [], skippedKeys: [], malformedLines: [] };
+  }
+
+  /** 单 case × config C × 1 rep 的一场小实验（脚本化 LLM + 捕获模型的 judge 工厂） */
+  async function runTinyExperiment(
+    workDir: string,
+    argv: readonly string[],
+    captured: { model?: string | null },
+  ): Promise<{ readonly exitCode: number; readonly logs: string[]; readonly judgeCalls: number }> {
+    const casesFile = path.join(workDir, "cases.json");
+    await writeFile(casesFile, JSON.stringify([experimentMainCase("judge-model-case")]), "utf8");
+    const fakeJudge = FakeJudgeClient.fromAdjudications([judgeAdjudication()]);
+    const logs: string[] = [];
+    const exitCode = await runExperimentCli([...argv, "--cases-file", casesFile, "--runs-root", workDir], {
+      env: { DEEPSEEK_API_KEY: "test-ds-key", OPENAI_API_KEY: "test-openai-key" },
+      createLlmClient: () => scriptedLlmClient(1),
+      createJudgeClient: (model) => {
+        captured.model = model;
+        return fakeJudge;
+      },
+      loadEnvLocal: () => noFileResult(),
+      log: (line) => logs.push(line),
+    });
+    return { exitCode, logs, judgeCalls: fakeJudge.callCount };
+  }
+
+  it("createJudgeClient 收到计划 judgeModel；judge 阶段真实消费；plan.json 留痕含模型 id", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-judge-model-"));
+    try {
+      const captured: { model?: string | null } = {};
+      const { exitCode, logs, judgeCalls } = await runTinyExperiment(workDir, [
+        "--id", "judge-model-wiring",
+        "--configs", "C",
+        "--reps", "1",
+        "--judge",
+        "--judge-model", "glm-5-3-260814",
+      ], captured);
+      expect(exitCode).toBe(0);
+      expect(captured.model).toBe("glm-5-3-260814");
+      expect(judgeCalls).toBe(1); // 判定链真实执行（FakeJudge 消费 1 单元裁定）
+      expect(logs.join("\n")).toContain("judge");
+      const planJson = JSON.parse(
+        await readFile(path.join(workDir, "judge-model-wiring", "plan.json"), "utf8"),
+      ) as { readonly judgeModel?: string | null };
+      expect(planJson.judgeModel).toBe("glm-5-3-260814");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("缺省不传 → createJudgeClient 收到 null（客户端层落到 DEFAULT_JUDGE_MODEL）", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-judge-default-"));
+    try {
+      const captured: { model?: string | null } = {};
+      const { exitCode } = await runTinyExperiment(workDir, [
+        "--id", "judge-model-default",
+        "--configs", "C",
+        "--reps", "1",
+        "--judge",
+      ], captured);
+      expect(exitCode).toBe(0);
+      expect(captured.model).toBeNull();
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
   });
 });

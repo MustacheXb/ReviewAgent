@@ -173,6 +173,20 @@ describe("GptJudgeClient — 请求 wire 形状（协议参数锁定）", () => 
     expect(messages[1]?.content).toContain("<ground_truth_defect_1>");
   });
 
+  it("显式 model 选项下传到请求体（#33 --judge-model 链路的 wire 锚点）", async () => {
+    const { client, stub } = makeClient({
+      handler: () => okJudgeResponse(happyAdjudication()),
+      model: "glm-5-3-260814",
+    });
+    await client.adjudicate(judgeRequest());
+    const body = JSON.parse(stub.requests[0]?.body ?? "{}") as Record<string, unknown>;
+    expect(body.model).toBe("glm-5-3-260814");
+    // 协议参数不随模型漂移（论文协议值锁定）
+    expect(body.temperature).toBe(0.2);
+    expect(body.top_p).toBe(0.95);
+    expect(body.max_tokens).toBe(8192);
+  });
+
   it("baseUrl 归一化（尾斜杠合并）", async () => {
     const { client, stub } = makeClient({
       handler: () => okJudgeResponse(happyAdjudication()),
@@ -191,14 +205,15 @@ describe("GptJudgeClient — 请求 wire 形状（协议参数锁定）", () => 
 });
 
 describe("GptJudgeClient — 模型异构约束（spec user story 25）", () => {
-  it("deepseek 系 model id 客户端层拒绝", async () => {
+  it("deepseek 系 model id 客户端层拒绝（与被测模型不同源；glm 等异构 id 通过）", async () => {
     const { client } = makeClient({
       handler: () => okJudgeResponse(happyAdjudication()),
       model: "deepseek-v3.2",
     });
     await expect(client.adjudicate(judgeRequest())).rejects.toThrowError(
-      /must be GPT-family and heterogeneous/,
+      /must be heterogeneous from the DeepSeek system under test/,
     );
+    expect(validateModel("glm-5-3-260814")).toBe("glm-5-3-260814");
   });
 
   it("validateModel：空 model 拒绝；gpt 系接受", () => {

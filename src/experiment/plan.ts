@@ -1,6 +1,8 @@
 import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
 import type { MRCase } from "../contracts/mr-case.js";
+// barrel 入口（judge 模块统一出口）；别名消歧——deepseek/request-mapper 另有一个校验检视模型的 validateModel
+import { validateModel as validateJudgeModel } from "../judge/index.js";
 
 /**
  * 实验计划（Ticket 12 / issue #13）：五配置 × 数据集 × 重复 的可编排放跑参数。
@@ -52,6 +54,12 @@ export interface ExperimentPlan {
   readonly caseFilter: readonly string[];
   /** 是否执行判定链 judge 阶段（需要 OPENAI_API_KEY） */
   readonly judge: boolean;
+  /**
+   * 判定链 judge 模型 id（null = DEFAULT_JUDGE_MODEL，论文协议锚）。
+   * 异构约束与 judge 客户端同源（validateJudgeModel：与被测模型不同源，deepseek 系拒绝），
+   * 计划层校验 fail fast——不烧检视预算后才发现模型非法（#33）。
+   */
+  readonly judgeModel: string | null;
   /** 人工抽检比例（0, 1] */
   readonly humanReviewRate: number;
   /** 人工抽检种子（固定并随报告落盘，可复现） */
@@ -146,6 +154,16 @@ export function validateExperimentPlan(plan: ExperimentPlan): void {
   }
   if (typeof plan.judge !== "boolean") {
     throw new Error(`plan.judge must be a boolean (got ${JSON.stringify(plan.judge)})`);
+  }
+  if (plan.judgeModel !== null && typeof plan.judgeModel !== "string") {
+    // 持久化 JSON 边界的类型护栏（raw cast 可能带来任意 JSON 值）
+    throw new Error(
+      `plan.judgeModel must be null or a non-empty model id (got ${JSON.stringify(plan.judgeModel)})`,
+    );
+  }
+  if (plan.judgeModel !== null) {
+    // 空串/空白与异构约束单源：与 judge 客户端同一规则（deepseek 系拒绝；glm 等异构 id 通过）
+    validateJudgeModel(plan.judgeModel);
   }
   if (
     typeof plan.humanReviewRate !== "number" ||

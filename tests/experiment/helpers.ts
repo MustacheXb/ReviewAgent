@@ -118,6 +118,7 @@ export function experimentPlan(overrides: Partial<ExperimentPlan> = {}): Experim
     perSourceLimit: null,
     caseFilter: [],
     judge: false,
+    judgeModel: null,
     humanReviewRate: 0.1,
     humanReviewSeed: "test-seed-2026",
     ...overrides,

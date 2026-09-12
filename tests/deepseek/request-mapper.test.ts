@@ -231,6 +231,7 @@ describe("v4-pro 高险子集消融（spec #1 user story 15）", () => {
       perSourceLimit: 5,
       caseFilter: [],
       judge: false,
+      judgeModel: null,
       humanReviewRate: 0.1,
       humanReviewSeed: "v4-pro-ablation-seed",
     };

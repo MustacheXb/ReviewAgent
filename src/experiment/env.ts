@@ -4,13 +4,13 @@
  *
  * 必需性规则：
  * - DEEPSEEK_API_KEY：恒必需（检视主模型 deepseek-v4-flash，DeepSeekClient 构造 fail fast）；
- * - OPENAI_API_KEY：plan.judge = true 时必需（GPT 系 LLM-as-judge，异构约束：
- *   judge 不得用 deepseek 系模型，src/judge/gpt-judge-client.ts）。
+ * - OPENAI_API_KEY：plan.judge = true 时必需（LLM-as-judge，异构约束：judge 模型须与被测
+ *   模型不同源，src/judge/gpt-judge-client.ts）。
  */
 
 /** 检视主模型 key 的环境变量名（与 src/deepseek/ 保持一致） */
 export const DEEPSEEK_API_KEY_ENV_VAR = "DEEPSEEK_API_KEY";
-/** GPT 系 judge key 的环境变量名（与 src/judge/gpt-judge-client.ts 保持一致） */
+/** judge key 的环境变量名（OpenAI 兼容端点；与 src/judge/gpt-judge-client.ts 保持一致） */
 export const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 
 export interface ExperimentEnvRequirements {
@@ -47,7 +47,7 @@ export function checkExperimentEnv(
 export function envErrorMessage(missing: readonly string[]): string {
   const purposes = new Map<string, string>([
     [DEEPSEEK_API_KEY_ENV_VAR, "review model deepseek-v4-flash (DeepSeek API)"],
-    [OPENAI_API_KEY_ENV_VAR, "LLM-as-judge stage (GPT, heterogeneous with the review model)"],
+    [OPENAI_API_KEY_ENV_VAR, "LLM-as-judge stage (heterogeneous with the review model)"],
   ]);
   const lines = missing.map(
     (name) => `  - ${name}: required for ${purposes.get(name) ?? "this experiment"}`,

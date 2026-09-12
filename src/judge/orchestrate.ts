@@ -1,5 +1,5 @@
 /**
- * 判定链编排（Ticket 11 / issue #12）：规则粗筛（T10）→ GPT 系 LLM-as-judge 异构复核
+ * 判定链编排（Ticket 11 / issue #12）：规则粗筛（T10）→ LLM-as-judge（与被测模型不同源）异构复核
  * → 双口径指标（规则口径 / judge 口径），复核后的计数经 T10 纯函数重算
  * （computePRF / computeEfficiencyMetrics，即「judge 裁定结果可回填 Metrics 计算管线」）。
  *

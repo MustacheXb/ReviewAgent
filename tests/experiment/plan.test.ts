@@ -87,6 +87,30 @@ describe("validateExperimentPlan（fail fast）", () => {
       validateExperimentPlan(experimentPlan({ model: "deepseek-v4-pro", highRiskOnly: true })),
     ).not.toThrow();
   });
+
+  it("judgeModel：null = 缺省；异构 id（glm-5.3）通过（#33）", () => {
+    expect(() => validateExperimentPlan(experimentPlan({ judgeModel: null }))).not.toThrow();
+    expect(() =>
+      validateExperimentPlan(experimentPlan({ judgeModel: "glm-5-3-260814" })),
+    ).not.toThrow();
+  });
+
+  it("judgeModel：deepseek 系在计划层即拒（fail fast，不烧检视预算）；空串/非串拒绝", () => {
+    expect(() =>
+      validateExperimentPlan(experimentPlan({ judgeModel: "deepseek-v4-flash" })),
+    ).toThrow(/heterogeneous/);
+    // 空串/空白经 validateJudgeModel 单源拒绝（与 judge 客户端同一消息）
+    expect(() => validateExperimentPlan(experimentPlan({ judgeModel: "" }))).toThrow(
+      /non-empty string/,
+    );
+    expect(() => validateExperimentPlan(experimentPlan({ judgeModel: "  " }))).toThrow(
+      /non-empty string/,
+    );
+    // 非串是持久化 JSON 边界的类型护栏（plan 层消息）
+    expect(() => validateExperimentPlan(experimentPlan({ judgeModel: 42 as never }))).toThrow(
+      /judgeModel/,
+    );
+  });
 });
 
 describe("expandPlan（入样过滤 → 配置求交 → rep 展开）", () => {

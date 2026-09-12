@@ -1,10 +1,10 @@
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeLlmClient } from "../../src/fake/fake-llm-client.js";
 import { HAPPY_PATH_TOTAL_USAGE, HAPPY_PATH_RESPONSES } from "../helpers/happy-path-script.js";
-import { runExperiment } from "../../src/experiment/runner.js";
+import { loadPersistedPlan, runExperiment } from "../../src/experiment/runner.js";
 import { CASES_FILE, FAILURES_FILE, PLAN_FILE } from "../../src/experiment/runner.js";
 import type { ExperimentOutcome } from "../../src/experiment/runner.js";
 import {
@@ -318,5 +318,20 @@ describe("runExperiment（ExperimentOutcome 形状）", () => {
     expect(outcome.experimentId).toBe("runner-shape");
     expect(outcome.expanded.units).toHaveLength(2);
     expect(outcome.expanded.skipped).toEqual([]);
+  });
+});
+
+describe("loadPersistedPlan（旧版 plan 兼容，#33）", () => {
+  it("#33 前的 plan.json 无 judgeModel 字段 → 归一为 null（当时即缺省 gpt-5.2-pro 口径）", async () => {
+    const root = path.join(workDir, "legacy-plan");
+    await mkdir(root, { recursive: true });
+    const legacy: Record<string, unknown> = {
+      ...experimentPlan({ experimentId: "legacy-plan" }),
+    };
+    delete legacy.judgeModel;
+    await writeFile(path.join(root, PLAN_FILE), JSON.stringify(legacy), "utf8");
+    const plan = await loadPersistedPlan(root);
+    expect(plan.judgeModel).toBeNull();
+    expect(plan.experimentId).toBe("legacy-plan");
   });
 });

@@ -1,5 +1,5 @@
 /**
- * GPT 系 LLM-as-judge 真实客户端（原生 fetch，OpenAI 兼容 chat completions，无 SDK）。
+ * LLM-as-judge 真实客户端（原生 fetch，OpenAI 兼容 chat completions，无 SDK）。
  *
  * HTTP/重试/脱敏/解析内核共享自 src/shared/openai-http-kernel.ts（与 DeepSeek 主客户端
  * 去重）；本文件只保留 judge 特有语义。
@@ -7,7 +7,8 @@
  * 纪律：
  * - API key 仅经 OPENAI_API_KEY 环境变量或显式参数注入，绝不硬编码、绝不出现在错误信息中；
  * - 模型异构约束：默认 gpt-5.2-pro（MCR-Bench 论文 LLM-Hit-Judge 的最高人工一致性档，
- *   QWK 0.73），deepseek 系 id 直接拒绝（判定链要求与被测模型不同源）；
+ *   QWK 0.73），deepseek 系 id 直接拒绝（判定链要求与被测模型不同源；glm 等异构 id 可用，
+ *   #33）；
  * - judge 参数锁定论文协议值：temperature 0.2 / top_p 0.95 / max_tokens 8192；
  * - 有界重试：仅 429/500/503 与网络/超时错误重试；响应体异常与请求构造错直接抛。
  */

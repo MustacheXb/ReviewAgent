@@ -1,6 +1,6 @@
 /**
  * Judge 契约（Ticket 11 / issue #12）——判定链第二级：
- * 原生真值 → 规则粗筛（T10）→ 【GPT 系 LLM-as-judge】→ 10% 人工抽检。
+ * 原生真值 → 规则粗筛（T10）→ 【LLM-as-judge（与被测模型不同源）】→ 10% 人工抽检。
  *
  * 协议来源：MCR-Bench 的 LLM-Hit-Judge（ISSTA 2026，arXiv 2608.27442；
  * 官方 evaluation/Metric/prompt_builder.py + llm_evaluator.py，2026-09-03 逐字核验）：

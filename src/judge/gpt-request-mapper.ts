@@ -45,7 +45,7 @@ export function buildGptJudgeBody(
   };
 }
 
-/** 非空校验 + 异构约束：拒绝 deepseek 系 model id（判定链要求 GPT 系异构校准） */
+/** 非空校验 + 异构约束：拒绝 deepseek 系 model id（判定链要求与被测模型不同源，#33 措辞泛化） */
 export function validateModel(model: string): string {
   if (typeof model !== "string" || model.trim().length === 0) {
     throw new JudgeClientError(
@@ -54,7 +54,7 @@ export function validateModel(model: string): string {
   }
   if (/deepseek/i.test(model)) {
     throw new JudgeClientError(
-      `judge model must be GPT-family and heterogeneous from the DeepSeek system under test (got ${JSON.stringify(model)}); the judgment chain requires a different model family (spec #1 user story 25)`,
+      `judge model must be heterogeneous from the DeepSeek system under test (got ${JSON.stringify(model)}); the judgment chain requires a model from a different family (spec #1 user story 25)`,
     );
   }
   return model;
