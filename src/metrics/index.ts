@@ -22,6 +22,24 @@ export { computeF1, computePRF } from "./quality.js";
 export { computeEfficiencyMetrics } from "./efficiency.js";
 export { summarize, summarizeDefined } from "./stats.js";
 export {
+  DEFAULT_ALIGNMENT_GATE_OPTIONS,
+  DEFAULT_GATE_METRICS,
+  runAlignmentGate,
+  validateAlignmentGateOptions,
+} from "./alignment-gate.js";
+export type {
+  AlignmentGateOptions,
+  AlignmentGateReport,
+  GateBand,
+  GateCell,
+  GateCellStatus,
+  GateExecutionWindow,
+  GateSideInput,
+  GateUnitSample,
+  PairedMetricResult,
+  TemporalPairingReport,
+} from "./alignment-gate.js";
+export {
   buildMetricsReport,
   evaluateCase,
   evaluateRun,

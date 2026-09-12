@@ -1,15 +1,22 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { LlmResponse } from "../../src/contracts/llm-client.js";
 import type { MRCase } from "../../src/contracts/mr-case.js";
+import type { RunResult } from "../../src/contracts/run.js";
 import type { JudgeAdjudication } from "../../src/judge/contracts.js";
 import { FakeLlmClient } from "../../src/fake/fake-llm-client.js";
 import type { ExperimentPlan, VerifierMode } from "../../src/experiment/plan.js";
+import { RunStore, toRunSnapshot } from "../../src/experiment/run-store.js";
+import type { RunRecord } from "../../src/experiment/run-store.js";
+import { makeFinding } from "../metrics/helpers.js";
 import { HAPPY_PATH_RESPONSES } from "../helpers/happy-path-script.js";
 import { reply, usage } from "../helpers/llm-script.js";
 import { SAMPLE_MR_CASE } from "../fixtures/sample-mr-case.js";
 
 /**
  * 实验模块测试夹具：MRCase 工厂（labels.source 取实验词表）、
- * 脚本化 LLM（六阶段 × units，含 Verifier 追加调用）、judge 裁定、计划工厂。
+ * 脚本化 LLM（六阶段 × units，含 Verifier 追加调用）、judge 裁定、计划工厂、
+ * 对齐门 run 目录工厂（RunRecord + RunStore round-trip）。
  * 零网络零真实 LLM：全部经 FakeLlmClient / FakeJudgeClient。
  */
 
@@ -115,4 +122,60 @@ export function experimentPlan(overrides: Partial<ExperimentPlan> = {}): Experim
     humanReviewSeed: "test-seed-2026",
     ...overrides,
   };
+}
+
+/** 对齐门测试用 RunResult（单 finding 命中真值；usage/审计零事件；可整体覆盖） */
+export function gateRunResult(overrides: Partial<RunResult> = {}): RunResult {
+  return {
+    caseId: "c1",
+    configId: "C",
+    findings: [makeFinding()],
+    usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 500 },
+    rounds: 1,
+    toolCalls: 0,
+    audit: {
+      requests: [],
+      toolCallLog: [],
+      phaseLog: [],
+      rejections: [],
+      cacheBreaks: [],
+      truncated: false,
+      truncationReasons: [],
+    },
+    ...overrides,
+  };
+}
+
+/** 对齐门测试用 RunRecord（baseline = gateRunResult 快照；effective/rep 等可覆盖） */
+export function gateRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
+  return {
+    source: "vul4j",
+    caseId: "c1",
+    configId: "C",
+    rep: 1,
+    model: "deepseek-v4-flash",
+    verifier: "off",
+    completedAt: "2026-09-08T22:11:00.000Z",
+    baseline: toRunSnapshot(gateRunResult()),
+    effective: null,
+    verifierPass: null,
+    ...overrides,
+  };
+}
+
+/** 造一个对齐门侧 run 目录：cases.json + runs/ 记录树（记录经 RunStore.save 落盘） */
+export async function makeGateRunDir(
+  workDir: string,
+  name: string,
+  cases: readonly MRCase[],
+  records: readonly RunRecord[],
+): Promise<string> {
+  const runDir = path.join(workDir, name);
+  await mkdir(runDir, { recursive: true });
+  await writeFile(path.join(runDir, "cases.json"), JSON.stringify(cases), "utf8");
+  const store = new RunStore(path.join(runDir, "runs"));
+  for (const entry of records) {
+    await store.save(entry);
+  }
+  return runDir;
 }
