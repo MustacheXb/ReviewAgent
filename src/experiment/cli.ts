@@ -106,7 +106,7 @@ export function experimentCliUsage(): string {
     "  --verifier <off|on>       second-pass verifier ablation (default: off)",
     "  --model <id>              review model id: free ids accepted, wire bytes per provider",
     "                            profile (aliases: flash, pro; default: flash)",
-    "  --kernel <poc1|dsh>       review execution kernel (default: poc1; dsh locks model to flash)",
+    "  --kernel <poc1|dsh>       review execution kernel (default: poc1; dsh passes free model ids through, retired ids rejected, #45)",
     "  --high-risk-only          only riskClass=High cases (required for v4-pro)",
     "  --limit <n>               per-source case cap (default: none)",
     "  --case <id>               exact caseId filter (repeatable)",
