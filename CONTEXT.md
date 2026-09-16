@@ -90,7 +90,26 @@ _Avoid_: CWE（那是通用公共分类）
 Review Intelligence Efficiency：Recall × Precision / Total Tokens，核心质量-成本效率指标。
 
 **CARC**:
-Cache-adjusted Review Cost：非缓存输入 Token + 输出 Token + 工具成本的真实成本口径。
+Cache-adjusted Review Cost：非缓存输入 Token + 输出 Token + 工具成本的真实成本口径；provider 无缓存计量字段时按全输入未命中计价的**保守上界**（真命中率越高，真实成本只会更低，ADR-0008）。
+_Avoid_: 把上界当真实成本混比（无计量侧方向已知偏高）
+
+### 模型接入
+
+**被测模型（reviewer）**:
+实验的自变量侧 LLM：model id 经 `--model` 自由指定（`flash`/`pro` 别名保留），url / key 经角色命名环境变量（`REVIEWER_*` > 旧 `DEEPSEEK_*`）；进 manifest 留痕（model + baseUrl，绝不记 key，ADR-0008）。
+_Avoid_: 检视模型（与 judge 混淆）、白名单模型（准入白名单已由画像表取代）
+
+**参数画像（Provider Profile）**:
+模型 id pattern → wire 序列化策略（thinking 字段 / completion 信封）+ usage 能力声明（有无缓存计量）的单源查表（review-llm）；未知模型回落保守默认档（ADR-0008）。
+_Avoid_: 画像当 endpoint 配置（「怎么说话」与「连到哪」两轴正交）
+
+**指标分口径（capability-scoped metrics）**:
+指标按画像 usage 能力声明分派：无缓存计量的 provider 记 Cache-Hit-Rate 为 N/A、CARC 为保守上界（ADR-0008）。
+_Avoid_: N/A 当 0（未知 ≠ 无命中）
+
+**异构（Heterogeneity）**:
+判定链要求 judge 与被测模型不同源：精确同 id 或同已知 provider 家族即视为同源；同源 + 双侧官方端点拒绝，任一侧自定义接入点在场降级 warning（实验者自证责任）。
+_Avoid_: 只看 provider 名是否相同（家族按 id 前缀判定）
 
 ### 基准
 

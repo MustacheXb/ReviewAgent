@@ -114,7 +114,7 @@ cd reference_project/deepseek-harness  && git checkout 5dda764   # 其余同理
 | 文档 | 内容 |
 |---|---|
 | [`CONTEXT.md`](CONTEXT.md) | 领域词汇表（Minimal Sufficient Context / Zone A–C / Finding 等术语唯一权威） |
-| [`docs/adr/`](docs/adr/) | 架构决策记录 0001–0007（POC1 独立 harness / 模型钉扎 / 零构建静态代码情报 / S 级判据 / DSH 迁移姿态 / DSH 内核形态 / 对齐门协议 v2） |
+| [`docs/adr/`](docs/adr/) | 架构决策记录 0001–0008（POC1 独立 harness / 模型钉扎 / 零构建静态代码情报 / S 级判据 / DSH 迁移姿态 / DSH 内核形态 / 对齐门协议 v2 / 被测模型可换 + 指标按 provider 能力分口径） |
 | [`docs/design/`](docs/design/) | 总体架构设计方案 / VUL4J 评测方案与数据复制指南 / AACR-Bench 公开评测接入方案 / DSH 偏差清单 |
 | [`docs/report/`](docs/report/) | POC1 实现报告 / DSH 迁移实现报告 / DSH 指标对齐门报告（含噪声底）/ Phase 2 主数据分析报告 |
 | [`docs/plan/`](docs/plan/) | 项目分阶段实现计划书 |
