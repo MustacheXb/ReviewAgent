@@ -51,7 +51,13 @@ export {
   JUDGE_TEMPERATURE,
   JUDGE_TOP_P,
   judgeCompletionCapOf,
+  judgeHeterogeneityOf,
   validateModel,
+} from "./gpt-request-mapper.js";
+export type {
+  GptRequestMapperOptions,
+  HeterogeneityOptions,
+  JudgeHeterogeneityVerdict,
 } from "./gpt-request-mapper.js";
 export {
   DEFAULT_GPT_JUDGE_MAX_RETRIES,
@@ -61,6 +67,7 @@ export {
   hasJudgeApiKey,
   JUDGE_API_KEY_ENV_VAR,
   JUDGE_URL_ENV_VAR,
+  JUDGE_URL_ENV_VARS,
   OPENAI_API_BASE_URL,
   OPENAI_API_KEY_ENV_VAR,
   OPENAI_URL_ENV_VAR,

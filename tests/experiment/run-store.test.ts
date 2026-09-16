@@ -134,6 +134,10 @@ describe("recordToRunResult（重建形状）", () => {
     const withoutPath = toRunSnapshot(withoutAuditPath);
     expect(recordToRunResult(record({ baseline: withoutPath })).auditPath).toBeUndefined();
   });
+
+  it("record.model 透传进重建的 RunResult（#43 指标层画像分口径用）", () => {
+    expect(recordToRunResult(record()).model).toBe("deepseek-v4-flash");
+  });
 });
 
 describe("RunStore（断点续跑读写）", () => {

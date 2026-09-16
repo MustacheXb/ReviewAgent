@@ -23,6 +23,8 @@ export type ReviewPhase =
 export interface RunResult {
   readonly caseId: string;
   readonly configId: MetricsConfigId;
+  /** 被测模型 id（#43 指标层画像分口径用；旧记录 / DSH 路径缺省 = 走旧口径） */
+  readonly model?: string;
   readonly findings: readonly Finding[];
   /** 本次 Run 累计 */
   readonly usage: LlmUsage;

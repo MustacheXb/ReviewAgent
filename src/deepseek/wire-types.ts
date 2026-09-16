@@ -38,9 +38,11 @@ export interface WireTool {
 export interface WireChatCompletionsRequest {
   readonly model: string;
   readonly messages: readonly WireMessage[];
-  /** ADR-0002：thinking 默认档，显式传（字节可审计，勿依赖服务端默认） */
-  readonly thinking: { readonly type: "enabled" };
-  readonly reasoning_effort: "high";
+  /** ADR-0002：DeepSeek 画像显式传（字节可审计，勿依赖服务端默认）；画像 omit 时不出场（#43） */
+  readonly thinking?: { readonly type: "enabled" };
+  readonly reasoning_effort?: "high";
+  /** completion 信封（画像表驱动，#43）：DeepSeek 不传，glm 32768，未知模型 8192 */
+  readonly max_tokens?: number;
   readonly tools?: readonly WireTool[];
   readonly tool_choice?: "auto";
   readonly stream: false;

@@ -56,7 +56,7 @@ export function evaluateRun(
     );
   }
   const screening = screenFindings(run.findings, mrCase.truth, options.screening);
-  const tokens = computeTokenMetrics(run.usage);
+  const tokens = computeTokenMetrics(run.usage, run.model);
   const toolCostTokens = computeToolCostTokens(run, options.toolCost);
   const lineLevel = computePRF(screening.lineLevel);
   const fileLevel = computePRF(screening.fileLevel);

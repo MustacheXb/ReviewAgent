@@ -10,6 +10,7 @@
  * - deepseek（#41）：DeepSeek 接入常量
  * - profile（#42）：provider 参数画像表（thinking 策略 / completion 信封 /
  *   usage 能力声明），judge 链为首个消费者，#43 reviewer 侧跟进
+ * - reviewer（#43）：reviewer 角色环境变量（角色命名 + DEEPSEEK_* 兼容别名）
  */
 
 export {
@@ -20,12 +21,20 @@ export {
   DEEPSEEK_API_KEY_ENV_VAR,
   DEEPSEEK_URL_ENV_VAR,
 } from "./deepseek.js";
-export { profileOf } from "./profile.js";
+export { DEFAULT_COMPLETION_MAX_TOKENS, profileOf, providerFamilyOf } from "./profile.js";
 export type {
+  ProviderFamily,
   ProviderProfile,
   ThinkingSerialization,
   UsageCapabilities,
 } from "./profile.js";
+export {
+  hasReviewerApiKey,
+  REVIEWER_API_KEY_ENV_VAR,
+  REVIEWER_API_KEY_ENV_VARS,
+  REVIEWER_URL_ENV_VAR,
+  REVIEWER_URL_ENV_VARS,
+} from "./reviewer.js";
 export {
   nonNegativeIntOption,
   positiveIntOption,

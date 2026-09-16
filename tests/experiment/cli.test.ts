@@ -133,13 +133,20 @@ describe("parseExperimentArgs — 列表 / 枚举 / 数值校验", () => {
     );
   });
 
-  it("--model 接受别名与全名", () => {
-    expect(parseOk(["--id", "a", "--model", "pro"]).ok && parseOk(["--id", "a", "--model", "deepseek-v4-pro"]).ok).toBe(true);
-    const alias = parseOk(["--id", "a", "--model", "pro"]);
-    const full = parseOk(["--id", "a", "--model", "deepseek-v4-pro"]);
-    expect(alias.ok && alias.options.model).toBe(full.ok && full.options.model);
-    expect(parseFail(["--id", "a", "--model", "gpt-9"]).message).toBe(
-      '--model must be one of flash, deepseek-v4-flash, pro, deepseek-v4-pro (got "gpt-9")',
+  it("--model 自由 id + 别名（#43）：任意非空 id 直通；flash/pro 别名保留", () => {
+    const flash = parseOk(["--id", "a", "--model", "flash"]);
+    expect(flash.ok && flash.options.model).toBe("deepseek-v4-flash");
+    const pro = parseOk(["--id", "a", "--model", "pro"]);
+    const proFull = parseOk(["--id", "a", "--model", "deepseek-v4-pro"]);
+    expect(pro.ok && pro.options.model).toBe(proFull.ok && proFull.options.model);
+    expect(pro.ok && pro.options.model).toBe("deepseek-v4-pro");
+    const free = parseOk(["--id", "a", "--model", "qwen3-max"]);
+    expect(free.ok && free.options.model).toBe("qwen3-max");
+    // 首尾空白容忍（trim 后直通）
+    const padded = parseOk(["--id", "a", "--model", "  glm-4.7  "]);
+    expect(padded.ok && padded.options.model).toBe("glm-4.7");
+    expect(parseFail(["--id", "a", "--model", "  "]).message).toBe(
+      "--model must be a non-empty model id",
     );
   });
 
@@ -284,13 +291,15 @@ describe("cliOptionsToPlan — 校验透传", () => {
     expect(() => cliOptionsToPlan(parsed.options)).toThrow(/highRiskOnly/);
   });
 
-  it("--judge-model 进计划：glm-5.3 通过；deepseek 系由计划校验拦截（启动即失败，不烧检视预算）", () => {
+  it("--judge-model 进计划：glm-5.3 通过；deepseek 系也入计划（#43 拒绝移至 CLI 预检）", () => {
     const parsed = parseOk(["--id", "a", "--judge", "--judge-model", "glm-5-3-260814"]);
     if (!parsed.ok) throw new Error("unreachable");
     expect(cliOptionsToPlan(parsed.options).judgeModel).toBe("glm-5-3-260814");
-    const bad = parseOk(["--id", "a", "--judge-model", "deepseek-chat"]);
-    if (!bad.ok) throw new Error("unreachable");
-    expect(() => cliOptionsToPlan(bad.options)).toThrow(/heterogeneous/);
+    // #43：异构降级需 env 知识（自定义接入点判定），计划层只做形状校验——
+    // 降级放行的计划持久化后必须可重校验（resume）
+    const downgraded = parseOk(["--id", "a", "--judge-model", "deepseek-chat"]);
+    if (!downgraded.ok) throw new Error("unreachable");
+    expect(cliOptionsToPlan(downgraded.options).judgeModel).toBe("deepseek-chat");
   });
 });
 
@@ -359,6 +368,318 @@ describe("runExperimentCli — --judge-model 下传接线（#33）", () => {
       ], captured);
       expect(exitCode).toBe(0);
       expect(captured.model).toBeNull();
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runExperimentCli — 自定义模型 + manifest 接线（#43）", () => {
+  function noFileResult(): EnvLocalLoadResult {
+    return { filePath: ".env.local", exists: false, loadedKeys: [], skippedKeys: [], malformedLines: [] };
+  }
+
+  /** 单 case × config C × 1 rep 的一场小实验（脚本化 LLM；env 注入驱动预检与 manifest） */
+  async function runTinyModelExperiment(
+    workDir: string,
+    argv: readonly string[],
+    env: Record<string, string | undefined>,
+  ): Promise<{ readonly exitCode: number; readonly logs: string[] }> {
+    const casesFile = path.join(workDir, "cases.json");
+    await writeFile(casesFile, JSON.stringify([experimentMainCase("custom-model-case")]), "utf8");
+    const logs: string[] = [];
+    const exitCode = await runExperimentCli(
+      [...argv, "--configs", "C", "--reps", "1", "--cases-file", casesFile, "--runs-root", workDir],
+      {
+        env,
+        createLlmClient: () => scriptedLlmClient(1),
+        loadEnvLocal: () => noFileResult(),
+        log: (line) => logs.push(line),
+      },
+    );
+    return { exitCode, logs };
+  }
+
+  it("--model qwen3-max 跑通：plan.json 记录自由模型 id（记录与请求同源）", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-custom-model-"));
+    try {
+      const { exitCode } = await runTinyModelExperiment(workDir, ["--id", "custom-model", "--model", "qwen3-max"], {
+        REVIEWER_API_KEY: "test-reviewer-key-001",
+      });
+      expect(exitCode).toBe(0);
+      const planText = await readFile(path.join(workDir, "custom-model", "plan.json"), "utf8");
+      const planJson = JSON.parse(planText) as { readonly model?: string };
+      expect(planJson.model).toBe("qwen3-max");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("manifest 记录检视链接入点：REVIEWER_URL > DEEPSEEK_URL > 缺省；绝不记录 key", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-manifest-url-"));
+    try {
+      // 推荐名优先
+      const custom = await runTinyModelExperiment(workDir, ["--id", "manifest-custom-url"], {
+        REVIEWER_API_KEY: "test-reviewer-key-001",
+        REVIEWER_URL: "https://gateway.example.com",
+        DEEPSEEK_URL: "https://legacy.example.com",
+      });
+      expect(custom.exitCode).toBe(0);
+      const customPlan = JSON.parse(
+        await readFile(path.join(workDir, "manifest-custom-url", "plan.json"), "utf8"),
+      ) as { readonly reviewerBaseUrl?: string };
+      expect(customPlan.reviewerBaseUrl).toBe("https://gateway.example.com");
+
+      // 旧名兼容别名
+      const legacy = await runTinyModelExperiment(workDir, ["--id", "manifest-legacy-url"], {
+        DEEPSEEK_API_KEY: "test-reviewer-key-001",
+        DEEPSEEK_URL: "https://relay.example.com",
+      });
+      expect(legacy.exitCode).toBe(0);
+      const legacyPlan = JSON.parse(
+        await readFile(path.join(workDir, "manifest-legacy-url", "plan.json"), "utf8"),
+      ) as { readonly reviewerBaseUrl?: string };
+      expect(legacyPlan.reviewerBaseUrl).toBe("https://relay.example.com");
+
+      // 未设 → 官方缺省；key 纪律：key 值绝不进 manifest
+      const none = await runTinyModelExperiment(workDir, ["--id", "manifest-default-url"], {
+        REVIEWER_API_KEY: "test-reviewer-key-001",
+      });
+      expect(none.exitCode).toBe(0);
+      const nonePlanText = await readFile(path.join(workDir, "manifest-default-url", "plan.json"), "utf8");
+      const nonePlan = JSON.parse(nonePlanText) as { readonly reviewerBaseUrl?: string };
+      expect(nonePlan.reviewerBaseUrl).toBe("https://api.deepseek.com");
+      expect(nonePlanText).not.toContain("test-reviewer-key-001");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("env 预检双名：REVIEWER_API_KEY 单独满足；两名均缺 → 启动阻断（清单用推荐名形态）", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-env-precheck-"));
+    try {
+      const blocked = await runTinyModelExperiment(workDir, ["--id", "env-precheck-blocked"], {});
+      expect(blocked.exitCode).toBe(2);
+      const joined = blocked.logs.join("\n");
+      expect(joined).toContain("REVIEWER_API_KEY (or DEEPSEEK_API_KEY)");
+      expect(joined).not.toContain("test-");
+
+      const passed = await runTinyModelExperiment(workDir, ["--id", "env-precheck-role-name"], {
+        REVIEWER_API_KEY: "role-key-only",
+      });
+      expect(passed.exitCode).toBe(0);
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runExperimentCli — 异构校验预检（#43：同源判定以被测模型为对照系，自定义接入点降 warning）", () => {
+  function noFileResult(): EnvLocalLoadResult {
+    return { filePath: ".env.local", exists: false, loadedKeys: [], skippedKeys: [], malformedLines: [] };
+  }
+
+  /**
+   * 单 case × config C × 1 rep + judge 的小实验（脚本化 LLM + 捕获模型与异构
+   * 上下文的 judge 工厂；env 注入驱动预检与降级判定）。
+   */
+  async function runTinyJudgeExperiment(
+    workDir: string,
+    argv: readonly string[],
+    env: Record<string, string | undefined>,
+    captured: {
+      model?: string | null;
+      downgrade?: boolean;
+      customEndpoint?: boolean;
+      reviewerModel?: string;
+    },
+  ): Promise<{ readonly exitCode: number; readonly logs: string[] }> {
+    const casesFile = path.join(workDir, "cases.json");
+    await writeFile(casesFile, JSON.stringify([experimentMainCase("judge-heterogeneity-case")]), "utf8");
+    const fakeJudge = FakeJudgeClient.fromAdjudications([judgeAdjudication()]);
+    const logs: string[] = [];
+    const exitCode = await runExperimentCli(
+      [...argv, "--configs", "C", "--reps", "1", "--cases-file", casesFile, "--runs-root", workDir],
+      {
+        env,
+        createLlmClient: () => scriptedLlmClient(1),
+        createJudgeClient: (model, context) => {
+          captured.model = model;
+          captured.downgrade = context.heterogeneityDowngraded;
+          captured.customEndpoint = context.customLlmEndpoint;
+          captured.reviewerModel = context.reviewerModel;
+          return fakeJudge;
+        },
+        loadEnvLocal: () => noFileResult(),
+        log: (line) => logs.push(line),
+      },
+    );
+    return { exitCode, logs };
+  }
+
+  it("deepseek 系 judge + deepseek 被测（缺省）+ 双侧官方端点 → 启动即拒（exit 2，不烧检视预算；judge 工厂未被调用）", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-hetero-block-"));
+    try {
+      const captured: { model?: string | null; downgrade?: boolean; customEndpoint?: boolean; reviewerModel?: string } = {};
+      const { exitCode, logs } = await runTinyJudgeExperiment(
+        workDir,
+        ["--id", "hetero-blocked", "--judge", "--judge-model", "deepseek-v4-flash"],
+        { REVIEWER_API_KEY: "test-reviewer-key-001", JUDGE_API_KEY: "test-judge-key-001" },
+        captured,
+      );
+      expect(exitCode).toBe(2);
+      const joined = logs.join("\n");
+      expect(joined).toContain("heterogeneous");
+      // 错误消息写明降级出口：自证异构后经自定义接入点承担
+      expect(joined).toContain("REVIEWER_URL");
+      expect(captured.model).toBeUndefined();
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  // 四个变量名（新旧 × 双侧）任一即触发降级——逐名独立用例（各自计时预算）
+  const CUSTOM_ENDPOINT_VARS: readonly (readonly [string, string])[] = [
+    ["REVIEWER_URL", "https://gw.example.com"],
+    ["DEEPSEEK_URL", "https://relay.example.com"],
+    ["JUDGE_URL", "https://judge-gw.example.com"],
+    ["OPENAI_URL", "https://legacy-judge.example.com"],
+  ];
+
+  for (const [name, value] of CUSTOM_ENDPOINT_VARS) {
+    it(`deepseek 系 judge + ${name} → warning 放行 + 降级上下文下传 judge 工厂`, async () => {
+      const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-hetero-warn-"));
+      try {
+        const captured: { model?: string | null; downgrade?: boolean; customEndpoint?: boolean; reviewerModel?: string } = {};
+        const { exitCode, logs } = await runTinyJudgeExperiment(
+          workDir,
+          ["--id", "hetero-warned", "--judge", "--judge-model", "deepseek-v4-flash"],
+          {
+            REVIEWER_API_KEY: "test-reviewer-key-001",
+            JUDGE_API_KEY: "test-judge-key-001",
+            [name]: value,
+          },
+          captured,
+        );
+        expect(exitCode).toBe(0);
+        const joined = logs.join("\n");
+        expect(joined).toContain("warning");
+        expect(joined).toContain("same-source");
+        expect(captured.model).toBe("deepseek-v4-flash");
+        expect(captured.downgrade).toBe(true);
+        expect(captured.customEndpoint).toBe(true);
+        // 对照系 = 被测模型（缺省 deepseek-v4-flash）
+        expect(captured.reviewerModel).toBe("deepseek-v4-flash");
+      } finally {
+        await rm(workDir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("deepseek 系 judge + glm 被测（--model 自由 id）→ 家族异构放行（修复按 DeepSeek 被测的盲目拒绝）", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-hetero-cross-"));
+    try {
+      const captured: { model?: string | null; downgrade?: boolean; customEndpoint?: boolean; reviewerModel?: string } = {};
+      const { exitCode, logs } = await runTinyJudgeExperiment(
+        workDir,
+        ["--id", "hetero-cross", "--model", "glm-4.7", "--judge", "--judge-model", "deepseek-v4-flash"],
+        { REVIEWER_API_KEY: "test-reviewer-key-001", JUDGE_API_KEY: "test-judge-key-001" },
+        captured,
+      );
+      expect(exitCode).toBe(0);
+      expect(logs.join("\n")).not.toContain("same-source");
+      expect(captured.model).toBe("deepseek-v4-flash");
+      expect(captured.reviewerModel).toBe("glm-4.7");
+      expect(captured.downgrade).toBe(false);
+      expect(captured.customEndpoint).toBe(false);
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("glm judge + glm 被测（同家族）+ 官方端点 → 启动即拒（自由 id 暴露的盲区，exit 2）", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-hetero-glm-block-"));
+    try {
+      const captured: { model?: string | null; downgrade?: boolean; customEndpoint?: boolean; reviewerModel?: string } = {};
+      const { exitCode, logs } = await runTinyJudgeExperiment(
+        workDir,
+        ["--id", "hetero-glm-blocked", "--model", "glm-4.7", "--judge", "--judge-model", "glm-5-3-260814"],
+        { REVIEWER_API_KEY: "test-reviewer-key-001", JUDGE_API_KEY: "test-judge-key-001" },
+        captured,
+      );
+      expect(exitCode).toBe(2);
+      expect(logs.join("\n")).toContain("heterogeneous");
+      expect(captured.model).toBeUndefined();
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("glm judge + glm 被测（同家族）+ 自定义接入点 → warning 放行（降级通道不挑家族）", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-hetero-glm-warn-"));
+    try {
+      const captured: { model?: string | null; downgrade?: boolean; customEndpoint?: boolean; reviewerModel?: string } = {};
+      const { exitCode, logs } = await runTinyJudgeExperiment(
+        workDir,
+        ["--id", "hetero-glm-warned", "--model", "glm-4.7", "--judge", "--judge-model", "glm-5-3-260814"],
+        {
+          REVIEWER_API_KEY: "test-reviewer-key-001",
+          JUDGE_API_KEY: "test-judge-key-001",
+          REVIEWER_URL: "https://gw.example.com",
+        },
+        captured,
+      );
+      expect(exitCode).toBe(0);
+      const joined = logs.join("\n");
+      expect(joined).toContain("warning");
+      expect(joined).toContain("same-source");
+      expect(captured.downgrade).toBe(true);
+      expect(captured.reviewerModel).toBe("glm-4.7");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("异构 id judge（glm）+ deepseek 被测 + 自定义接入点 → 无 warning、降级上下文 false", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-hetero-glm-"));
+    try {
+      const captured: { model?: string | null; downgrade?: boolean; customEndpoint?: boolean; reviewerModel?: string } = {};
+      const { exitCode, logs } = await runTinyJudgeExperiment(
+        workDir,
+        ["--id", "hetero-glm", "--judge", "--judge-model", "glm-5-3-260814"],
+        {
+          REVIEWER_API_KEY: "test-reviewer-key-001",
+          JUDGE_API_KEY: "test-judge-key-001",
+          REVIEWER_URL: "https://gw.example.com",
+        },
+        captured,
+      );
+      expect(exitCode).toBe(0);
+      expect(logs.join("\n")).not.toContain("same-source");
+      expect(captured.downgrade).toBe(false);
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("缺省 judge 模型（gpt-5.2-pro）+ 自定义接入点 → 无 warning（论文协议锚恒异构）", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "review-agent-hetero-default-"));
+    try {
+      const captured: { model?: string | null; downgrade?: boolean; customEndpoint?: boolean; reviewerModel?: string } = {};
+      const { exitCode, logs } = await runTinyJudgeExperiment(
+        workDir,
+        ["--id", "hetero-default", "--judge"],
+        {
+          REVIEWER_API_KEY: "test-reviewer-key-001",
+          JUDGE_API_KEY: "test-judge-key-001",
+          REVIEWER_URL: "https://gw.example.com",
+        },
+        captured,
+      );
+      expect(exitCode).toBe(0);
+      expect(logs.join("\n")).not.toContain("same-source");
+      expect(captured.model).toBeNull();
+      expect(captured.downgrade).toBe(false);
     } finally {
       await rm(workDir, { recursive: true, force: true });
     }

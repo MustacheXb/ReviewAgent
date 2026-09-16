@@ -63,13 +63,17 @@ CI（push / PR）跑两层门：`discipline-gate`（确定性纪律门 · 零网
 实验运行器从仓库根 `.env.local`（gitignored）自动装载凭据，缺失即启动报错并给清单，绝不回显 key 值：
 
 ```ini
-DEEPSEEK_API_KEY=...    # 被测模型（恒需）
-DEEPSEEK_URL=...        # 可选：中转/代理端点覆盖
-JUDGE_API_KEY=...       # judge 环节（--judge 时需要，任选一名；火山网关 glm 走此通道）
-JUDGE_URL=...           # 可选：自定义 OpenAI 兼容网关端点
-OPENAI_API_KEY=...      # 兼容别名（旧名；与 JUDGE_API_KEY 同设时新名优先，#42）
-OPENAI_URL=...          # 兼容别名（旧名）
+REVIEWER_API_KEY=...     # 被测模型（恒需，推荐名；#43）
+DEEPSEEK_API_KEY=...     # 兼容别名（旧名；与 REVIEWER_API_KEY 同设时新名优先）
+REVIEWER_URL=...         # 可选：中转/代理端点覆盖（推荐名；进 plan.json 留痕）
+DEEPSEEK_URL=...         # 兼容别名（旧名）
+JUDGE_API_KEY=...        # judge 环节（--judge 时需要；火山网关 glm 走此通道）
+JUDGE_URL=...            # 可选：自定义 OpenAI 兼容网关端点
+OPENAI_API_KEY=...       # 兼容别名（旧名；与 JUDGE_API_KEY 同设时新名优先，#42）
+OPENAI_URL=...           # 兼容别名（旧名）
 ```
+
+被测模型经 `--model <id>` 自由指定（`flash`/`pro` 别名保留）；wire 序列化与指标口径按 provider 画像表分派（`deepseek-*`/`glm-*` 内建，未知模型走保守默认）。judge 模型与被测可能同源时默认拒绝——任一侧自定义接入点设定则降级为 warning 放行（异构性转为实验者责任，#43）。
 
 ## 目录与入库约定
 

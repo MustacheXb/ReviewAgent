@@ -24,7 +24,7 @@ import type { Finding } from "../contracts/finding.js";
 import type { MRCase, MRTruth, TruthLocation } from "../contracts/mr-case.js";
 import type { RunResult } from "../contracts/run.js";
 import { JUDGE_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR } from "./gpt-judge-client.js";
-import { DEEPSEEK_API_KEY_ENV_VAR } from "review-llm";
+import { DEEPSEEK_API_KEY_ENV_VAR, REVIEWER_API_KEY_ENV_VAR } from "review-llm";
 import {
   computeEfficiencyMetrics,
   computePRF,
@@ -145,7 +145,7 @@ export async function judgeRun(
   validateJudgeRunInputs(run, mrCase);
   const configId = narrowMainConfigId(run);
   const ruleScreening = screenFindings(run.findings, mrCase.truth, resolved.screening);
-  const tokens = computeTokenMetrics(run.usage);
+  const tokens = computeTokenMetrics(run.usage, run.model);
   const toolCostTokens = computeToolCostTokens(run, resolved.toolCost);
   const rulePrf = computePRF(ruleScreening.lineLevel);
   const ruleEfficiency = computeEfficiencyMetrics({ lineLevel: rulePrf, tokens, toolCostTokens });
@@ -463,12 +463,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 错误信息脱敏：环境变量中的 API key 一律替换为 [REDACTED]（防异常文本携带密钥；#42 角色名同步入名单） */
+/** 错误信息脱敏：环境变量中的 API key 一律替换为 [REDACTED]（防异常文本携带密钥；#42/#43 角色名同步入名单） */
 function redactSecrets(message: string): string {
   let redacted = message;
   const secrets = [
     process.env[JUDGE_API_KEY_ENV_VAR],
     process.env[OPENAI_API_KEY_ENV_VAR],
+    process.env[REVIEWER_API_KEY_ENV_VAR],
     process.env[DEEPSEEK_API_KEY_ENV_VAR],
   ];
   for (const secret of secrets) {

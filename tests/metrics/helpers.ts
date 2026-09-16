@@ -64,6 +64,8 @@ export function makeRunResult(overrides: {
   readonly rounds?: number;
   readonly toolCalls?: number;
   readonly toolCallLog?: readonly ToolCallRecord[];
+  /** #43：被测模型 id（指标层画像分口径；缺省 = 无模型信息，走旧口径） */
+  readonly model?: string;
 } = {}): RunResult {
   const toolCallLog = overrides.toolCallLog ?? [];
   const audit: RunAudit = {
@@ -83,6 +85,7 @@ export function makeRunResult(overrides: {
     rounds: overrides.rounds ?? 1,
     toolCalls: overrides.toolCalls ?? toolCallLog.length,
     audit,
+    ...(overrides.model !== undefined ? { model: overrides.model } : {}),
   };
 }
 

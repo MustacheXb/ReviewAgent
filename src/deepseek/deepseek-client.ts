@@ -25,6 +25,8 @@ import {
   positiveIntOption,
   resolveApiKey,
   resolveEndpointUrl,
+  REVIEWER_API_KEY_ENV_VARS,
+  REVIEWER_URL_ENV_VARS,
 } from "review-llm";
 
 /**
@@ -34,11 +36,15 @@ import {
  * HTTP/重试/脱敏/解析内核共享自 src/shared/openai-http-kernel.ts（与 GPT judge 客户端
  * 去重）；本文件只保留 DeepSeek 特有语义。
  *
- * 锁定纪律（ADR-0002）：
- * - model 白名单 = deepseek-v4-flash（主力）+ deepseek-v4-pro（仅高险子集消融，
- *   spec #1 user story 15；request-mapper 校验，退役 id 直接拒绝）；
+ * 锁定纪律（ADR-0002 + #43 自由 id）：
+ * - model 自由 id（#43）：任意非空 id 均可发，wire 序列化按 provider 画像表
+ *   （review-llm profileOf）分派；deepseek-chat / deepseek-reasoner 退役 id
+ *   仍然拒绝（request-mapper 校验）；v4-pro 高险子集搭配约束在实验计划层（spec #1 user story 15）；
  * - effort 单档锁定：harness effort 标签仅接受 "default"，线上恒为 thinking {type:"enabled"} + reasoning_effort "high"；
- * - API key 仅经 DEEPSEEK_API_KEY 环境变量或显式参数注入，绝不硬编码、绝不出现在错误信息中。
+ * 角色接入（#43，自定义 LLM 接入 spec #40）：
+ * - url/key 走角色命名 REVIEWER_URL / REVIEWER_API_KEY，旧 provider 命名
+ *   DEEPSEEK_URL / DEEPSEEK_API_KEY 保留为兼容别名（新名优先；常量单源 review-llm）；
+ * - API key 仅经环境变量或显式参数注入，绝不硬编码、绝不出现在错误信息中。
  *
  * 工具名 wire 适配：线上 function name 校验 ^[a-zA-Z0-9_-]+$，内部点分命名空间
  * （review.get_symbol 等）在请求序列化时转下划线（request-mapper.toWireToolName），
@@ -55,8 +61,8 @@ export {
   DEEPSEEK_URL_ENV_VAR,
 };
 
-/** 服务标签：错误消息前缀（内核参数化） */
-const SERVICE_LABEL = "DeepSeek API";
+/** 服务标签：错误消息前缀（内核参数化；reviewer 角色可指向自定义网关，不再称 DeepSeek API） */
+const SERVICE_LABEL = "reviewer LLM API";
 
 /** 内核错误工厂：构造 DeepSeek 自有错误类型（instanceof / name 语义不变） */
 const KERNEL_ERROR_FACTORIES: HttpKernelErrorFactories = {
@@ -68,9 +74,9 @@ const KERNEL_ERROR_FACTORIES: HttpKernelErrorFactories = {
 };
 
 export interface DeepSeekClientOptions {
-  /** API key；缺省读环境变量 DEEPSEEK_API_KEY（启动即校验，缺失 fail fast） */
+  /** API key；缺省按序读环境变量 REVIEWER_API_KEY > DEEPSEEK_API_KEY（启动即校验，缺失 fail fast） */
   readonly apiKey?: string;
-  /** API base URL；显式选项 > DEEPSEEK_URL 环境变量 > 缺省 https://api.deepseek.com（中转/代理端点用；测试可注入本地地址） */
+  /** API base URL；显式选项 > REVIEWER_URL > DEEPSEEK_URL > 缺省 https://api.deepseek.com（自定义网关/中转端点用；测试可注入本地地址） */
   readonly baseUrl?: string;
   /** 单次请求超时（毫秒）；缺省 600_000（thinking 模式长思考，超时给足） */
   readonly timeoutMs?: number;
@@ -97,14 +103,14 @@ export class DeepSeekClient implements LlmClient {
       serviceLabel: SERVICE_LABEL,
       apiKey: resolveApiKey({
         explicit: options.apiKey,
-        envVarNames: [DEEPSEEK_API_KEY_ENV_VAR],
+        envVarNames: [...REVIEWER_API_KEY_ENV_VARS],
         serviceLabel: SERVICE_LABEL,
         clientError,
       }),
       endpointUrl: resolveEndpointUrl({
         baseUrl: options.baseUrl,
         defaultBaseUrl: DEEPSEEK_API_BASE_URL,
-        envVarNames: [DEEPSEEK_URL_ENV_VAR],
+        envVarNames: [...REVIEWER_URL_ENV_VARS],
         clientError,
       }),
       timeoutMs: positiveIntOption(options.timeoutMs, DEFAULT_DEEPSEEK_TIMEOUT_MS, "timeoutMs", clientError),

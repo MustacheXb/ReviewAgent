@@ -7,6 +7,8 @@ import type { EfficiencyMetrics, PRFMetrics, TokenMetrics } from "./types.js";
  * - CARC（Cache-adjusted Review Cost）= 非缓存输入 + 输出 + 工具成本（token 口径）
  *   = uncachedInputTokens + cacheWriteTokens + outputTokens + toolCostTokens。
  *   缓存命中（cachedInputTokens）不计入；cacheWriteTokens 属非缓存命中输入，计入。
+ *   无缓存计量的模型（画像 cacheMetering=false，#43）cached 记 0 → CARC = 全输入
+ *   按未命中计价的保守上界（真命中率越高，真实成本只会更低，不会更高）。
  */
 export function computeEfficiencyMetrics(input: {
   readonly lineLevel: PRFMetrics;

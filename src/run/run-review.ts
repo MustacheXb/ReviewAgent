@@ -224,6 +224,7 @@ async function finalizeRun(args: {
   return {
     caseId: mrCase.caseId,
     configId: config.configId,
+    model: args.model,
     findings: outcome.findings,
     usage: outcome.usage,
     rounds: outcome.rounds,

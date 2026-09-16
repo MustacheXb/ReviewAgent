@@ -57,12 +57,68 @@ describe("buildChatCompletionsBody — locked experiment bytes", () => {
     expect(() => buildChatCompletionsBody(baseRequest({ effort: "default" }))).not.toThrow();
   });
 
-  it("rejects unsupported model ids, including retired deepseek-chat / deepseek-reasoner", () => {
-    for (const model of ["deepseek-chat", "deepseek-reasoner", "gpt-4o", ""]) {
+  it("rejects retired model ids even under free-id acceptance (ADR-0002 discipline)", () => {
+    for (const model of ["deepseek-chat", "deepseek-reasoner"]) {
       expect(() => buildChatCompletionsBody(baseRequest({ model })), `model ${model} must be rejected`).toThrowError(
-        /unsupported model .*deepseek-v4-flash/,
+        /retired/,
       );
     }
+  });
+
+  it("rejects empty / whitespace model ids", () => {
+    for (const model of ["", "   "]) {
+      expect(() => buildChatCompletionsBody(baseRequest({ model })), `model ${JSON.stringify(model)} must be rejected`).toThrowError(
+        /model must be a non-empty string/,
+      );
+    }
+  });
+});
+
+describe("buildChatCompletionsBody — 自定义模型自由 id + 画像驱动序列化（#43）", () => {
+  const tool = {
+    name: "review.get_symbol",
+    description: "Get a symbol definition",
+    parametersJson: '{"type":"object"}',
+  };
+
+  it("未知模型回落保守默认画像：不发 thinking 字段、8192 信封、字段顺序钉死", () => {
+    const body = buildChatCompletionsBody(baseRequest({ model: "qwen3-max" })) as unknown as Record<string, unknown>;
+    expect(body.model).toBe("qwen3-max");
+    expect(body).not.toHaveProperty("thinking");
+    expect(body).not.toHaveProperty("reasoning_effort");
+    expect(body.max_tokens).toBe(8_192);
+    expect(body.stream).toBe(false);
+    expect(Object.keys(body)).toEqual(["model", "messages", "max_tokens", "stream"]);
+  });
+
+  it("glm 画像：不发 thinking 字段、32768 信封（#39 实测 reasoning 计入 completion 预算）", () => {
+    const body = buildChatCompletionsBody(baseRequest({ model: "glm-4.7" })) as unknown as Record<string, unknown>;
+    expect(body).not.toHaveProperty("thinking");
+    expect(body).not.toHaveProperty("reasoning_effort");
+    expect(body.max_tokens).toBe(32_768);
+  });
+
+  it("未知模型带工具：字段顺序 model → messages → max_tokens → tools → tool_choice → stream", () => {
+    const body = buildChatCompletionsBody(baseRequest({ model: "qwen3-max", tools: [tool] })) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(body)).toEqual(["model", "messages", "max_tokens", "tools", "tool_choice", "stream"]);
+    expect(body.tool_choice).toBe("auto");
+  });
+
+  it("deepseek-* 画像：ADR-0002 锁定字节不变（thinking + reasoning_effort high，无 max_tokens）", () => {
+    const body = buildChatCompletionsBody(baseRequest({ model: "deepseek-v4-flash" })) as unknown as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(["model", "messages", "thinking", "reasoning_effort", "stream"]);
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body.thinking).toEqual({ type: "enabled" });
+    expect(body.reasoning_effort).toBe("high");
+  });
+
+  it("自由 id 的字节稳定性：同一未知模型请求重复构造逐字节一致", () => {
+    const first = JSON.stringify(buildChatCompletionsBody(baseRequest({ model: "qwen3-max", tools: [tool] })));
+    const second = JSON.stringify(buildChatCompletionsBody(baseRequest({ model: "qwen3-max", tools: [tool] })));
+    expect(first).toBe(second);
   });
 });
 

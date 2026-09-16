@@ -1,4 +1,5 @@
 import type { LlmMessage, LlmRequest, ToolCall, ToolSchema } from "../contracts/llm-client.js";
+import { profileOf } from "review-llm";
 import { DeepSeekClientError } from "./errors.js";
 import type {
   WireChatCompletionsRequest,
@@ -8,17 +9,21 @@ import type {
 } from "./wire-types.js";
 
 /**
- * LlmRequest → DeepSeek Chat Completions 请求体（纯函数）。
- * 请求字节纪律：字段顺序固定、effort/thinking 在客户端层锁定（ADR-0002）、
- * temperature/top_p/penalties/max_tokens 一律不传（thinking 模式下无效或无必要，保持字节最小）。
+ * LlmRequest → OpenAI 兼容 Chat Completions 请求体（纯函数；reviewer wire 序列化器）。
+ *
+ * 序列化策略由 provider 画像表驱动（review-llm profileOf，#43）：
+ * thinking / reasoning_effort 只在画像声明 enabled 时出场（DeepSeek 锁定档），
+ * max_tokens 按画像信封补齐（DeepSeek 不传、glm 32768、未知 8192）。
+ * 请求字节纪律不变：字段顺序固定、effort 在客户端层锁定（ADR-0002）、
+ * temperature/top_p/penalties 一律不传（保持字节最小）——DeepSeek 默认路径
+ * 的字节逐字节不变由 tests/deepseek/golden-bytes.test.ts 钉死（#43 发布硬门槛）。
  */
 
 /**
- * 客户端支持的 model id 白名单（ADR-0002 主力 deepseek-v4-flash；deepseek-v4-pro 仅用于
- * 高险子集升级消融，spec #1 user story 15，实验计划层强制搭配 highRiskOnly）。
- * deepseek-chat / deepseek-reasoner 已于 2026-07-24 退役，禁止出现。
+ * 已退役 id（2026-07-24 下线，ADR-0002）：自由 id 接受之下仍直接拒绝——
+ * 静默放行只会换来模糊的线上 400，不如本地报错说清楚。
  */
-export const SUPPORTED_MODELS: readonly string[] = ["deepseek-v4-flash", "deepseek-v4-pro"];
+const RETIRED_MODELS: readonly string[] = ["deepseek-chat", "deepseek-reasoner"];
 
 /** harness 侧唯一合法的 effort 标签（runReview 默认档） */
 export const LOCKED_EFFORT_LABEL = "default";
@@ -29,7 +34,7 @@ export const LOCKED_THINKING = { type: "enabled" } as const;
 
 const VALID_ROLES: ReadonlySet<string> = new Set(["system", "user", "assistant", "tool"]);
 
-/** DeepSeek 线上 function name 校验（chat completions 拒绝其余字符，含点） */
+/** OpenAI 兼容线上 function name 安全子集（chat completions 拒绝其余字符，含点） */
 const WIRE_TOOL_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
 /**
@@ -54,7 +59,7 @@ export function buildWireToolNameMap(tools: readonly ToolSchema[]): Map<string, 
     const wireName = toWireToolName(tool.name);
     if (!WIRE_TOOL_NAME_RE.test(wireName)) {
       throw new DeepSeekClientError(
-        `tool name ${JSON.stringify(tool.name)} cannot be mapped to a wire-safe name (got ${JSON.stringify(wireName)}; the DeepSeek API requires function names to match ^[a-zA-Z0-9_-]+$)`,
+        `tool name ${JSON.stringify(tool.name)} cannot be mapped to a wire-safe name (got ${JSON.stringify(wireName)}; the OpenAI-compatible wire requires function names to match ^[a-zA-Z0-9_-]+$)`,
       );
     }
     const existing = wireToInternal.get(wireName);
@@ -74,11 +79,14 @@ export function buildChatCompletionsBody(request: LlmRequest): WireChatCompletio
   validateMessages(request.messages);
   validateTools(request.tools);
   buildWireToolNameMap(request.tools);
+  const profile = profileOf(request.model);
   return {
     model: request.model,
     messages: request.messages.map(mapMessage),
-    thinking: LOCKED_THINKING,
-    reasoning_effort: LOCKED_REASONING_EFFORT,
+    ...(profile.thinking.kind === "enabled"
+      ? { thinking: LOCKED_THINKING, reasoning_effort: profile.thinking.reasoningEffort }
+      : {}),
+    ...(profile.completionMaxTokens !== undefined ? { max_tokens: profile.completionMaxTokens } : {}),
     ...(request.tools.length > 0
       ? { tools: request.tools.map(mapTool), tool_choice: "auto" as const }
       : {}),
@@ -87,9 +95,14 @@ export function buildChatCompletionsBody(request: LlmRequest): WireChatCompletio
 }
 
 function validateModel(model: unknown): void {
-  if (typeof model !== "string" || !SUPPORTED_MODELS.includes(model)) {
+  if (typeof model !== "string" || model.trim().length === 0) {
     throw new DeepSeekClientError(
-      `unsupported model ${JSON.stringify(model)}: the DeepSeek client supports ${SUPPORTED_MODELS.map((m) => JSON.stringify(m)).join(", ")} (ADR-0002; deepseek-v4-pro is restricted to the high-risk-subset ablation at the experiment plan layer; deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and must not be used)`,
+      `model must be a non-empty string (got ${JSON.stringify(model)}): free model ids are accepted and serialized per the provider profile table (review-llm profileOf)`,
+    );
+  }
+  if (RETIRED_MODELS.includes(model)) {
+    throw new DeepSeekClientError(
+      `model ${JSON.stringify(model)} is retired (deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and must not be used; ADR-0002)`,
     );
   }
 }
@@ -97,7 +110,7 @@ function validateModel(model: unknown): void {
 function validateEffortLabel(effort: unknown): void {
   if (effort !== LOCKED_EFFORT_LABEL) {
     throw new DeepSeekClientError(
-      `effort is locked at the client layer (ADR-0002 single effort gear): got ${JSON.stringify(effort)}, expected ${JSON.stringify(LOCKED_EFFORT_LABEL)}; the locked gear always serializes to thinking {type:"enabled"} + reasoning_effort ${JSON.stringify(LOCKED_REASONING_EFFORT)}, so the experiment cannot drift`,
+      `effort is locked at the client layer (ADR-0002 single effort gear): got ${JSON.stringify(effort)}, expected ${JSON.stringify(LOCKED_EFFORT_LABEL)}; the locked gear serializes per the provider profile (deepseek-*: thinking {type:"enabled"} + reasoning_effort ${JSON.stringify(LOCKED_REASONING_EFFORT)}), so the experiment cannot drift`,
     );
   }
 }

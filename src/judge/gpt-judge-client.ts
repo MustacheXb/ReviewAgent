@@ -9,10 +9,12 @@
  *   环境变量按序探测（#42）：角色命名 JUDGE_API_KEY / JUDGE_URL 优先，
  *   旧 provider 命名 OPENAI_API_KEY / OPENAI_URL 保留为兼容别名；
  * - 模型异构约束：默认 gpt-5.2-pro（MCR-Bench 论文 LLM-Hit-Judge 的最高人工一致性档，
- *   QWK 0.73），deepseek 系 id 直接拒绝（判定链要求与被测模型不同源；glm 等异构 id 可用，
- *   #33）；
+ *   QWK 0.73）；同源判定以被测模型为对照系（reviewerModel，#43）——缺省保守
+ *   假设被测为 DeepSeek 系（直用路径拒绝 deepseek 系 id，#33）；#43 预检降级
+ *   （heterogeneityDowngraded 选项）时放行；
  * - judge 校准参数锁定论文协议值：temperature 0.2 / top_p 0.95；max_tokens 为
- *   画像表驱动的容量上界（glm 等推理模型 32768、默认 8192，#39/#42）；
+ *   画像表驱动的容量上界（glm 等推理模型 32768、默认 8192，#39/#42；#43 自定义
+ *   接入点部署下无信封家族回落默认 8192）；
  * - 有界重试：仅 429/500/503 与网络/超时错误重试；响应体异常与请求构造错直接抛。
  */
 
@@ -41,6 +43,11 @@ export const JUDGE_URL_ENV_VAR = "JUDGE_URL";
 /** 兼容别名（旧 provider 命名；与推荐名同时设置时推荐名优先） */
 export const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 export const OPENAI_URL_ENV_VAR = "OPENAI_URL";
+/**
+ * judge 接入点双名探测序（推荐名在前）：构造期 resolveEndpointUrl 与
+ * hasCustomLlmEndpoint（env 预检，#43）共用此序，避免两处字面量漂移。
+ */
+export const JUDGE_URL_ENV_VARS = [JUDGE_URL_ENV_VAR, OPENAI_URL_ENV_VAR] as const;
 export const DEFAULT_GPT_JUDGE_TIMEOUT_MS = 300_000;
 export const DEFAULT_GPT_JUDGE_MAX_RETRIES = 3;
 export const DEFAULT_GPT_JUDGE_RETRY_BASE_DELAY_MS = 1_000;
@@ -131,6 +138,13 @@ export class GptJudgeClient implements JudgeClient {
     this.mapperOptions = {
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.limits !== undefined ? { limits: options.limits } : {}),
+      ...(options.reviewerModel !== undefined ? { reviewerModel: options.reviewerModel } : {}),
+      ...(options.heterogeneityDowngraded !== undefined
+        ? { heterogeneityDowngraded: options.heterogeneityDowngraded }
+        : {}),
+      ...(options.customLlmEndpoint !== undefined
+        ? { customLlmEndpoint: options.customLlmEndpoint }
+        : {}),
     };
   }
 

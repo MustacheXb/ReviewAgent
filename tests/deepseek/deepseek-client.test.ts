@@ -10,6 +10,7 @@ import {
   DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
   DEEPSEEK_URL_ENV_VAR,
 } from "../../src/deepseek/deepseek-client.js";
+import { REVIEWER_API_KEY_ENV_VAR, REVIEWER_URL_ENV_VAR } from "review-llm";
 import {
   DeepSeekHttpError,
   DeepSeekInsufficientResourceError,
@@ -47,13 +48,17 @@ function okResponse(usage?: WireUsageFields | undefined): Response {
   return jsonResponse(200, wireChatCompletion({ content: "ok", usage }));
 }
 
-/** 环境变量隔离：每个用例从干净环境出发，结束恢复原始值 */
+/** 环境变量隔离：每个用例从干净环境出发，结束恢复原始值（#43 起双名都清） */
 const originalEnvKey = process.env[DEEPSEEK_API_KEY_ENV_VAR];
 const originalEnvUrl = process.env[DEEPSEEK_URL_ENV_VAR];
+const originalReviewerEnvKey = process.env[REVIEWER_API_KEY_ENV_VAR];
+const originalReviewerEnvUrl = process.env[REVIEWER_URL_ENV_VAR];
 
 beforeEach(() => {
   delete process.env[DEEPSEEK_API_KEY_ENV_VAR];
   delete process.env[DEEPSEEK_URL_ENV_VAR];
+  delete process.env[REVIEWER_API_KEY_ENV_VAR];
+  delete process.env[REVIEWER_URL_ENV_VAR];
 });
 
 afterEach(() => {
@@ -67,16 +72,28 @@ afterEach(() => {
   } else {
     process.env[DEEPSEEK_URL_ENV_VAR] = originalEnvUrl;
   }
+  if (originalReviewerEnvKey === undefined) {
+    delete process.env[REVIEWER_API_KEY_ENV_VAR];
+  } else {
+    process.env[REVIEWER_API_KEY_ENV_VAR] = originalReviewerEnvKey;
+  }
+  if (originalReviewerEnvUrl === undefined) {
+    delete process.env[REVIEWER_URL_ENV_VAR];
+  } else {
+    process.env[REVIEWER_URL_ENV_VAR] = originalReviewerEnvUrl;
+  }
 });
 
 describe("DeepSeekClient — API key handling", () => {
   it("fails fast with a clear message when no key is configured anywhere", () => {
-    expect(() => new DeepSeekClient()).toThrowError(/DeepSeek API key is missing: set the DEEPSEEK_API_KEY/);
+    expect(() => new DeepSeekClient()).toThrowError(
+      /reviewer LLM API key is missing: set one of the REVIEWER_API_KEY, DEEPSEEK_API_KEY environment variables/,
+    );
   });
 
   it("rejects a blank key instead of sending an empty credential", () => {
     expect(() => new DeepSeekClient({ apiKey: "   " })).toThrowError(
-      /DeepSeek API key is missing: set the DEEPSEEK_API_KEY/,
+      /reviewer LLM API key is missing: set one of the REVIEWER_API_KEY, DEEPSEEK_API_KEY environment variables/,
     );
   });
 
@@ -156,6 +173,59 @@ describe("DeepSeekClient — DEEPSEEK_URL 接入点覆盖（中转/代理端点�
   });
 });
 
+describe("DeepSeekClient — 角色命名环境变量（#43：REVIEWER_API_KEY / REVIEWER_URL，新名 > 旧名 > 默认）", () => {
+  it("REVIEWER_API_KEY 单独设置即生效（经 Bearer 头发送；端点仍缺省官方）", async () => {
+    process.env[REVIEWER_API_KEY_ENV_VAR] = "role-reviewer-key";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ fetchFn: stub.fetch });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.headers.Authorization).toBe("Bearer role-reviewer-key");
+    expect(stub.requests[0]?.url).toBe("https://api.deepseek.com/chat/completions");
+  });
+
+  it("REVIEWER_API_KEY 与旧名 DEEPSEEK_API_KEY 同时设置时新名优先", async () => {
+    process.env[REVIEWER_API_KEY_ENV_VAR] = "new-name-key";
+    process.env[DEEPSEEK_API_KEY_ENV_VAR] = "legacy-key";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ fetchFn: stub.fetch });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.headers.Authorization).toBe("Bearer new-name-key");
+  });
+
+  it("空白 REVIEWER_API_KEY 视为未设置，回落旧名 DEEPSEEK_API_KEY", async () => {
+    process.env[REVIEWER_API_KEY_ENV_VAR] = "   ";
+    process.env[DEEPSEEK_API_KEY_ENV_VAR] = "legacy-key";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ fetchFn: stub.fetch });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.headers.Authorization).toBe("Bearer legacy-key");
+  });
+
+  it("REVIEWER_URL 单独设置即生效（自定义 OpenAI 兼容网关端点）", async () => {
+    process.env[REVIEWER_URL_ENV_VAR] = "https://gateway.example.com";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.url).toBe("https://gateway.example.com/chat/completions");
+  });
+
+  it("REVIEWER_URL 与旧名 DEEPSEEK_URL 同时设置时新名优先", async () => {
+    process.env[REVIEWER_URL_ENV_VAR] = "https://new.example.com";
+    process.env[DEEPSEEK_URL_ENV_VAR] = "https://legacy.example.com";
+    const stub = createFetchStub(() => okResponse());
+    const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
+    await client.complete(baseRequest());
+    expect(stub.requests[0]?.url).toBe("https://new.example.com/chat/completions");
+  });
+
+  it("REVIEWER_URL 非法协议报错并注明来源（环境变量）", () => {
+    process.env[REVIEWER_URL_ENV_VAR] = "ftp://gateway.example.com";
+    expect(() => new DeepSeekClient({ apiKey: "test-key-001" })).toThrowError(
+      /baseUrl must start with http:\/\/ or https:\/\/ \(from REVIEWER_URL environment variable/,
+    );
+  });
+});
+
 describe("DeepSeekClient — request wire shape", () => {
   it("posts an OpenAI-compatible body with locked bytes to the chat completions endpoint", async () => {
     const stub = createFetchStub(() => okResponse());
@@ -224,7 +294,7 @@ describe("DeepSeekClient — request wire shape", () => {
     const stub = createFetchStub(() => okResponse());
     const client = new DeepSeekClient({ apiKey: "test-key-001", fetchFn: stub.fetch });
     await expect(client.complete(baseRequest({ model: "deepseek-chat" }))).rejects.toThrowError(
-      /unsupported model/,
+      /is retired/,
     );
     await expect(client.complete(baseRequest({ effort: "low" }))).rejects.toThrowError(/effort is locked/);
     expect(stub.requests).toHaveLength(0);

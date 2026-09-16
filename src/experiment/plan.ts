@@ -1,8 +1,6 @@
 import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
 import type { MRCase } from "../contracts/mr-case.js";
-// barrel 入口（judge 模块统一出口）；别名消歧——deepseek/request-mapper 另有一个校验检视模型的 validateModel
-import { validateModel as validateJudgeModel } from "../judge/index.js";
 
 /**
  * 实验计划（Ticket 12 / issue #13）：五配置 × 数据集 × 重复 的可编排放跑参数。
@@ -17,11 +15,11 @@ export const EXPERIMENT_SOURCES = ["defects4j", "vul4j", "msb-java", "clean-mr"]
 export type ExperimentSource = (typeof EXPERIMENT_SOURCES)[number];
 
 /**
- * 可编排放跑的模型（ADR-0002 主力锁定 deepseek-v4-flash；
- * deepseek-v4-pro 仅用于高险子集升级消融，spec #1 user story 15）。
+ * 检视模型（#43 自由 id）：任意非空模型 id 均可编排放跑，wire 序列化与指标
+ * 口径按 provider 画像表分派（review-llm profileOf）；deepseek-v4-pro 仍强制
+ * 搭配 highRiskOnly（高险子集消融，spec #1 user story 15）。
  */
-export const EXPERIMENT_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
-export type ExperimentModel = (typeof EXPERIMENT_MODELS)[number];
+export type ExperimentModel = string;
 
 export const DEFAULT_EXPERIMENT_MODEL: ExperimentModel = "deepseek-v4-flash";
 
@@ -44,8 +42,14 @@ export interface ExperimentPlan {
   readonly reps: number;
   /** 二遍 Verifier 消融开关 */
   readonly verifier: VerifierMode;
-  /** 检视模型（v4-pro 强制搭配 highRiskOnly，防误发全量矩阵） */
+  /** 检视模型（自由 id，#43；v4-pro 强制搭配 highRiskOnly，防误发全量矩阵） */
   readonly model: ExperimentModel;
+  /**
+   * 检视链接入点（#43 manifest 留痕）：CLI 在 env 校验后装配
+   * （REVIEWER_URL > DEEPSEEK_URL > 官方缺省，reviewerBaseUrlOf），随 plan.json
+   * 持久化——记录「连到哪」，绝不记录 key。缺省未设（非 CLI 构造的计划）。
+   */
+  readonly reviewerBaseUrl?: string;
   /** 仅跑 riskClass = High 的 case（高险子集消融的入样过滤） */
   readonly highRiskOnly: boolean;
   /** 每源 case 数上限（null = 不限量） */
@@ -56,8 +60,9 @@ export interface ExperimentPlan {
   readonly judge: boolean;
   /**
    * 判定链 judge 模型 id（null = DEFAULT_JUDGE_MODEL，论文协议锚）。
-   * 异构约束与 judge 客户端同源（validateJudgeModel：与被测模型不同源，deepseek 系拒绝），
-   * 计划层校验 fail fast——不烧检视预算后才发现模型非法（#33）。
+   * 异构约束在 CLI 预检判定（#43：judgeHeterogeneityOf——deepseek 系默认拒，
+   * 任一侧自定义接入点时降级为 warning 放行）；计划层只做形状校验——
+   * 降级放行的计划持久化后须可重校验（resume）。
    */
   readonly judgeModel: string | null;
   /** 人工抽检比例（0, 1] */
@@ -101,7 +106,6 @@ export interface ExpandedPlan {
 const CONFIG_ORDER: readonly ConfigId[] = Object.keys(CONFIGS) as ConfigId[];
 const VALID_CONFIG_IDS = new Set<string>(CONFIG_ORDER);
 const VALID_SOURCES = new Set<string>(EXPERIMENT_SOURCES);
-const VALID_MODELS = new Set<string>(EXPERIMENT_MODELS);
 const EXPERIMENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** 计划校验（fail fast：错误指明字段与期望；不修改入参） */
@@ -127,9 +131,14 @@ export function validateExperimentPlan(plan: ExperimentPlan): void {
   if (plan.verifier !== "off" && plan.verifier !== "on") {
     throw new Error(`plan.verifier must be "off" or "on" (got ${JSON.stringify(plan.verifier)})`);
   }
-  if (typeof plan.model !== "string" || !VALID_MODELS.has(plan.model)) {
+  if (typeof plan.model !== "string" || plan.model.trim().length === 0) {
     throw new Error(
-      `plan.model must be one of ${[...VALID_MODELS].map((m) => JSON.stringify(m)).join(", ")} (got ${JSON.stringify(plan.model)})`,
+      `plan.model must be a non-empty model id (free ids accepted and serialized per the provider profile table, #43; got ${JSON.stringify(plan.model)})`,
+    );
+  }
+  if (plan.reviewerBaseUrl !== undefined && (typeof plan.reviewerBaseUrl !== "string" || plan.reviewerBaseUrl.trim().length === 0)) {
+    throw new Error(
+      `plan.reviewerBaseUrl must be a non-empty base URL string when present (got ${JSON.stringify(plan.reviewerBaseUrl)})`,
     );
   }
   if (typeof plan.highRiskOnly !== "boolean") {
@@ -155,15 +164,12 @@ export function validateExperimentPlan(plan: ExperimentPlan): void {
   if (typeof plan.judge !== "boolean") {
     throw new Error(`plan.judge must be a boolean (got ${JSON.stringify(plan.judge)})`);
   }
-  if (plan.judgeModel !== null && typeof plan.judgeModel !== "string") {
-    // 持久化 JSON 边界的类型护栏（raw cast 可能带来任意 JSON 值）
+  if (plan.judgeModel !== null && (typeof plan.judgeModel !== "string" || plan.judgeModel.trim().length === 0)) {
+    // 持久化 JSON 边界的类型护栏（raw cast 可能带来任意 JSON 值）+ 形状护栏；
+    // 异构降级判定移至 CLI 预检（需 env 知识，#43），计划层不再拒 deepseek 系
     throw new Error(
       `plan.judgeModel must be null or a non-empty model id (got ${JSON.stringify(plan.judgeModel)})`,
     );
-  }
-  if (plan.judgeModel !== null) {
-    // 空串/空白与异构约束单源：与 judge 客户端同一规则（deepseek 系拒绝；glm 等异构 id 通过）
-    validateJudgeModel(plan.judgeModel);
   }
   if (
     typeof plan.humanReviewRate !== "number" ||

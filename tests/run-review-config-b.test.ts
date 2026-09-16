@@ -31,6 +31,7 @@ describe("runReview — config B end-to-end (fake LLM, deterministic prefetch)",
     const result = await runReview(CONFIGS.B, SAMPLE_MR_CASE, fake, { auditDir });
 
     expect(result.configId).toBe("B");
+    expect(result.model).toBe("deepseek-v4-flash");
     expect(result.rounds).toBe(1);
     expect(result.toolCalls).toBe(0);
     expect(result.findings).toEqual([{ ...HAPPY_PATH_FINDING, evidence: [...HAPPY_PATH_FINDING.evidence] }]);

@@ -52,6 +52,41 @@ describe("computeTokenMetrics", () => {
   });
 });
 
+describe("computeTokenMetrics — 画像驱动的 Cache-Hit-Rate 口径分叉（#43）", () => {
+  it("模型无缓存计量字段（画像 cacheMetering=false）→ cacheHitRate 记 N/A（null），不误报 0", () => {
+    const metrics = computeTokenMetrics(usage(100, 50), "qwen3-max");
+    expect(metrics.cachedInputTokens).toBe(0);
+    expect(metrics.totalInputTokens).toBe(100);
+    expect(metrics.totalTokens).toBe(150);
+    // 命中率未知 ≠ 命中率为 0：provider 不上报缓存字段时记 N/A
+    expect(metrics.cacheHitRate).toBeNull();
+  });
+
+  it("deepseek-* 画像（cacheMetering=true）→ 命中率照常计算，默认路径口径不变", () => {
+    const metrics = computeTokenMetrics(usage(100, 50, { cacheReadTokens: 300 }), "deepseek-v4-flash");
+    expect(metrics.cacheHitRate).toBe(0.75);
+    const noCacheFields = computeTokenMetrics(usage(100, 50), "deepseek-v4-flash");
+    expect(noCacheFields.cacheHitRate).toBe(0);
+  });
+
+  it("glm 画像（cacheMetering=true）→ 命中率照常计算", () => {
+    const metrics = computeTokenMetrics(usage(100, 50, { cacheReadTokens: 100 }), "glm-4.7");
+    expect(metrics.cacheHitRate).toBeCloseTo(0.5, 12);
+  });
+
+  it("model 缺省 = 旧口径（DSH 路径 / 旧记录零改动）：无缓存字段照旧算 0", () => {
+    const metrics = computeTokenMetrics(usage(100, 50));
+    expect(metrics.cacheHitRate).toBe(0);
+  });
+
+  it("CARC 保守上界：无缓存计量的模型全输入按未命中计价（cached=0 天然上界）", () => {
+    const tokens = computeTokenMetrics(usage(100, 50), "qwen3-max");
+    const { carc } = computeEfficiencyMetrics({ lineLevel: { recall: 1, precision: 1, f1: 1 }, tokens, toolCostTokens: 10 });
+    // uncached(100) + cacheWrite(0) + output(50) + toolCost(10) = 全未命中上界
+    expect(carc).toBe(160);
+  });
+});
+
 describe("computeToolCostTokens", () => {
   it("defaults to zero cost when no pricing is configured", () => {
     const run = makeRunResult({ toolCallLog: [makeToolCall("x".repeat(100))] });
@@ -167,6 +202,15 @@ describe("evaluateRun", () => {
     expect(metrics.screening.cleanMr).toBe(false);
     expect(metrics.screening.verdicts[0]).toMatchObject({ outcome: "FP", fpReason: "NO_LINE_MATCH" });
     expect(metrics.screening.misses[0]).toMatchObject({ truthIndex: 0 });
+  });
+
+  it("threads run.model into the token accounting: 无缓存计量模型 → cacheHitRate N/A（#43）", () => {
+    const run = makeRunResult({ model: "qwen3-max", usage: usage(750, 210) });
+    const metrics = evaluateRun(run, mrCase);
+    expect(metrics.tokens.cacheHitRate).toBeNull();
+    // 模型缺省（旧记录 / DSH 路径）照旧算 0，口径零漂移
+    const legacy = evaluateRun(makeRunResult({ usage: usage(750, 210) }), mrCase);
+    expect(legacy.tokens.cacheHitRate).toBe(0);
   });
 
   it("rejects a run whose caseId does not match the MR case", () => {

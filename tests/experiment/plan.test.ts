@@ -50,15 +50,12 @@ describe("validateExperimentPlan（fail fast）", () => {
     );
   });
 
-  it("拒绝非法 reps / verifier / model / limit / caseFilter / 人检参数", () => {
+  it("拒绝非法 reps / verifier / limit / caseFilter / 人检参数", () => {
     expect(() => validateExperimentPlan(experimentPlan({ reps: 0 }))).toThrow(/reps/);
     expect(() => validateExperimentPlan(experimentPlan({ reps: 1.5 }))).toThrow(/reps/);
     expect(() =>
       validateExperimentPlan(experimentPlan({ verifier: "maybe" as never })),
     ).toThrow(/verifier/);
-    expect(() =>
-      validateExperimentPlan(experimentPlan({ model: "gpt-9" as never })),
-    ).toThrow(/model/);
     expect(() => validateExperimentPlan(experimentPlan({ perSourceLimit: 0 }))).toThrow(
       /perSourceLimit/,
     );
@@ -88,6 +85,25 @@ describe("validateExperimentPlan（fail fast）", () => {
     ).not.toThrow();
   });
 
+  it("model 自由 id（#43）：任意非空 id 合法（wire 序列化与指标口径按画像表分派）", () => {
+    expect(() => validateExperimentPlan(experimentPlan({ model: "qwen3-max" }))).not.toThrow();
+    expect(() => validateExperimentPlan(experimentPlan({ model: "glm-4.7" }))).not.toThrow();
+  });
+
+  it("model 空串/空白/非串拒绝（trim 后非空才可放跑）", () => {
+    expect(() => validateExperimentPlan(experimentPlan({ model: "" }))).toThrow(/model/);
+    expect(() => validateExperimentPlan(experimentPlan({ model: "   " }))).toThrow(/model/);
+  });
+
+  it("reviewerBaseUrl（#43 manifest 留痕）：可选；在场时须为非空串", () => {
+    expect(() =>
+      validateExperimentPlan(experimentPlan({ reviewerBaseUrl: "https://gateway.example.com" })),
+    ).not.toThrow();
+    expect(() => validateExperimentPlan(experimentPlan({ reviewerBaseUrl: "" }))).toThrow(
+      /reviewerBaseUrl/,
+    );
+  });
+
   it("judgeModel：null = 缺省；异构 id（glm-5.3）通过（#33）", () => {
     expect(() => validateExperimentPlan(experimentPlan({ judgeModel: null }))).not.toThrow();
     expect(() =>
@@ -95,16 +111,17 @@ describe("validateExperimentPlan（fail fast）", () => {
     ).not.toThrow();
   });
 
-  it("judgeModel：deepseek 系在计划层即拒（fail fast，不烧检视预算）；空串/非串拒绝", () => {
+  it("judgeModel：deepseek 系不再在计划层拒（#43：降级判定需 env 知识，移至 CLI 预检）", () => {
+    // 持久化计划在 resume 时重校验：降级放行的 deepseek 系 judgeModel 必须可再校验通过
     expect(() =>
       validateExperimentPlan(experimentPlan({ judgeModel: "deepseek-v4-flash" })),
-    ).toThrow(/heterogeneous/);
-    // 空串/空白经 validateJudgeModel 单源拒绝（与 judge 客户端同一消息）
-    expect(() => validateExperimentPlan(experimentPlan({ judgeModel: "" }))).toThrow(
-      /non-empty string/,
-    );
+    ).not.toThrow();
+  });
+
+  it("judgeModel：空串/空白/非串拒绝（计划层类型与形状护栏）", () => {
+    expect(() => validateExperimentPlan(experimentPlan({ judgeModel: "" }))).toThrow(/judgeModel/);
     expect(() => validateExperimentPlan(experimentPlan({ judgeModel: "  " }))).toThrow(
-      /non-empty string/,
+      /judgeModel/,
     );
     // 非串是持久化 JSON 边界的类型护栏（plan 层消息）
     expect(() => validateExperimentPlan(experimentPlan({ judgeModel: 42 as never }))).toThrow(

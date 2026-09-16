@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { hasReviewerApiKey } from "review-llm";
 import { CONFIGS } from "../../src/contracts/config.js";
 import { DeepSeekClient } from "../../src/deepseek/deepseek-client.js";
 import { validateFinding } from "../../src/finding/finding-schema.js";
@@ -9,18 +10,18 @@ import { SAMPLE_MR_CASE } from "../fixtures/sample-mr-case.js";
 /**
  * 冒烟 e2e（Ticket 04）：单 MR（Ticket 01 手写样例）× config A × 真实 DeepSeek API。
  *
- * 运行条件：环境变量 DEEPSEEK_API_KEY 存在（key 只经环境变量注入，绝不回显/落盘）。
+ * 运行条件：reviewer key 双名任一非空（hasReviewerApiKey——与 client 构造期
+ * 同名同序同 trim 语义；key 只经环境变量注入，绝不回显/落盘）。
  * 无 key 时显式 SKIP——`pnpm test` 不依赖真实网络，本文件也不在常规测试 include 内。
  */
 
-const rawEnvKey = process.env.DEEPSEEK_API_KEY;
-const hasApiKey = typeof rawEnvKey === "string" && rawEnvKey.trim().length > 0;
+const hasApiKey = hasReviewerApiKey();
 
 if (!hasApiKey) {
   // 显式 SKIP 说明（不输出 key 内容）
   console.info(
-    "[smoke-e2e] DEEPSEEK_API_KEY is not set: the real-API smoke e2e is SKIPPED. " +
-      "Export DEEPSEEK_API_KEY and run `pnpm test:e2e` to execute it.",
+    "[smoke-e2e] neither REVIEWER_API_KEY nor DEEPSEEK_API_KEY is set: the real-API smoke e2e is SKIPPED. " +
+      "Export REVIEWER_API_KEY (or the legacy DEEPSEEK_API_KEY) and run `pnpm test:e2e` to execute it.",
   );
 }
 

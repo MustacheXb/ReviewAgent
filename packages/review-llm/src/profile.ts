@@ -42,10 +42,19 @@ export interface ProviderProfile {
   readonly usage: UsageCapabilities;
 }
 
+/**
+ * 保守默认 completion 信封：未知模型的标准容量上界，也是 #43 异构降级下
+ * 无信封家族（DeepSeek thinking wire）judge 侧的回落值（单源常量）。
+ */
+export const DEFAULT_COMPLETION_MAX_TOKENS = 8_192;
+
+/** 已知 provider 家族规范名（画像表 pattern 的公共判定面，#43 异构校验消费） */
+export type ProviderFamily = "deepseek" | "glm";
+
 /** 保守默认画像：未知模型——不发 thinking 字段、8192 标准信封、不假设缓存计量 */
 const DEFAULT_PROFILE: ProviderProfile = {
   thinking: { kind: "omit" },
-  completionMaxTokens: 8_192,
+  completionMaxTokens: DEFAULT_COMPLETION_MAX_TOKENS,
   usage: { cacheMetering: false },
 };
 
@@ -64,9 +73,13 @@ const GLM_PROFILE: ProviderProfile = {
 };
 
 /** 查表条目（按序首匹；pattern 为模型家族 id 前缀，大小写不敏感） */
-const PROFILE_TABLE: readonly { readonly pattern: RegExp; readonly profile: ProviderProfile }[] = [
-  { pattern: /^deepseek-/i, profile: DEEPSEEK_PROFILE },
-  { pattern: /^glm-/i, profile: GLM_PROFILE },
+const PROFILE_TABLE: readonly {
+  readonly family: ProviderFamily;
+  readonly pattern: RegExp;
+  readonly profile: ProviderProfile;
+}[] = [
+  { family: "deepseek", pattern: /^deepseek-/i, profile: DEEPSEEK_PROFILE },
+  { family: "glm", pattern: /^glm-/i, profile: GLM_PROFILE },
 ];
 
 /** 画像查表（纯函数）：已知家族前缀命中，未知模型回落保守默认画像 */
@@ -77,4 +90,18 @@ export function profileOf(model: string): ProviderProfile {
     }
   }
   return DEFAULT_PROFILE;
+}
+
+/**
+ * 家族判定（纯函数，与画像查表同 pattern 单源）：已知家族返回规范名，
+ * 未知返回 null。消费者是 judge 链异构校验（#43）——同已知家族即视为
+ * 可能同源；未知 id 不做家族联想，同源归属由实验者自证。
+ */
+export function providerFamilyOf(model: string): ProviderFamily | null {
+  for (const entry of PROFILE_TABLE) {
+    if (entry.pattern.test(model)) {
+      return entry.family;
+    }
+  }
+  return null;
 }

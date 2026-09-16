@@ -118,6 +118,7 @@ export function recordToRunResult(record: RunRecord): RunResult {
   return {
     caseId: record.caseId,
     configId: record.configId,
+    model: record.model,
     findings: snapshot.findings,
     usage: snapshot.usage,
     rounds: snapshot.rounds,

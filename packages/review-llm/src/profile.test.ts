@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { profileOf } from "./profile.js";
+import { profileOf, providerFamilyOf } from "./profile.js";
 
 /**
  * provider 参数画像表（#42 落地）：模型 id pattern → 画像三维度
@@ -74,5 +74,21 @@ describe("usage 能力声明（指标分口径查询面，#43 消费）", () => 
     expect(profileOf("deepseek-v4-flash").usage.cacheMetering).toBe(true);
     expect(profileOf("glm-5-3-260814").usage.cacheMetering).toBe(true);
     expect(profileOf("qwen3.8-flash").usage.cacheMetering).toBe(false);
+  });
+});
+
+describe("providerFamilyOf — 家族判定（#43 异构校验的对照面，与画像查表同 pattern 单源）", () => {
+  it("已知家族：deepseek-* / glm-*（大小写不敏感前缀）", () => {
+    expect(providerFamilyOf("deepseek-v4-flash")).toBe("deepseek");
+    expect(providerFamilyOf("DeepSeek-V4-PRO")).toBe("deepseek");
+    expect(providerFamilyOf("glm-5-3-260814")).toBe("glm");
+    expect(providerFamilyOf("GLM-5.3")).toBe("glm");
+  });
+
+  it("未知模型（含家族字样但非前缀的网关 id）→ null：不做家族联想，归属由实验者自证", () => {
+    expect(providerFamilyOf("gpt-5.2-pro")).toBeNull();
+    expect(providerFamilyOf("qwen3.8-flash")).toBeNull();
+    expect(providerFamilyOf("my-deepseek-relay")).toBeNull();
+    expect(providerFamilyOf("xglm-1")).toBeNull();
   });
 });

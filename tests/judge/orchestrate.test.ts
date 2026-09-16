@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { REVIEWER_API_KEY_ENV_VAR } from "review-llm";
 import { JUDGE_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR } from "../../src/judge/gpt-judge-client.js";
 import { judgeRun } from "../../src/judge/orchestrate.js";
 import { FakeJudgeClient } from "../../src/judge/fake-judge-client.js";
@@ -59,6 +60,18 @@ describe("judgeRun — 跳过分支（judge 零调用）", () => {
     expect(result.judgeCounts).toEqual({ tp: 0, fp: 0, fn: 3 });
     expect(result.judgeMisses.map((miss) => miss.truthIndex)).toEqual([0, 1, 2]);
     expect(result.judgePrf.recall).toBe(0);
+  });
+
+  it("run.model 透传进 token 记账：无缓存计量模型 → tokens.cacheHitRate N/A（#43）", async () => {
+    const judge = FakeJudgeClient.fromAdjudications([]);
+    const run = makeRunResult({ findings: [], model: "qwen3-max" });
+    const result = await judgeRun(run, threeTruthCase(), judge);
+    expect(result.status).toBe("skipped-no-findings");
+    // makeRunResult 缺省 usage(1000, 200) 无缓存字段：旧口径算 0，模型画像声明无计量 → N/A
+    expect(result.tokens.cacheHitRate).toBeNull();
+    // 模型缺省（旧记录）→ 旧口径不变
+    const legacy = await judgeRun(makeRunResult({ findings: [] }), threeTruthCase(), judge);
+    expect(legacy.tokens.cacheHitRate).toBe(0);
   });
 });
 
@@ -211,24 +224,33 @@ describe("judgeRun — 有界失败（judge 异常回退规则口径）", () => 
     expect(result.disagreements).toHaveLength(0);
   });
 
-  it("错误信息脱敏：环境变量中的 API key 替换为 [REDACTED]（含 #42 角色名 JUDGE_API_KEY）", async () => {
+  it("错误信息脱敏：环境变量中的 API key 替换为 [REDACTED]（含 #42/#43 角色名 JUDGE_API_KEY / REVIEWER_API_KEY）", async () => {
     const originalOpenai = process.env[OPENAI_API_KEY_ENV_VAR];
     const originalJudge = process.env[JUDGE_API_KEY_ENV_VAR];
+    const originalReviewer = process.env[REVIEWER_API_KEY_ENV_VAR];
     process.env[OPENAI_API_KEY_ENV_VAR] = "sk-secret-leak-check";
     process.env[JUDGE_API_KEY_ENV_VAR] = "sk-role-secret-leak-check";
+    process.env[REVIEWER_API_KEY_ENV_VAR] = "sk-reviewer-secret-leak-check";
     try {
       const judge = new FakeJudgeClient([
-        { kind: "fail", error: new Error("auth failed for key sk-secret-leak-check / sk-role-secret-leak-check") },
+        {
+          kind: "fail",
+          error: new Error(
+            "auth failed for key sk-secret-leak-check / sk-role-secret-leak-check / sk-reviewer-secret-leak-check",
+          ),
+        },
       ]);
       const run = makeRunResult({ findings: [makeFinding({ id: "F001" })] });
       const result = await judgeRun(run, makeMrCase(), judge);
       expect(result.errorMessage).toContain("[REDACTED]");
       expect(result.errorMessage).not.toContain("sk-secret-leak-check");
       expect(result.errorMessage).not.toContain("sk-role-secret-leak-check");
+      expect(result.errorMessage).not.toContain("sk-reviewer-secret-leak-check");
     } finally {
       for (const [name, original] of [
         [OPENAI_API_KEY_ENV_VAR, originalOpenai],
         [JUDGE_API_KEY_ENV_VAR, originalJudge],
+        [REVIEWER_API_KEY_ENV_VAR, originalReviewer],
       ] as const) {
         if (original === undefined) {
           delete process.env[name];

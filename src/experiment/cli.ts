@@ -5,7 +5,8 @@ import type { LlmClient } from "../contracts/llm-client.js";
 import { runUnitKeyString } from "../contracts/run-unit.js";
 import { DeepSeekClient } from "../deepseek/deepseek-client.js";
 import type { JudgeClient } from "../judge/index.js";
-import { DEFAULT_JUDGE_MODEL, GptJudgeClient } from "../judge/index.js";
+import { DEFAULT_JUDGE_MODEL, GptJudgeClient, judgeHeterogeneityOf } from "../judge/index.js";
+import type { HeterogeneityOptions } from "../judge/index.js";
 import {
   applyListFlag,
   type CliArgSpec,
@@ -21,7 +22,7 @@ import { loadEnvLocalFile, type EnvLocalLoadResult } from "../shared/env-local.j
 import { renderDashboardMarkdown } from "./dashboard.js";
 import { loadExperimentCases } from "./datasets.js";
 import { createDshKernelDriver, type DshKernelDriver } from "./dsh-kernel.js";
-import { checkExperimentEnv, envErrorMessage } from "./env.js";
+import { checkExperimentEnv, envErrorMessage, hasCustomLlmEndpoint, reviewerBaseUrlOf } from "./env.js";
 import {
   DEFAULT_EXPERIMENT_MODEL,
   DEFAULT_HUMAN_REVIEW_RATE,
@@ -103,7 +104,8 @@ export function experimentCliUsage(): string {
     "  --configs <list>          comma list of A-E (default: all)",
     "  --reps <n>                repetitions per MR, rep1 cold / rep2+ hot (default: 3)",
     "  --verifier <off|on>       second-pass verifier ablation (default: off)",
-    "  --model <flash|pro>       deepseek-v4-flash | deepseek-v4-pro (default: flash)",
+    "  --model <id>              review model id: free ids accepted, wire bytes per provider",
+    "                            profile (aliases: flash, pro; default: flash)",
     "  --kernel <poc1|dsh>       review execution kernel (default: poc1; dsh locks model to flash)",
     "  --high-risk-only          only riskClass=High cases (required for v4-pro)",
     "  --limit <n>               per-source case cap (default: none)",
@@ -111,7 +113,8 @@ export function experimentCliUsage(): string {
     "  --judge                   run the judge-chain stage (needs JUDGE_API_KEY,",
     "                            legacy OPENAI_API_KEY still honored)",
     `  --judge-model <id>        judge model id (default: ${DEFAULT_JUDGE_MODEL}; must be`,
-    "                            heterogeneous with the review model, e.g. glm-5-3-260814",
+    "                            heterogeneous with the review model — same-source ids are",
+    "                            rejected unless a custom endpoint is set (#43 warning)",
     "  --human-review-rate <r>   sampling rate in (0,1] (default: 0.1)",
     "  --human-review-seed <s>   deterministic sampling seed",
     "  --report-only             rebuild the report from persisted records (no review runs)",
@@ -168,12 +171,13 @@ const VALUE_FLAGS: Readonly<Record<string, ValueFlagParser<CliValues>>> = {
       ? flagOk({ verifier: value })
       : flagFail(`--verifier must be "off" or "on" (got ${JSON.stringify(value)})`),
   "--model": (value) => {
-    const model = MODELS[value];
-    return model !== undefined
-      ? flagOk({ model })
-      : flagFail(
-          `--model must be one of flash, deepseek-v4-flash, pro, deepseek-v4-pro (got ${JSON.stringify(value)})`,
-        );
+    // #43 自由 id：别名命中则展开，未命中按字面模型 id 直通（trim 后非空）
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return flagFail("--model must be a non-empty model id");
+    }
+    const model = MODELS[trimmed];
+    return flagOk({ model: model ?? trimmed });
   },
   "--kernel": (value) =>
     value === "poc1" || value === "dsh"
@@ -311,12 +315,28 @@ export function cliOptionsToPlan(options: ExperimentCliOptions): ExperimentPlan 
   return plan;
 }
 
+/**
+ * judge 工厂收到的异构上下文（#43：预检判定后透传；HeterogeneityOptions
+ * 的必填形态——CLI 预检恒有完整判定输入）。
+ */
+export interface JudgeClientContext extends HeterogeneityOptions {
+  /** 同源判定对照系 = 被测模型 id（预检 judgeHeterogeneityOf 同参） */
+  readonly reviewerModel: string;
+  /** true = 异构校验降级放行（同源 + 自定义接入点不可机械判定）：judge 客户端跳过同源拒绝 */
+  readonly heterogeneityDowngraded: boolean;
+  /** true = 部署经自定义 LLM 接入点（任一侧 URL env 在场）：无信封家族信封回落保守默认 */
+  readonly customLlmEndpoint: boolean;
+}
+
 /** 运行时依赖注入点（测试注入 fake 客户端与环境；缺省为真实客户端 + process.env） */
 export interface CliRunDeps {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly createLlmClient: () => LlmClient;
-  /** judge 工厂收到计划 judgeModel（null = DEFAULT_JUDGE_MODEL；#33 下传缝） */
-  readonly createJudgeClient: (judgeModel: string | null) => JudgeClient;
+  /**
+   * judge 工厂收到计划 judgeModel（null = DEFAULT_JUDGE_MODEL；#33 下传缝）
+   * 与 #43 异构上下文（对照系被测模型 + 预检降级标记 + 自定义接入点标记）。
+   */
+  readonly createJudgeClient: (judgeModel: string | null, context: JudgeClientContext) => JudgeClient;
   /** DSH 内核驱动工厂（--kernel dsh 时调用一次；缺省 = 真实 host 进程驱动） */
   readonly createDshKernel: () => DshKernelDriver;
   readonly log: (line: string) => void;
@@ -329,8 +349,21 @@ export function defaultCliRunDeps(): CliRunDeps {
   return {
     env: process.env,
     createLlmClient: () => new DeepSeekClient(),
-    createJudgeClient: (judgeModel) =>
-      new GptJudgeClient(judgeModel === null ? {} : { model: judgeModel }),
+    createJudgeClient: (judgeModel, context) =>
+      new GptJudgeClient(
+        judgeModel === null
+          ? {
+              reviewerModel: context.reviewerModel,
+              heterogeneityDowngraded: context.heterogeneityDowngraded,
+              customLlmEndpoint: context.customLlmEndpoint,
+            }
+          : {
+              model: judgeModel,
+              reviewerModel: context.reviewerModel,
+              heterogeneityDowngraded: context.heterogeneityDowngraded,
+              customLlmEndpoint: context.customLlmEndpoint,
+            },
+      ),
     createDshKernel: () => createDshKernelDriver(),
     log,
     loadEnvLocal: () => {
@@ -380,7 +413,8 @@ export async function runExperimentCli(
   const envCheck = checkExperimentEnv(
     {
       judge: plan.judge,
-      // --report-only 不跑检视：DEEPSEEK_API_KEY 不再必需；judge 阶段仍会续跑补缺 → OPENAI 仍校验
+      // --report-only 不跑检视：检视 key（REVIEWER_API_KEY / 旧名 DEEPSEEK_API_KEY）
+      // 不再必需；judge 阶段仍会续跑补缺 → judge key 仍校验
       reviewRuns: !options.reportOnly,
     },
     resolved.env,
@@ -389,9 +423,37 @@ export async function runExperimentCli(
     resolved.log(envErrorMessage(envCheck.missing));
     return 2;
   }
+  // #43：manifest（plan.json）留痕检视链接入点——与客户端构造期 resolveEndpointUrl
+  // 同序同结果（CLI 从不传 baseUrl 选项）；只记录「连到哪」，绝不记录 key
+  plan = { ...plan, reviewerBaseUrl: reviewerBaseUrlOf(resolved.env) };
+  // #43 异构预检：同源判定以被测模型为对照系（精确同 id 或同已知 provider
+  // 家族）——judge 与被测同源且双侧官方端点时报错阻断（不烧检视预算）；
+  // 任一侧自定义接入点设定时机械判定不可能，降级为 warning 放行（异构性转为
+  // 实验者责任，spec #40 user story 6）。判定结果与标记下传 judge 工厂。
+  const customLlmEndpoint = hasCustomLlmEndpoint(resolved.env);
+  let judgeHeterogeneityDowngraded = false;
+  if (plan.judge) {
+    const verdict = judgeHeterogeneityOf(
+      plan.judgeModel ?? DEFAULT_JUDGE_MODEL,
+      plan.model,
+      customLlmEndpoint,
+    );
+    if (verdict.kind === "error") {
+      resolved.log(`judge model rejected: ${verdict.message}`);
+      return 2;
+    }
+    if (verdict.kind === "warning") {
+      resolved.log(`warning: ${verdict.message}`);
+      judgeHeterogeneityDowngraded = true;
+    }
+  }
   const experimentRoot = path.resolve(options.runsRoot, options.experimentId);
   try {
-    return await executeCli(plan, options, experimentRoot, resolved);
+    return await executeCli(plan, options, experimentRoot, resolved, {
+      reviewerModel: plan.model,
+      heterogeneityDowngraded: judgeHeterogeneityDowngraded,
+      customLlmEndpoint,
+    });
   } catch (error) {
     resolved.log(`experiment "${plan.experimentId}" failed: ${errorMessage(error)}`);
     return 2;
@@ -403,8 +465,9 @@ async function executeCli(
   options: ExperimentCliOptions,
   experimentRoot: string,
   deps: CliRunDeps,
+  judgeContext: JudgeClientContext,
 ): Promise<number> {
-  const judgeDeps = buildJudgeDeps(plan, deps);
+  const judgeDeps = buildJudgeDeps(plan, deps, judgeContext);
   const outcome = options.reportOnly
     ? await rebuildOutcomeOnly(plan, experimentRoot, deps)
     : await runReviewMatrix(plan, options, experimentRoot, deps);
@@ -418,10 +481,14 @@ async function executeCli(
 type ReportableOutcome = Parameters<typeof buildExperimentReport>[0];
 
 /** judge 链依赖（未开启 judge 时为空对象 = 报告阶段跳过判定） */
-function buildJudgeDeps(plan: ExperimentPlan, deps: CliRunDeps): ReportDeps {
+function buildJudgeDeps(
+  plan: ExperimentPlan,
+  deps: CliRunDeps,
+  judgeContext: JudgeClientContext,
+): ReportDeps {
   return plan.judge
     ? {
-        judgeClient: deps.createJudgeClient(plan.judgeModel),
+        judgeClient: deps.createJudgeClient(plan.judgeModel, judgeContext),
         onJudgeUnit: (event) => deps.log(`  judge ${event.unit}: ${event.status}`),
       }
     : {};
