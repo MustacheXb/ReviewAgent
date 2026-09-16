@@ -96,7 +96,7 @@ _Avoid_: 把上界当真实成本混比（无计量侧方向已知偏高）
 ### 模型接入
 
 **被测模型（reviewer）**:
-实验的自变量侧 LLM：model id 走请求参数双路径（POC1/实验 CLI `--model`（`flash`/`pro` 别名保留）；DSH 内核经 JSON-RPC `review/run` 参数 / `review-agent` CLI `--model` 旗标，#45），无 model 环境变量；url / key 经角色命名环境变量（`REVIEWER_*` > 旧 `DEEPSEEK_*`）；进 manifest / 审计留痕（model + baseUrl，绝不记 key，ADR-0008）。
+实验的自变量侧 LLM：model id 走请求参数双路径（POC1/实验 CLI `--model`（`flash`/`pro` 别名保留）；DSH 内核经 JSON-RPC `review/run` 参数 / `review-agent` CLI `--model` 旗标，#45），无 model 环境变量；url / key 经角色命名环境变量（`REVIEWER_*` > 旧 `DEEPSEEK_*`，`.env.local` 自动装载且双 CLI 同语义——已有环境变量优先，#46）；进 manifest / 审计留痕（model + baseUrl，绝不记 key，ADR-0008）。自定义网关换端点/模型先用 `review-agent smoke` 冒烟自证（双探针 + 人话诊断，#46）。
 _Avoid_: 检视模型（与 judge 混淆）、白名单模型（准入白名单已由画像表取代）、model 走环境变量（实验数据走请求，秘密才走环境）
 
 **参数画像（Provider Profile）**:

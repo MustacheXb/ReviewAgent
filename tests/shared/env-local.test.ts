@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadEnvLocalFile } from "../../src/shared/env-local.js";
+import { formatEnvLocalSummary, loadEnvLocalFile, type EnvLocalLoadResult } from "../../src/shared/env-local.js";
 
 /**
  * .env.local 装载（Benchmark 试跑的 API key / 接入点本机注入面）：
@@ -109,5 +109,35 @@ describe("loadEnvLocalFile — 覆盖与留痕纪律", () => {
     expect(result.skippedKeys).toEqual([]);
     expect(result.malformedLines).toEqual([]);
     expect(target).toEqual({ PRESENT: "yes" });
+  });
+});
+
+describe("formatEnvLocalSummary — 装载摘要单源（#46：实验 CLI 与 review-agent CLI 同措辞）", () => {
+  /** 直接构造结果对象（摘要格式是纯函数，不经文件IO） */
+  const result = (overrides: Partial<EnvLocalLoadResult>): EnvLocalLoadResult => ({
+    filePath: "D:\\repo\\.env.local",
+    exists: true,
+    loadedKeys: [],
+    skippedKeys: [],
+    malformedLines: [],
+    ...overrides,
+  });
+
+  it("三段俱全：injected / skipped（附原因）/ malformed，分号连接", () => {
+    const summary = formatEnvLocalSummary(
+      result({ loadedKeys: ["REVIEWER_API_KEY", "REVIEWER_URL"], skippedKeys: ["JUDGE_API_KEY"], malformedLines: ["line 3"] }),
+    );
+    expect(summary).toBe(
+      "injected REVIEWER_API_KEY, REVIEWER_URL; skipped JUDGE_API_KEY (empty value or already set); malformed line 3",
+    );
+  });
+
+  it("全空：nothing to inject（文件存在但无可注入项）", () => {
+    expect(formatEnvLocalSummary(result({}))).toBe("nothing to inject");
+  });
+
+  it("只报键名与行号（摘要永远不含值——key 纪律由类型形状保证）", () => {
+    const summary = formatEnvLocalSummary(result({ loadedKeys: ["DEEPSEEK_API_KEY"], malformedLines: ["line 7"] }));
+    expect(summary).toBe("injected DEEPSEEK_API_KEY; malformed line 7");
   });
 });

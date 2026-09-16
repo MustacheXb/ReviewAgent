@@ -14,20 +14,26 @@
  *   截断 = 产出了结果与审计，不是中止）+ stdout.truncated=true + rounds=5 +
  *   审计 30 请求（5 轮 × 6 阶段）；
  * - 错误路径：--config 越界 → 退出码 1 + stderr 用法信息；凭据缺失（无
- *   DEEPSEEK_API_KEY）→ 退出码 1 + 指引信息，stdout 干净。
+ *   DEEPSEEK_API_KEY）→ 退出码 1 + 指引信息，stdout 干净；
+ * - #46 .env.local：bin 所在 cwd 的 .env.local 自动装载（文件值生效 /
+ *   已有环境变量优先不被覆盖），摘要走 stderr（review 的 stdout 契约是
+ *   单个 JSON 文档）；
+ * - #46 smoke 子命令：双探针 200 → 退出码 0 + 人话报告；凭据缺失 →
+ *   退出码 1 + 人话诊断（verdict 路径，不是异常路径）。
  *
- * 退出码契约（票面）：完成（含诚实截断）0 / 中止或错误 1。
+ * 退出码契约（票面）：完成（含诚实截断）0 / 中止或错误 1；smoke 按诊断
+ * 结论给码（通过 0 / 任何失败诊断 1）。
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
-import { chatResponse, CONFIG_A_REPLIES, configAResponses } from "../../../../tests/helpers/dsh-replies.js";
+import { chatResponse, configAResponses, CONFIG_A_REPLIES, SMOKE_PING_TOOL_CALL_BODY } from "../../../../tests/helpers/dsh-replies.js";
 import { startStubLlmServer } from "../../../../tests/helpers/stub-llm-server.js";
 
 const PACKAGE_DIR = fileURLToPath(new URL("../..", import.meta.url));
@@ -48,12 +54,16 @@ interface CliRunResult {
   readonly stderr: string;
 }
 
-function runCli(args: readonly string[], env: NodeJS.ProcessEnv): Promise<CliRunResult> {
+function runCli(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  cwd: string = PACKAGE_DIR,
+): Promise<CliRunResult> {
   return new Promise((resolvePromise, rejectPromise) => {
     execFile(
       process.execPath,
       [BIN_ENTRY, ...args],
-      { env, cwd: PACKAGE_DIR, windowsHide: true },
+      { env, cwd, windowsHide: true },
       (error, stdout, stderr) => {
         if (error !== null && error.code === undefined) {
           // spawn 本身失败（非退出码语义）
@@ -255,6 +265,155 @@ describe("CLI 进程级烟测（#26）", () => {
       expect(run.code).toBe(1);
       expect(run.stderr).toContain("DEEPSEEK_API_KEY");
       expect(run.stdout).toBe("");
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe("CLI .env.local 与 smoke 子命令（#46）", () => {
+  /** 干净凭据环境（.env.local 是唯一来源） */
+  function cleanCredentialEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.REVIEWER_API_KEY;
+    delete env.DEEPSEEK_API_KEY;
+    delete env.REVIEWER_URL;
+    delete env.DEEPSEEK_URL;
+    return env;
+  }
+
+  it(
+    ".env.local 文件值生效：cwd 的 .env.local 提供 REVIEWER_URL/KEY → 检视跑通（exit 0）+ stderr 摘要",
+    async () => {
+      const stub = await startStubLlmServer(configAResponses());
+      try {
+        const cwd = await mkdtemp(join(tmpdir(), "review-agent-envlocal-"));
+        workDirs.push(cwd);
+        const diffFile = join(cwd, "fix-url-encoding.diff");
+        await writeFile(diffFile, SAMPLE_MR_CASE.diff, "utf8");
+        await writeFile(
+          join(cwd, ".env.local"),
+          `REVIEWER_URL=${stub.url}\nREVIEWER_API_KEY=sk-envlocal-file-sentinel\n`,
+          "utf8",
+        );
+
+        const run = await runCli(
+          ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", join(cwd, "out")],
+          cleanCredentialEnv(),
+          cwd,
+        );
+
+        // 文件值到达适配器（否则无端点可用 → exit 1）
+        expect(run.code).toBe(0);
+        expect(JSON.parse(run.stdout)).toMatchObject({ ok: true });
+        // 摘要走 stderr（review 的 stdout 契约 = 单个 JSON 文档）；只报键名
+        expect(run.stderr).toContain(".env.local");
+        expect(run.stderr).toContain("REVIEWER_URL");
+        expect(run.stderr).toContain("REVIEWER_API_KEY");
+        // key 纪律：文件里的哨兵 key 不出现在任何输出
+        expect(run.stdout).not.toContain("sk-envlocal-file-sentinel");
+        expect(run.stderr).not.toContain("sk-envlocal-file-sentinel");
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    ".env.local 不覆盖已有环境变量：env REVIEWER_URL 指向 stub、文件指向死端口 → 仍跑通（env 优先）",
+    async () => {
+      const stub = await startStubLlmServer(configAResponses());
+      try {
+        const cwd = await mkdtemp(join(tmpdir(), "review-agent-envlocal-prio-"));
+        workDirs.push(cwd);
+        const diffFile = join(cwd, "fix-url-encoding.diff");
+        await writeFile(diffFile, SAMPLE_MR_CASE.diff, "utf8");
+        // 文件值指向端口 1（连接必拒）——若文件覆盖 env，检视必然失败
+        await writeFile(
+          join(cwd, ".env.local"),
+          "REVIEWER_URL=http://127.0.0.1:1\nREVIEWER_API_KEY=sk-envlocal-dead-sentinel\n",
+          "utf8",
+        );
+
+        const run = await runCli(
+          ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", join(cwd, "out")],
+          { ...cleanCredentialEnv(), REVIEWER_URL: stub.url, REVIEWER_API_KEY: "sk-envlocal-env-sentinel" },
+          cwd,
+        );
+
+        // env 优先胜出：适配器打 stub 而非死端口
+        expect(run.code).toBe(0);
+        expect(JSON.parse(run.stdout)).toMatchObject({ ok: true });
+        // 摘要如实报 skipped（键名级）
+        expect(run.stderr).toContain("skipped");
+        expect(run.stderr).toContain("REVIEWER_URL");
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    ".env.local 读失败（非缺失）：目录占位 EISDIR → 退出码 1 + 干净人话错误（无堆栈，与实验 CLI 的干净处理对齐）",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "review-agent-envlocal-err-"));
+      workDirs.push(cwd);
+      // 目录占位 → readFileSync EISDIR（loader 只吞 ENOENT，其余抛出）
+      await mkdir(join(cwd, ".env.local"));
+      const diffFile = join(cwd, "fix.diff");
+      await writeFile(diffFile, SAMPLE_MR_CASE.diff, "utf8");
+
+      const run = await runCli(
+        ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", join(cwd, "out")],
+        cleanCredentialEnv(),
+        cwd,
+      );
+
+      expect(run.code).toBe(1);
+      expect(run.stderr).toContain(".env.local");
+      // 干净错误路径：不是未捕获异常的堆栈形态
+      expect(run.stderr).not.toMatch(/^\s+at\s/m);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "smoke 子命令：双探针 200 → 退出码 0 + stdout 人话报告（端点/模型/双探针）",
+    async () => {
+      const toolCallReply = JSON.stringify(SMOKE_PING_TOOL_CALL_BODY);
+      const stub = await startStubLlmServer([chatResponse("pong"), toolCallReply]);
+      try {
+        const run = await runCli(["smoke"], {
+          ...cleanCredentialEnv(),
+          REVIEWER_URL: stub.url,
+          REVIEWER_API_KEY: "sk-smoke-process-sentinel",
+        });
+
+        expect(run.code).toBe(0);
+        expect(run.stdout).toContain("通过");
+        expect(run.stdout).toContain("补全探针");
+        expect(run.stdout).toContain("review_smoke_ping");
+        expect(run.stdout).toContain(stub.url);
+        // key 纪律：哨兵不落 stdout/stderr
+        expect(run.stdout).not.toContain("sk-smoke-process-sentinel");
+        expect(run.stderr).not.toContain("sk-smoke-process-sentinel");
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "smoke 子命令：凭据缺失 → 退出码 1 + stdout 人话诊断（verdict 路径，不发探针）",
+    async () => {
+      const run = await runCli(["smoke"], cleanCredentialEnv());
+
+      expect(run.code).toBe(1);
+      expect(run.stdout).toContain("凭据缺失");
+      expect(run.stdout).toContain("REVIEWER_API_KEY");
+      expect(run.stdout).toContain(".env.local");
     },
     TEST_TIMEOUT_MS,
   );

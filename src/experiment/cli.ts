@@ -18,7 +18,7 @@ import {
   type ValueFlagParser,
   type FlagApplyResult,
 } from "../shared/cli-args.js";
-import { loadEnvLocalFile, type EnvLocalLoadResult } from "../shared/env-local.js";
+import { formatEnvLocalSummary, loadEnvLocalFile, type EnvLocalLoadResult } from "../shared/env-local.js";
 import { renderDashboardMarkdown } from "./dashboard.js";
 import { loadExperimentCases } from "./datasets.js";
 import { createDshKernelDriver, type DshKernelDriver } from "./dsh-kernel.js";
@@ -369,13 +369,8 @@ export function defaultCliRunDeps(): CliRunDeps {
     loadEnvLocal: () => {
       const result = loadEnvLocalFile(path.resolve(".env.local"), process.env);
       if (result.exists) {
-        // 只报键名与行号（key 纪律：值绝不回显）；skipped = 空值或环境已有非空值
-        const parts = [
-          result.loadedKeys.length > 0 ? `injected ${result.loadedKeys.join(", ")}` : "nothing to inject",
-          ...(result.skippedKeys.length > 0 ? [`skipped ${result.skippedKeys.join(", ")} (empty value or already set)`] : []),
-          ...(result.malformedLines.length > 0 ? [`malformed ${result.malformedLines.join(", ")}`] : []),
-        ];
-        log(`env: .env.local found — ${parts.join("; ")}`);
+        // 只报键名与行号（key 纪律：值绝不回显）；摘要措辞单源（#46，review-agent CLI 同款）
+        log(`env: .env.local found — ${formatEnvLocalSummary(result)}`);
       }
       return result;
     },

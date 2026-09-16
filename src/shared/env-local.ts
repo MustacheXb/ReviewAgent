@@ -30,6 +30,19 @@ export interface EnvLocalLoadResult {
 const ENV_LINE_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 
 /**
+ * 装载结果 → 摘要片段（#46 单源：实验 CLI 与 review-agent CLI 同措辞，
+ * 各自加前缀后走自己的输出通道）。只含键名与行号，值绝不出现（key 纪律）。
+ */
+export function formatEnvLocalSummary(result: EnvLocalLoadResult): string {
+  const parts = [
+    result.loadedKeys.length > 0 ? `injected ${result.loadedKeys.join(", ")}` : "nothing to inject",
+    ...(result.skippedKeys.length > 0 ? [`skipped ${result.skippedKeys.join(", ")} (empty value or already set)`] : []),
+    ...(result.malformedLines.length > 0 ? [`malformed ${result.malformedLines.join(", ")}`] : []),
+  ];
+  return parts.join("; ");
+}
+
+/**
  * 装载 .env.local 到目标 env（缺省 process.env）。
  * 注入是对目标对象的就地写入（env 语义使然）；其余调用方拿到不可变的结果对象。
  */

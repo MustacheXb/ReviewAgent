@@ -38,6 +38,29 @@ export function chatResponse(content: string): string {
   });
 }
 
+/**
+ * 工具探针 200 回复 body（模型调用 review_smoke_ping；#46 冒烟双探针的共用
+ * 夹具——进程内单测（包 Response）与进程级烟测（序列化成 stub 剧本）不各抄一份）。
+ */
+export const SMOKE_PING_TOOL_CALL_BODY = {
+  choices: [
+    {
+      message: {
+        content: null,
+        tool_calls: [
+          {
+            id: "call_smoke_1",
+            type: "function",
+            function: { name: "review_smoke_ping", arguments: "{\"message\":\"pong\"}" },
+          },
+        ],
+      },
+      finish_reason: "tool_calls",
+    },
+  ],
+  usage: { prompt_cache_miss_tokens: 12, completion_tokens: 3 },
+};
+
 export function configAResponses(): string[] {
   return CONFIG_A_REPLIES.map(chatResponse);
 }

@@ -57,23 +57,36 @@ CI（push / PR）跑两层门：`discipline-gate`（确定性纪律门 · 零网
 | `pnpm materialize:vul4j` | VUL4J 数据集物化（case → 本地仓库 + MR） |
 | `pnpm reference -- --id <id> --cases-file <file>` | Claude Code 外部参照运行器（单列报告，不进 S/A/B 主判定） |
 | `pnpm --filter review-dsh gate:discipline` | DSH 侧纪律门（本地同 CI） |
+| `pnpm --filter review-dsh cli review --repo <path> --mr <diff> [--config A-E] [--model <id>]` | 单 MR 检视（DSH 内核 CLI；凭据经 `.env.local` / `REVIEWER_*`） |
+| `pnpm --filter review-dsh cli smoke [--model <id>]` | 网关冒烟自检（#46）：双探针 + 人话诊断，通过 0 / 失败 1 |
 
 ## 凭据配置（.env.local，绝不入库）
 
-实验运行器从仓库根 `.env.local`（gitignored）自动装载凭据，缺失即启动报错并给清单，绝不回显 key 值：
+实验运行器（仓库根执行）与 `review-agent` CLI（其所在 cwd 执行，#46）都会自动装载 `.env.local`（gitignored）：已有非空环境变量优先、不被覆盖；装载摘要只报键名与行号，key 值绝不回显。key 缺失即启动报错并给清单。注意 `.env.local` 按调用进程的 cwd 解析——`pnpm --filter review-dsh cli …` 的 cwd 是包目录（读 `packages/review-dsh/.env.local`）；要复用仓库根的 `.env.local`，从仓库根直接 `node packages/review-dsh/bin/review-agent.js …`：
 
 ```ini
-REVIEWER_API_KEY=...     # 被测模型（恒需，推荐名；#43）
+# reviewer（被测模型）——恒需
+REVIEWER_API_KEY=...     # 推荐名（#43）
 DEEPSEEK_API_KEY=...     # 兼容别名（旧名；与 REVIEWER_API_KEY 同设时新名优先）
-REVIEWER_URL=...         # 可选：中转/代理端点覆盖（推荐名；进 plan.json 留痕）
+REVIEWER_URL=...         # 可选：自定义 OpenAI 兼容网关端点（推荐名；进 plan.json 留痕）
 DEEPSEEK_URL=...         # 兼容别名（旧名）
-JUDGE_API_KEY=...        # judge 环节（--judge 时需要；火山网关 glm 走此通道）
+
+# judge（判定链，--judge 时需要）
+JUDGE_API_KEY=...        # 火山网关 glm 走此通道
 JUDGE_URL=...            # 可选：自定义 OpenAI 兼容网关端点
 OPENAI_API_KEY=...       # 兼容别名（旧名；与 JUDGE_API_KEY 同设时新名优先，#42）
 OPENAI_URL=...           # 兼容别名（旧名）
 ```
 
-被测模型经 `--model <id>` 自由指定（`flash`/`pro` 别名保留）；wire 序列化与指标口径按 provider 画像表分派（`deepseek-*`/`glm-*` 内建，未知模型走保守默认）。judge 模型与被测可能同源时默认拒绝——任一侧自定义接入点设定则降级为 warning 放行（异构性转为实验者责任，#43）。
+被测模型经 `--model <id>` 自由指定（实验 CLI 的 `flash`/`pro` 别名保留）；wire 序列化与指标口径按 provider 画像表分派（`deepseek-*`/`glm-*` 内建，未知模型走保守默认）。judge 模型与被测可能同源时默认拒绝——任一侧自定义接入点设定则降级为 warning 放行（异构性转为实验者责任，#43）。
+
+自定义网关（`REVIEWER_URL` 指向中转/自建端点）的可用性与兼容性由实验者自证：换端点或换模型后先跑冒烟自检——
+
+```bash
+pnpm --filter review-dsh cli smoke [--model <id>]
+```
+
+对目标端点发 1 次最小补全 + 1 次最小工具调用探针，输出人话诊断（通过 / 鉴权失败 / 模型不存在 / 不支持 function calling / 画像不匹配 / 限流 / 网络不通 / ……）与处置建议；通过退出码 0，任何失败诊断退出码 1。探针请求体走生产画像序列化（与检视路径同一单源）——冒烟通过即代表该模型在该网关上的 wire 方言与工具调用面可用。
 
 ## 目录与入库约定
 

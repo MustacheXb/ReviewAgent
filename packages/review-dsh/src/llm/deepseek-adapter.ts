@@ -117,7 +117,8 @@ export class DeepSeekLlmAdapter extends LlmAdapter {
   /** wire 请求字节捕获（序列化点记录；经 profile 组装接入审计源） */
   readonly wireLog: WireRequestLog;
 
-  private readonly endpointUrl: string;
+  /** 解析后的完整请求端点（base + /chat/completions；#46 冒烟诊断报告消费，非秘密） */
+  readonly endpointUrl: string;
   private readonly apiKey: string;
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
