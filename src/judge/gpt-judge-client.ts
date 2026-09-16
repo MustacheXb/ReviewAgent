@@ -28,16 +28,8 @@ import type { GptRequestMapperOptions } from "./gpt-request-mapper.js";
 import { mapGptChatCompletionsResponse } from "./gpt-response-mapper.js";
 import { parseJudgeAdjudication } from "./parse.js";
 import type { WireGptChatCompletionsRequest } from "./gpt-wire-types.js";
-import {
-  defaultSleep,
-  nonNegativeIntOption,
-  OpenAiHttpKernel,
-  positiveIntOption,
-  resolveApiKey,
-  resolveEndpointUrl,
-  runWithRetries,
-  type HttpKernelErrorFactories,
-} from "../shared/openai-http-kernel.js";
+import { defaultSleep, OpenAiHttpKernel, runWithRetries, type HttpKernelErrorFactories } from "../shared/openai-http-kernel.js";
+import { nonNegativeIntOption, positiveIntOption, resolveApiKey, resolveEndpointUrl } from "review-llm";
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 export const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
@@ -88,8 +80,18 @@ export class GptJudgeClient implements JudgeClient {
     // 校验顺序与重构前一致（key → baseUrl → timeoutMs → maxRetries → retryBaseDelayMs）
     this.kernel = new OpenAiHttpKernel({
       serviceLabel: SERVICE_LABEL,
-      apiKey: resolveApiKey(options.apiKey, OPENAI_API_KEY_ENV_VAR, SERVICE_LABEL, clientError),
-      endpointUrl: resolveEndpointUrl(options.baseUrl, OPENAI_API_BASE_URL, clientError, OPENAI_URL_ENV_VAR),
+      apiKey: resolveApiKey({
+        explicit: options.apiKey,
+        envVarNames: [OPENAI_API_KEY_ENV_VAR],
+        serviceLabel: SERVICE_LABEL,
+        clientError,
+      }),
+      endpointUrl: resolveEndpointUrl({
+        baseUrl: options.baseUrl,
+        defaultBaseUrl: OPENAI_API_BASE_URL,
+        envVarNames: [OPENAI_URL_ENV_VAR],
+        clientError,
+      }),
       timeoutMs: positiveIntOption(options.timeoutMs, DEFAULT_GPT_JUDGE_TIMEOUT_MS, "timeoutMs", clientError),
       fetchFn: options.fetchFn ?? fetch,
       errors: KERNEL_ERROR_FACTORIES,

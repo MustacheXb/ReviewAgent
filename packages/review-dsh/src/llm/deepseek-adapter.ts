@@ -25,6 +25,9 @@
  *
  * 凭据纪律：API key 仅经 DEEPSEEK_API_KEY 环境变量或显式参数注入，绝不硬编码、
  * 绝不出现在错误信息中（服务端回显时 redact 兜底）。
+ *
+ * endpoint/key 解析与 DeepSeek 接入常量单源自 review-llm 共享包（#41，
+ * 与 root POC1 客户端同源；错误消息文本原样保留，既有测试锚定）。
  */
 
 import {
@@ -54,16 +57,33 @@ import { addUsage, emitResponseChunks, mapWireResponse } from "./response.js";
 import { defaultSleep, runWithRetries } from "./retry.js";
 import { buildChatCompletionsBody, buildWireToolNameMap, LOCKED_EFFORT_LABEL, SUPPORTED_MODELS } from "./wire.js";
 import { WireRequestLog } from "./wire-log.js";
+import {
+  DEFAULT_DEEPSEEK_MAX_RETRIES,
+  DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
+  DEFAULT_DEEPSEEK_TIMEOUT_MS,
+  DEEPSEEK_API_BASE_URL,
+  DEEPSEEK_API_KEY_ENV_VAR,
+  DEEPSEEK_URL_ENV_VAR,
+  nonNegativeIntOption,
+  positiveIntOption,
+  resolveApiKey,
+  resolveEndpointUrl,
+} from "review-llm";
 
-export const DEEPSEEK_API_BASE_URL = "https://api.deepseek.com";
-export const DEEPSEEK_API_KEY_ENV_VAR = "DEEPSEEK_API_KEY";
-/** 接入点覆盖环境变量（中转/代理端点；显式 baseUrl 选项优先于它） */
-export const DEEPSEEK_URL_ENV_VAR = "DEEPSEEK_URL";
-export const DEFAULT_DEEPSEEK_TIMEOUT_MS = 600_000;
-export const DEFAULT_DEEPSEEK_MAX_RETRIES = 3;
-export const DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS = 1_000;
+/** DeepSeek 接入常量单源在 review-llm（#41 起双包共享）；此处 re-export 维持既有导入面 */
+export {
+  DEFAULT_DEEPSEEK_MAX_RETRIES,
+  DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
+  DEFAULT_DEEPSEEK_TIMEOUT_MS,
+  DEEPSEEK_API_BASE_URL,
+  DEEPSEEK_API_KEY_ENV_VAR,
+  DEEPSEEK_URL_ENV_VAR,
+};
 
 const SERVICE_LABEL = "DeepSeek API";
+
+/** 解析/校验错误工厂（共享 resolver 注入；构造 DeepSeekClientError 保持 name/instanceof 语义） */
+const deepSeekClientError = (message: string): Error => new DeepSeekClientError(message);
 
 const ERROR_MESSAGE_SNIPPET_LENGTH = 300;
 const INVALID_JSON_SNIPPET_LENGTH = 120;
@@ -102,18 +122,35 @@ export class DeepSeekLlmAdapter extends LlmAdapter {
   constructor(options: DeepSeekAdapterOptions = {}) {
     super();
     // 校验顺序与 POC1 客户端一致（key → baseUrl → timeoutMs → maxRetries → retryBaseDelayMs）
-    this.apiKey = resolveApiKey(options.apiKey);
-    this.endpointUrl = resolveEndpointUrl(options.baseUrl);
-    this.timeoutMs = positiveIntOption(options.timeoutMs, DEFAULT_DEEPSEEK_TIMEOUT_MS, "timeoutMs");
+    this.apiKey = resolveApiKey({
+      explicit: options.apiKey,
+      envVarNames: [DEEPSEEK_API_KEY_ENV_VAR],
+      serviceLabel: SERVICE_LABEL,
+      clientError: deepSeekClientError,
+    });
+    this.endpointUrl = resolveEndpointUrl({
+      baseUrl: options.baseUrl,
+      defaultBaseUrl: DEEPSEEK_API_BASE_URL,
+      envVarNames: [DEEPSEEK_URL_ENV_VAR],
+      clientError: deepSeekClientError,
+    });
+    this.timeoutMs = positiveIntOption(
+      options.timeoutMs,
+      DEFAULT_DEEPSEEK_TIMEOUT_MS,
+      "timeoutMs",
+      deepSeekClientError,
+    );
     this.maxRetries = nonNegativeIntOption(
       options.maxRetries,
       DEFAULT_DEEPSEEK_MAX_RETRIES,
       "maxRetries",
+      deepSeekClientError,
     );
     this.retryBaseDelayMs = positiveIntOption(
       options.retryBaseDelayMs,
       DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
       "retryBaseDelayMs",
+      deepSeekClientError,
     );
     this.fetchFn = options.fetchFn ?? fetch;
     this.sleepFn = options.sleepFn ?? defaultSleep;
@@ -284,64 +321,6 @@ function abortedFinish(message: string): StreamChunk {
     type: "finish",
     reason: { kind: "aborted", failure: { message: `${SERVICE_LABEL} ${message}`, code: "ABORTED" } },
   };
-}
-
-/** key 解析：显式参数优先，其次环境变量；缺失 fail fast（消息不回显 key 值） */
-function resolveApiKey(explicit: string | undefined): string {
-  const fromOptions = explicit?.trim();
-  if (fromOptions !== undefined && fromOptions.length > 0) {
-    return fromOptions;
-  }
-  const fromEnv = process.env[DEEPSEEK_API_KEY_ENV_VAR]?.trim();
-  if (fromEnv !== undefined && fromEnv.length > 0) {
-    return fromEnv;
-  }
-  throw new DeepSeekClientError(
-    `${SERVICE_LABEL} key is missing: set the ${DEEPSEEK_API_KEY_ENV_VAR} environment variable or pass the apiKey option. The key is only read from the environment/options and is never logged or persisted.`,
-  );
-}
-
-/** 端点解析：base URL + /chat/completions；优先级镜像 resolveApiKey，协议校验并注明取值来源 */
-function resolveEndpointUrl(baseUrl: string | undefined): string {
-  const fromOptions = baseUrl?.trim();
-  if (fromOptions !== undefined && fromOptions.length > 0) {
-    return endpointOf(fromOptions, "baseUrl option");
-  }
-  const fromEnv = process.env[DEEPSEEK_URL_ENV_VAR]?.trim();
-  if (fromEnv !== undefined && fromEnv.length > 0) {
-    return endpointOf(fromEnv, `${DEEPSEEK_URL_ENV_VAR} environment variable`);
-  }
-  return endpointOf(DEEPSEEK_API_BASE_URL, "default");
-}
-
-function endpointOf(base: string, source: string): string {
-  const trimmed = base.trim();
-  if (!/^https?:\/\//.test(trimmed)) {
-    throw new DeepSeekClientError(
-      `baseUrl must start with http:// or https:// (from ${source}: ${JSON.stringify(trimmed)})`,
-    );
-  }
-  return `${trimmed.replace(/\/+$/, "")}/chat/completions`;
-}
-
-function positiveIntOption(value: number | undefined, fallback: number, name: string): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new DeepSeekClientError(`${name} must be a positive integer (got ${JSON.stringify(value)})`);
-  }
-  return value;
-}
-
-function nonNegativeIntOption(value: number | undefined, fallback: number, name: string): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || value < 0) {
-    throw new DeepSeekClientError(`${name} must be a non-negative integer (got ${JSON.stringify(value)})`);
-  }
-  return value;
 }
 
 function isTimeoutError(error: unknown): boolean {

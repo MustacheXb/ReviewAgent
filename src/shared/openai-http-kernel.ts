@@ -8,8 +8,10 @@
  *
  * 参数化边界（内核不知道具体服务商）：
  * - 服务标签（错误消息前缀，如 "DeepSeek API" / "OpenAI API"）；
- * - 环境变量名（key 解析）；
  * - 错误工厂（各客户端注入自有错误类型，保持 instanceof / name 语义不变）。
+ *
+ * endpoint/key 解析已收敛至 review-llm 共享包（#41；双包单源），
+ * 本文件不再持有解析函数。
  *
  * 模型白名单不属于 HTTP 内核：留在各请求映射器（deepseek 与 gpt 的模型
  * 约束语义不同源——前者退役 id 拒绝，后者要求与被测模型异构）。
@@ -54,7 +56,6 @@ export interface OpenAiHttpKernelOptions {
   readonly errors: HttpKernelErrorFactories;
 }
 
-const CHAT_COMPLETIONS_PATH = "/chat/completions";
 const ERROR_MESSAGE_SNIPPET_LENGTH = 300;
 const INVALID_JSON_SNIPPET_LENGTH = 120;
 
@@ -168,82 +169,6 @@ export async function runWithRetries<T>(options: {
       attempt++;
     }
   }
-}
-
-/** key 解析：显式参数优先，其次环境变量；缺失 fail fast（消息不回显 key 值） */
-export function resolveApiKey(
-  explicit: string | undefined,
-  envVarName: string,
-  serviceLabel: string,
-  clientError: (message: string) => Error,
-): string {
-  const fromOptions = explicit?.trim();
-  if (fromOptions !== undefined && fromOptions.length > 0) {
-    return fromOptions;
-  }
-  const fromEnv = process.env[envVarName]?.trim();
-  if (fromEnv !== undefined && fromEnv.length > 0) {
-    return fromEnv;
-  }
-  throw clientError(
-    `${serviceLabel} key is missing: set the ${envVarName} environment variable or pass the apiKey option. The key is only read from the environment/options and is never logged or persisted.`,
-  );
-}
-
-/** 端点解析：base URL + /chat/completions；优先级镜像 resolveApiKey（显式非空选项 > 环境变量非空 > 缺省），协议校验（http/https）并注明取值来源 */
-export function resolveEndpointUrl(
-  baseUrl: string | undefined,
-  defaultBaseUrl: string,
-  clientError: (message: string) => Error,
-  envVarName?: string,
-): string {
-  const fromOptions = baseUrl?.trim();
-  if (fromOptions !== undefined && fromOptions.length > 0) {
-    return endpointOf(fromOptions, "baseUrl option", clientError);
-  }
-  const fromEnv = envVarName === undefined ? undefined : process.env[envVarName]?.trim();
-  if (fromEnv !== undefined && fromEnv.length > 0) {
-    return endpointOf(fromEnv, `${envVarName} environment variable`, clientError);
-  }
-  return endpointOf(defaultBaseUrl, "default", clientError);
-}
-
-function endpointOf(base: string, source: string, clientError: (message: string) => Error): string {
-  const trimmed = base.trim();
-  if (!/^https?:\/\//.test(trimmed)) {
-    throw clientError(`baseUrl must start with http:// or https:// (from ${source}: ${JSON.stringify(trimmed)})`);
-  }
-  return `${trimmed.replace(/\/+$/, "")}${CHAT_COMPLETIONS_PATH}`;
-}
-
-export function positiveIntOption(
-  value: number | undefined,
-  fallback: number,
-  name: string,
-  clientError: (message: string) => Error,
-): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || value <= 0) {
-    throw clientError(`${name} must be a positive integer (got ${JSON.stringify(value)})`);
-  }
-  return value;
-}
-
-export function nonNegativeIntOption(
-  value: number | undefined,
-  fallback: number,
-  name: string,
-  clientError: (message: string) => Error,
-): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || value < 0) {
-    throw clientError(`${name} must be a non-negative integer (got ${JSON.stringify(value)})`);
-  }
-  return value;
 }
 
 /** 指数退避：第 n 次重试等待 base * 2^n */

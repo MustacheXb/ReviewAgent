@@ -5,3 +5,4 @@ onlyBuiltDependencies:
   - esbuild
   - tree-sitter-java
   - koffi
+  - review-llm

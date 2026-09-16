@@ -14,6 +14,9 @@ importers:
       '@vscode/ripgrep':
         specifier: 1.18.0
         version: 1.18.0
+      review-llm:
+        specifier: workspace:*
+        version: link:packages/review-llm
       tree-sitter-java:
         specifier: 0.23.5
         version: 0.23.5
@@ -69,6 +72,21 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: 0.1.2-rc.1
         version: 0.1.2-rc.1(de5e1ff2d608fbe22667925341ad1dfc)
+      review-llm:
+        specifier: workspace:*
+        version: link:../review-llm
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/review-llm:
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

@@ -2,8 +2,11 @@
 #
 # - discipline-gate：具名纪律门——门构成、五族断言映射与零网络收口点的
 #   真源见 packages/review-dsh/vitest.gate.config.ts 头注与 ADR-0006 #28 注记。
-# - suites：全量回归——两包 typecheck + 测试（root 含进程级烟测 cli-smoke /
+# - suites：全量回归——三包 typecheck + 测试（root 含进程级烟测 cli-smoke /
 #   kernel-host，loopback stub 为既定零网络形态，不在纪律门的进程内拦截之列）。
+#
+# review-llm（#41 起的 LLM 接入共享包）进 suites：其 prepare 在 pnpm install
+# 时构建 dist（onlyBuiltDependencies 放行），编译路径运行时依赖该产物。
 #
 # 真实 API 的指标对齐门（#29）走本地脚本按需执行，不进 CI。
 
@@ -61,6 +64,12 @@ jobs:
 
       - name: Typecheck (review-dsh)
         run: pnpm --filter review-dsh typecheck
+
+      - name: Typecheck (review-llm)
+        run: pnpm --filter review-llm typecheck
+
+      - name: Test (review-llm)
+        run: pnpm --filter review-llm test
 
       - name: Test (review-dsh)
         run: pnpm --filter review-dsh test

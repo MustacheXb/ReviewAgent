@@ -13,16 +13,19 @@ import {
 import { buildChatCompletionsBody, buildWireToolNameMap } from "./request-mapper.js";
 import { mapChatCompletionsResponse } from "./response-mapper.js";
 import type { WireChatCompletionsRequest } from "./wire-types.js";
+import { defaultSleep, OpenAiHttpKernel, runWithRetries, type HttpKernelErrorFactories } from "../shared/openai-http-kernel.js";
 import {
+  DEFAULT_DEEPSEEK_MAX_RETRIES,
+  DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
+  DEFAULT_DEEPSEEK_TIMEOUT_MS,
+  DEEPSEEK_API_BASE_URL,
+  DEEPSEEK_API_KEY_ENV_VAR,
+  DEEPSEEK_URL_ENV_VAR,
   nonNegativeIntOption,
-  OpenAiHttpKernel,
   positiveIntOption,
   resolveApiKey,
   resolveEndpointUrl,
-  runWithRetries,
-  type HttpKernelErrorFactories,
-} from "../shared/openai-http-kernel.js";
-import { defaultSleep } from "../shared/openai-http-kernel.js";
+} from "review-llm";
 
 /**
  * 真实 DeepSeek 客户端（原生 fetch，OpenAI 兼容 chat completions，无 SDK——研究笔记结论：
@@ -42,13 +45,15 @@ import { defaultSleep } from "../shared/openai-http-kernel.js";
  * 响应 toolCalls 名反解回内部名——harness 契约层零感知。
  */
 
-export const DEEPSEEK_API_BASE_URL = "https://api.deepseek.com";
-export const DEEPSEEK_API_KEY_ENV_VAR = "DEEPSEEK_API_KEY";
-/** 接入点覆盖环境变量（中转/代理端点；显式 baseUrl 选项优先于它） */
-export const DEEPSEEK_URL_ENV_VAR = "DEEPSEEK_URL";
-export const DEFAULT_DEEPSEEK_TIMEOUT_MS = 600_000;
-export const DEFAULT_DEEPSEEK_MAX_RETRIES = 3;
-export const DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS = 1_000;
+/** DeepSeek 接入常量单源在 review-llm（#41 起双包共享）；此处 re-export 维持既有导入面 */
+export {
+  DEFAULT_DEEPSEEK_MAX_RETRIES,
+  DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
+  DEFAULT_DEEPSEEK_TIMEOUT_MS,
+  DEEPSEEK_API_BASE_URL,
+  DEEPSEEK_API_KEY_ENV_VAR,
+  DEEPSEEK_URL_ENV_VAR,
+};
 
 /** 服务标签：错误消息前缀（内核参数化） */
 const SERVICE_LABEL = "DeepSeek API";
@@ -90,8 +95,18 @@ export class DeepSeekClient implements LlmClient {
     // 校验顺序与重构前一致（key → baseUrl → timeoutMs → maxRetries → retryBaseDelayMs）
     this.kernel = new OpenAiHttpKernel({
       serviceLabel: SERVICE_LABEL,
-      apiKey: resolveApiKey(options.apiKey, DEEPSEEK_API_KEY_ENV_VAR, SERVICE_LABEL, clientError),
-      endpointUrl: resolveEndpointUrl(options.baseUrl, DEEPSEEK_API_BASE_URL, clientError, DEEPSEEK_URL_ENV_VAR),
+      apiKey: resolveApiKey({
+        explicit: options.apiKey,
+        envVarNames: [DEEPSEEK_API_KEY_ENV_VAR],
+        serviceLabel: SERVICE_LABEL,
+        clientError,
+      }),
+      endpointUrl: resolveEndpointUrl({
+        baseUrl: options.baseUrl,
+        defaultBaseUrl: DEEPSEEK_API_BASE_URL,
+        envVarNames: [DEEPSEEK_URL_ENV_VAR],
+        clientError,
+      }),
       timeoutMs: positiveIntOption(options.timeoutMs, DEFAULT_DEEPSEEK_TIMEOUT_MS, "timeoutMs", clientError),
       fetchFn: options.fetchFn ?? fetch,
       errors: KERNEL_ERROR_FACTORIES,

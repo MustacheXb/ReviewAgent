@@ -24,6 +24,10 @@ import { defineConfig } from "vitest/config";
  * 让门变红）。
  */
 export default defineConfig({
+  // review-llm（workspace 内部包）按 "source" 条件解析到 TS 源而非 dist 产物
+  resolve: {
+    conditions: ["source"],
+  },
   test: {
     environment: "node",
     include: [

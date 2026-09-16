@@ -1,6 +1,10 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // review-llm（workspace 内部包）按 "source" 条件解析到 TS 源而非 dist 产物
+  resolve: {
+    conditions: ["source"],
+  },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "tests/**/*.test.ts"],

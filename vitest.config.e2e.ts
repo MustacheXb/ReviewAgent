@@ -6,6 +6,10 @@ import { defineConfig } from "vitest/config";
  * 且仅在环境变量 DEEPSEEK_API_KEY 存在时真正执行（否则显式 SKIP）。
  */
 export default defineConfig({
+  // review-llm 按 "source" 条件解析到 TS 源（同 vitest.config.ts 注释）
+  resolve: {
+    conditions: ["source"],
+  },
   test: {
     environment: "node",
     include: ["tests/e2e/**/*.e2e.ts"],
