@@ -8,14 +8,14 @@ import {
   parseMcrOfficialJudgments,
   runCalibration,
 } from "../../src/calibration/index.js";
-import { GptJudgeClient, OPENAI_API_KEY_ENV_VAR } from "../../src/judge/gpt-judge-client.js";
+import { GptJudgeClient, hasJudgeApiKey } from "../../src/judge/gpt-judge-client.js";
 
 /**
  * MCR-Bench 校准 e2e（Ticket 11 / spec user story 24）：
  * 「7 模型输出 × 官方判定」→ 我们的 GPT judge 复核 → 一致性报告（kappa / 一致率）。
  *
  * 运行条件（两者缺一即显式 SKIP；`pnpm test` 零网络）：
- * - OPENAI_API_KEY：真实 judge API key（只经环境变量注入）
+ * - judge API key：JUDGE_API_KEY（#42 角色名）或旧名 OPENAI_API_KEY 任一（只经环境变量注入）
  * - MCR_BENCH_ROOT：本地 MCR-bench 仓库路径（git clone DeepSoftwareAnalytics/MCR-bench）
  *
  * 可选环境变量：
@@ -25,8 +25,8 @@ import { GptJudgeClient, OPENAI_API_KEY_ENV_VAR } from "../../src/judge/gpt-judg
  * 报告落盘 runs/calibration/（JSON）。
  */
 
-const rawEnvKey = process.env[OPENAI_API_KEY_ENV_VAR];
-const hasApiKey = typeof rawEnvKey === "string" && rawEnvKey.trim().length > 0;
+/** 双名任一非空即开门（hasJudgeApiKey——与 client 构造期同名同序同 trim 语义） */
+const hasApiKey = hasJudgeApiKey();
 const mcrRoot = process.env.MCR_BENCH_ROOT?.trim() ?? "";
 const hasMcrRoot = mcrRoot.length > 0;
 
@@ -39,7 +39,7 @@ const MAX_TASKS = Number.parseInt(process.env.MCR_BENCH_MAX_TASKS ?? "20", 10);
 if (!hasApiKey || !hasMcrRoot) {
   console.info(
     "[mcr-calibration-e2e] Missing " +
-      `${hasApiKey ? "" : "OPENAI_API_KEY "}${!hasApiKey && !hasMcrRoot ? "and " : ""}` +
+      `${hasApiKey ? "" : "JUDGE_API_KEY (or OPENAI_API_KEY) "}${!hasApiKey && !hasMcrRoot ? "and " : ""}` +
       `${hasMcrRoot ? "" : "MCR_BENCH_ROOT "}` +
       "— the MCR-Bench calibration e2e is SKIPPED. " +
       "Export both (clone DeepSoftwareAnalytics/MCR-bench, point MCR_BENCH_ROOT at the repo) " +

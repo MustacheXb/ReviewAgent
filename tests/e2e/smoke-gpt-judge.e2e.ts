@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { RunResult } from "../../src/contracts/run.js";
-import { DEFAULT_JUDGE_MODEL, GptJudgeClient, OPENAI_API_KEY_ENV_VAR } from "../../src/judge/index.js";
+import {
+  DEFAULT_JUDGE_MODEL,
+  GptJudgeClient,
+  hasJudgeApiKey,
+} from "../../src/judge/index.js";
 import { judgeRun } from "../../src/judge/orchestrate.js";
 import { flattenJudgeRun } from "../../src/judge/report.js";
 import { SAMPLE_MR_CASE } from "../fixtures/sample-mr-case.js";
@@ -8,21 +12,22 @@ import { SAMPLE_MR_CASE } from "../fixtures/sample-mr-case.js";
 /**
  * 冒烟 e2e（Ticket 11）：LLM-as-judge（与被测模型不同源）真实 API × 样例 MR × 判定链双口径。
  *
- * 运行条件：环境变量 OPENAI_API_KEY 存在（key 只经环境变量注入，绝不回显/落盘）。
+ * 运行条件：judge key 双名任一非空（hasJudgeApiKey——与 client 构造期同名同序
+ * 同 trim 语义；key 只经环境变量注入，绝不回显/落盘）。
  * 可选 E2E_JUDGE_MODEL 覆盖判定模型（异构 id，如 glm-5-3-260814 @ 火山网关——
- * 配 OPENAI_URL 指向网关端点；#33 glm-5.3 冒烟即此形态）；缺省 gpt-5.2-pro。
- * 无 key 时显式 SKIP——`pnpm test` 零网络，本文件仅在 `pnpm test:e2e` 中运行。
+ * 配 JUDGE_URL / 旧名 OPENAI_URL 指向网关端点；#33 glm-5.3 冒烟即此形态）；
+ * 缺省 gpt-5.2-pro。无 key 时显式 SKIP——`pnpm test` 零网络，本文件仅在
+ * `pnpm test:e2e` 中运行。
  */
 
-const rawEnvKey = process.env[OPENAI_API_KEY_ENV_VAR];
-const hasApiKey = typeof rawEnvKey === "string" && rawEnvKey.trim().length > 0;
+const hasApiKey = hasJudgeApiKey();
 /** 覆盖判定模型（可选；null = DEFAULT_JUDGE_MODEL——与计划字段同哨兵） */
 const e2eJudgeModel = process.env.E2E_JUDGE_MODEL?.trim() || null;
 
 if (!hasApiKey) {
   console.info(
-    "[gpt-judge-smoke-e2e] OPENAI_API_KEY is not set: the real-API judge smoke e2e is SKIPPED. " +
-      "Export OPENAI_API_KEY and run `pnpm test:e2e` to execute it.",
+    "[gpt-judge-smoke-e2e] neither JUDGE_API_KEY nor OPENAI_API_KEY is set: the real-API judge smoke e2e is SKIPPED. " +
+      "Export JUDGE_API_KEY (or the legacy OPENAI_API_KEY) and run `pnpm test:e2e` to execute it.",
   );
 }
 

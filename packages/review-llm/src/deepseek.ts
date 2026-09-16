@@ -1,6 +1,6 @@
 /**
  * DeepSeek 接入常量（单源；原 root deepseek-client / review-dsh deepseek-adapter 双份收敛）。
- * #42/#43 的 provider 参数画像表将以此为底座扩展角色维度。
+ * provider 参数画像（thinking 策略 / completion 信封 / usage 能力）见 ./profile.ts（#42）。
  */
 
 export const DEEPSEEK_API_BASE_URL = "https://api.deepseek.com";

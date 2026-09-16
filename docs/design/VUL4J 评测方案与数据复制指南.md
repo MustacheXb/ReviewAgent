@@ -98,9 +98,9 @@ pnpm experiment -- --id <experiment-id> \
 
 两级：rule 筛查（确定性）→ judge 链（语义裁定）。judge 协议参数**锁定 MCR-Bench 论文值，不随模型漂移**：
 
-- **模型异构约束**：judge 必须与被测模型不同源（客户端层拒绝 deepseek 系 id）；本方案用 `glm-5-3-260814`（经 OpenAI 兼容网关，key 经 `OPENAI_API_KEY`/`OPENAI_URL` 环境变量注入，不落代码与日志）。
+- **模型异构约束**：judge 必须与被测模型不同源（客户端层拒绝 deepseek 系 id）；本方案用 `glm-5-3-260814`（经 OpenAI 兼容网关，key 经 `JUDGE_API_KEY`/`JUDGE_URL` 环境变量注入（#42 角色名；旧名 `OPENAI_API_KEY`/`OPENAI_URL` 兼容），不落代码与日志）。
 - **校准参数**：temperature 0.2 / top_p 0.95（论文协议值，全模型锁定）。
-- **max_tokens = 模型族感知容量上界**（#39）：gpt 系 8192（论文锚）；glm 等推理模型 32768——推理模型 completion 含 reasoning tokens，8192 会被吃满导致 content=0 截断（探针实测）。**容量随模型族，校准参数不随**。
+- **max_tokens = 画像表驱动容量上界**（#39 定值、#42 起查共享包 provider 画像表）：gpt 系/未知模型 8192（论文锚）；glm 等推理模型 32768——推理模型 completion 含 reasoning tokens，8192 会被吃满导致 content=0 截断（探针实测）。**容量随模型族，校准参数不随**。
 - **裁定语义**：finding↔truth 卡片匹配（model_defect_i ↔ ground_truth_j + match_confidence + 理由），置信度门槛缺省 `low`（`MATCH_CONFIDENCE_RANK` 排序）。
 - **有界重试**：仅 429/500/503/网络/超时重试（3 次指数退避）；响应格式错误与 finish_reason=length 截断**不自动重试**（显式失败留痕）。
 - **指标回落**：judge 失败时该单元 judge 指标回落 rule 筛查值，单元数据本体完整（重判可恢复）。

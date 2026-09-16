@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OPENAI_API_KEY_ENV_VAR } from "../../src/judge/gpt-judge-client.js";
+import { JUDGE_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR } from "../../src/judge/gpt-judge-client.js";
 import { judgeRun } from "../../src/judge/orchestrate.js";
 import { FakeJudgeClient } from "../../src/judge/fake-judge-client.js";
 import {
@@ -211,22 +211,30 @@ describe("judgeRun — 有界失败（judge 异常回退规则口径）", () => 
     expect(result.disagreements).toHaveLength(0);
   });
 
-  it("错误信息脱敏：环境变量中的 API key 替换为 [REDACTED]", async () => {
-    const original = process.env[OPENAI_API_KEY_ENV_VAR];
+  it("错误信息脱敏：环境变量中的 API key 替换为 [REDACTED]（含 #42 角色名 JUDGE_API_KEY）", async () => {
+    const originalOpenai = process.env[OPENAI_API_KEY_ENV_VAR];
+    const originalJudge = process.env[JUDGE_API_KEY_ENV_VAR];
     process.env[OPENAI_API_KEY_ENV_VAR] = "sk-secret-leak-check";
+    process.env[JUDGE_API_KEY_ENV_VAR] = "sk-role-secret-leak-check";
     try {
       const judge = new FakeJudgeClient([
-        { kind: "fail", error: new Error("auth failed for key sk-secret-leak-check") },
+        { kind: "fail", error: new Error("auth failed for key sk-secret-leak-check / sk-role-secret-leak-check") },
       ]);
       const run = makeRunResult({ findings: [makeFinding({ id: "F001" })] });
       const result = await judgeRun(run, makeMrCase(), judge);
       expect(result.errorMessage).toContain("[REDACTED]");
       expect(result.errorMessage).not.toContain("sk-secret-leak-check");
+      expect(result.errorMessage).not.toContain("sk-role-secret-leak-check");
     } finally {
-      if (original === undefined) {
-        delete process.env[OPENAI_API_KEY_ENV_VAR];
-      } else {
-        process.env[OPENAI_API_KEY_ENV_VAR] = original;
+      for (const [name, original] of [
+        [OPENAI_API_KEY_ENV_VAR, originalOpenai],
+        [JUDGE_API_KEY_ENV_VAR, originalJudge],
+      ] as const) {
+        if (original === undefined) {
+          delete process.env[name];
+        } else {
+          process.env[name] = original;
+        }
       }
     }
   });

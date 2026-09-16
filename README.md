@@ -65,8 +65,10 @@ CI（push / PR）跑两层门：`discipline-gate`（确定性纪律门 · 零网
 ```ini
 DEEPSEEK_API_KEY=...    # 被测模型（恒需）
 DEEPSEEK_URL=...        # 可选：中转/代理端点覆盖
-OPENAI_API_KEY=...      # judge 环节（--judge 时需要；火山网关 glm 走此通道）
-OPENAI_URL=...
+JUDGE_API_KEY=...       # judge 环节（--judge 时需要，任选一名；火山网关 glm 走此通道）
+JUDGE_URL=...           # 可选：自定义 OpenAI 兼容网关端点
+OPENAI_API_KEY=...      # 兼容别名（旧名；与 JUDGE_API_KEY 同设时新名优先，#42）
+OPENAI_URL=...          # 兼容别名（旧名）
 ```
 
 ## 目录与入库约定

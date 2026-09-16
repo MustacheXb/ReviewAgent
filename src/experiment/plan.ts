@@ -52,7 +52,7 @@ export interface ExperimentPlan {
   readonly perSourceLimit: number | null;
   /** 精确 caseId 过滤（空数组 = 不过滤） */
   readonly caseFilter: readonly string[];
-  /** 是否执行判定链 judge 阶段（需要 OPENAI_API_KEY） */
+  /** 是否执行判定链 judge 阶段（需要 JUDGE_API_KEY 或旧名 OPENAI_API_KEY，#42） */
   readonly judge: boolean;
   /**
    * 判定链 judge 模型 id（null = DEFAULT_JUDGE_MODEL，论文协议锚）。

@@ -23,6 +23,8 @@ import { CONFIGS } from "../contracts/config.js";
 import type { Finding } from "../contracts/finding.js";
 import type { MRCase, MRTruth, TruthLocation } from "../contracts/mr-case.js";
 import type { RunResult } from "../contracts/run.js";
+import { JUDGE_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR } from "./gpt-judge-client.js";
+import { DEEPSEEK_API_KEY_ENV_VAR } from "review-llm";
 import {
   computeEfficiencyMetrics,
   computePRF,
@@ -461,10 +463,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 错误信息脱敏：环境变量中的 API key 一律替换为 [REDACTED]（防异常文本携带密钥） */
+/** 错误信息脱敏：环境变量中的 API key 一律替换为 [REDACTED]（防异常文本携带密钥；#42 角色名同步入名单） */
 function redactSecrets(message: string): string {
   let redacted = message;
-  for (const secret of [process.env.OPENAI_API_KEY, process.env.DEEPSEEK_API_KEY]) {
+  const secrets = [
+    process.env[JUDGE_API_KEY_ENV_VAR],
+    process.env[OPENAI_API_KEY_ENV_VAR],
+    process.env[DEEPSEEK_API_KEY_ENV_VAR],
+  ];
+  for (const secret of secrets) {
     if (typeof secret === "string" && secret.trim().length > 0) {
       redacted = redacted.split(secret).join("[REDACTED]");
     }

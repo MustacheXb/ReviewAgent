@@ -5,12 +5,14 @@
  * 去重）；本文件只保留 judge 特有语义。
  *
  * 纪律：
- * - API key 仅经 OPENAI_API_KEY 环境变量或显式参数注入，绝不硬编码、绝不出现在错误信息中；
+ * - API key 仅经环境变量或显式参数注入，绝不硬编码、绝不出现在错误信息中；
+ *   环境变量按序探测（#42）：角色命名 JUDGE_API_KEY / JUDGE_URL 优先，
+ *   旧 provider 命名 OPENAI_API_KEY / OPENAI_URL 保留为兼容别名；
  * - 模型异构约束：默认 gpt-5.2-pro（MCR-Bench 论文 LLM-Hit-Judge 的最高人工一致性档，
  *   QWK 0.73），deepseek 系 id 直接拒绝（判定链要求与被测模型不同源；glm 等异构 id 可用，
  *   #33）；
  * - judge 校准参数锁定论文协议值：temperature 0.2 / top_p 0.95；max_tokens 为
- *   模型族感知容量上界（gpt-5.2-pro 8192 论文锚 / glm 等推理模型 32768，#39）；
+ *   画像表驱动的容量上界（glm 等推理模型 32768、默认 8192，#39/#42）；
  * - 有界重试：仅 429/500/503 与网络/超时错误重试；响应体异常与请求构造错直接抛。
  */
 
@@ -32,12 +34,29 @@ import { defaultSleep, OpenAiHttpKernel, runWithRetries, type HttpKernelErrorFac
 import { nonNegativeIntOption, positiveIntOption, resolveApiKey, resolveEndpointUrl } from "review-llm";
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+/** judge 角色 key 环境变量（#42 推荐名） */
+export const JUDGE_API_KEY_ENV_VAR = "JUDGE_API_KEY";
+/** judge 接入点环境变量（#42 推荐名；自定义 OpenAI 兼容网关端点） */
+export const JUDGE_URL_ENV_VAR = "JUDGE_URL";
+/** 兼容别名（旧 provider 命名；与推荐名同时设置时推荐名优先） */
 export const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
-/** 接入点覆盖环境变量（中转/代理端点；显式 baseUrl 选项优先于它） */
 export const OPENAI_URL_ENV_VAR = "OPENAI_URL";
 export const DEFAULT_GPT_JUDGE_TIMEOUT_MS = 300_000;
 export const DEFAULT_GPT_JUDGE_MAX_RETRIES = 3;
 export const DEFAULT_GPT_JUDGE_RETRY_BASE_DELAY_MS = 1_000;
+
+/**
+ * judge key 双名存在性探测（trim 后非空即视为已配置）：与构造期 resolveApiKey
+ * 同名同序（JUDGE_API_KEY > OPENAI_API_KEY）同 trim 语义——实验预检与 e2e
+ * 冒烟门共用此口径，避免各自复制探测逻辑后漂移。只判断存在性，不读值。
+ */
+export function hasJudgeApiKey(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  return [JUDGE_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR].some(
+    (name) => (env[name]?.trim().length ?? 0) > 0,
+  );
+}
 
 /** 服务标签：错误消息前缀（内核参数化） */
 const SERVICE_LABEL = "OpenAI API";
@@ -52,9 +71,9 @@ const KERNEL_ERROR_FACTORIES: HttpKernelErrorFactories = {
 };
 
 export interface GptJudgeClientOptions extends GptRequestMapperOptions {
-  /** API key；缺省读环境变量 OPENAI_API_KEY（启动即校验，缺失 fail fast） */
+  /** API key；缺省按序读环境变量 JUDGE_API_KEY > OPENAI_API_KEY（启动即校验，缺失 fail fast） */
   readonly apiKey?: string;
-  /** API base URL；显式选项 > OPENAI_URL 环境变量 > 缺省 https://api.openai.com/v1（中转/代理端点用；测试可注入本地地址） */
+  /** API base URL；显式选项 > JUDGE_URL > OPENAI_URL 环境变量 > 缺省 https://api.openai.com/v1（自定义 OpenAI 兼容网关用；测试可注入本地地址） */
   readonly baseUrl?: string;
   /** 单次请求超时（毫秒）；缺省 300_000（推理型 judge 长思考给足） */
   readonly timeoutMs?: number;
@@ -82,14 +101,14 @@ export class GptJudgeClient implements JudgeClient {
       serviceLabel: SERVICE_LABEL,
       apiKey: resolveApiKey({
         explicit: options.apiKey,
-        envVarNames: [OPENAI_API_KEY_ENV_VAR],
+        envVarNames: [JUDGE_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR],
         serviceLabel: SERVICE_LABEL,
         clientError,
       }),
       endpointUrl: resolveEndpointUrl({
         baseUrl: options.baseUrl,
         defaultBaseUrl: OPENAI_API_BASE_URL,
-        envVarNames: [OPENAI_URL_ENV_VAR],
+        envVarNames: [JUDGE_URL_ENV_VAR, OPENAI_URL_ENV_VAR],
         clientError,
       }),
       timeoutMs: positiveIntOption(options.timeoutMs, DEFAULT_GPT_JUDGE_TIMEOUT_MS, "timeoutMs", clientError),

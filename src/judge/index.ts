@@ -48,11 +48,9 @@ export type { FakeJudgeScriptStep } from "./fake-judge-client.js";
 export {
   buildGptJudgeBody,
   DEFAULT_JUDGE_MODEL,
-  JUDGE_MAX_TOKENS,
   JUDGE_TEMPERATURE,
   JUDGE_TOP_P,
   judgeCompletionCapOf,
-  REASONING_JUDGE_MAX_TOKENS,
   validateModel,
 } from "./gpt-request-mapper.js";
 export {
@@ -60,8 +58,12 @@ export {
   DEFAULT_GPT_JUDGE_RETRY_BASE_DELAY_MS,
   DEFAULT_GPT_JUDGE_TIMEOUT_MS,
   GptJudgeClient,
+  hasJudgeApiKey,
+  JUDGE_API_KEY_ENV_VAR,
+  JUDGE_URL_ENV_VAR,
   OPENAI_API_BASE_URL,
   OPENAI_API_KEY_ENV_VAR,
+  OPENAI_URL_ENV_VAR,
 } from "./gpt-judge-client.js";
 export type { GptJudgeClientOptions } from "./gpt-judge-client.js";
 export {

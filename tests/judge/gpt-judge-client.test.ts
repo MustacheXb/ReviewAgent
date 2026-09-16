@@ -3,6 +3,9 @@ import type { JudgeRequest } from "../../src/judge/contracts.js";
 import {
   DEFAULT_GPT_JUDGE_RETRY_BASE_DELAY_MS,
   GptJudgeClient,
+  hasJudgeApiKey,
+  JUDGE_API_KEY_ENV_VAR,
+  JUDGE_URL_ENV_VAR,
   OPENAI_API_KEY_ENV_VAR,
   OPENAI_URL_ENV_VAR,
 } from "../../src/judge/gpt-judge-client.js";
@@ -12,7 +15,7 @@ import {
   GptJudgeResponseFormatError,
   JudgeClientError,
 } from "../../src/judge/errors.js";
-import { JUDGE_MAX_TOKENS, JUDGE_TEMPERATURE, JUDGE_TOP_P, validateModel } from "../../src/judge/gpt-request-mapper.js";
+import { JUDGE_TEMPERATURE, JUDGE_TOP_P, validateModel } from "../../src/judge/gpt-request-mapper.js";
 import {
   createFetchStub,
   createSleepRecorder,
@@ -69,31 +72,38 @@ function makeClient(overrides: {
   return { client, stub };
 }
 
-const originalEnvKey = process.env[OPENAI_API_KEY_ENV_VAR];
-const originalEnvUrl = process.env[OPENAI_URL_ENV_VAR];
+/** 本文件管理的全部 judge 角色环境变量（新名 + 兼容别名；#42） */
+const MANAGED_ENV_VARS = [
+  JUDGE_API_KEY_ENV_VAR,
+  OPENAI_API_KEY_ENV_VAR,
+  JUDGE_URL_ENV_VAR,
+  OPENAI_URL_ENV_VAR,
+] as const;
+const originalEnv = new Map<string, string | undefined>(
+  MANAGED_ENV_VARS.map((name) => [name, process.env[name]]),
+);
 
 beforeEach(() => {
-  delete process.env[OPENAI_API_KEY_ENV_VAR];
-  delete process.env[OPENAI_URL_ENV_VAR];
+  for (const name of MANAGED_ENV_VARS) {
+    delete process.env[name];
+  }
 });
 
 afterEach(() => {
-  if (originalEnvKey === undefined) {
-    delete process.env[OPENAI_API_KEY_ENV_VAR];
-  } else {
-    process.env[OPENAI_API_KEY_ENV_VAR] = originalEnvKey;
-  }
-  if (originalEnvUrl === undefined) {
-    delete process.env[OPENAI_URL_ENV_VAR];
-  } else {
-    process.env[OPENAI_URL_ENV_VAR] = originalEnvUrl;
+  for (const name of MANAGED_ENV_VARS) {
+    const original = originalEnv.get(name);
+    if (original === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = original;
+    }
   }
 });
 
 describe("GptJudgeClient — API key 纪律", () => {
-  it("无任何 key 来源时 fail fast", () => {
+  it("无任何 key 来源时 fail fast（错误消息列全部别名，推荐名在前）", () => {
     expect(() => new GptJudgeClient()).toThrowError(
-      /OpenAI API key is missing: set the OPENAI_API_KEY environment variable/,
+      /OpenAI API key is missing: set one of the JUDGE_API_KEY, OPENAI_API_KEY environment variables/,
     );
   });
 
@@ -105,12 +115,87 @@ describe("GptJudgeClient — API key 纪律", () => {
     expect(stub.requests[0]?.headers.Authorization).toBe(`Bearer ${API_KEY}`);
   });
 
-  it("环境变量 key 经 Bearer 头发送", async () => {
+  it("旧名环境变量 key 经 Bearer 头发送（别名兼容）", async () => {
     process.env[OPENAI_API_KEY_ENV_VAR] = "env-judge-key";
     const stub = createFetchStub(() => okJudgeResponse(happyAdjudication()));
     const client = new GptJudgeClient({ fetchFn: stub.fetch, sleepFn: async () => {} });
     await client.adjudicate(judgeRequest());
     expect(stub.requests[0]?.headers.Authorization).toBe("Bearer env-judge-key");
+  });
+});
+
+describe("GptJudgeClient — 角色命名环境变量（#42：JUDGE_API_KEY / JUDGE_URL，新名 > 旧名 > 默认）", () => {
+  it("JUDGE_API_KEY 单独设置即生效（经 Bearer 头发送；端点仍缺省 OpenAI）", async () => {
+    process.env[JUDGE_API_KEY_ENV_VAR] = "role-judge-key";
+    const stub = createFetchStub(() => okJudgeResponse(happyAdjudication()));
+    const client = new GptJudgeClient({ fetchFn: stub.fetch, sleepFn: async () => {} });
+    await client.adjudicate(judgeRequest());
+    expect(stub.requests[0]?.headers.Authorization).toBe("Bearer role-judge-key");
+    expect(stub.requests[0]?.url).toBe("https://api.openai.com/v1/chat/completions");
+  });
+
+  it("JUDGE_API_KEY 与旧名 OPENAI_API_KEY 同时设置时新名优先", async () => {
+    process.env[JUDGE_API_KEY_ENV_VAR] = "new-name-key";
+    process.env[OPENAI_API_KEY_ENV_VAR] = "legacy-key";
+    const stub = createFetchStub(() => okJudgeResponse(happyAdjudication()));
+    const client = new GptJudgeClient({ fetchFn: stub.fetch, sleepFn: async () => {} });
+    await client.adjudicate(judgeRequest());
+    expect(stub.requests[0]?.headers.Authorization).toBe("Bearer new-name-key");
+  });
+
+  it("空白 JUDGE_API_KEY 视为未设置，回落旧名 OPENAI_API_KEY", async () => {
+    process.env[JUDGE_API_KEY_ENV_VAR] = "   ";
+    process.env[OPENAI_API_KEY_ENV_VAR] = "legacy-key";
+    const stub = createFetchStub(() => okJudgeResponse(happyAdjudication()));
+    const client = new GptJudgeClient({ fetchFn: stub.fetch, sleepFn: async () => {} });
+    await client.adjudicate(judgeRequest());
+    expect(stub.requests[0]?.headers.Authorization).toBe("Bearer legacy-key");
+  });
+
+  it("JUDGE_URL 单独设置即生效（自定义 OpenAI 兼容网关端点）", async () => {
+    process.env[JUDGE_API_KEY_ENV_VAR] = "role-judge-key";
+    process.env[JUDGE_URL_ENV_VAR] = "https://gateway.internal.example.com/v1";
+    const stub = createFetchStub(() => okJudgeResponse(happyAdjudication()));
+    const client = new GptJudgeClient({ fetchFn: stub.fetch, sleepFn: async () => {} });
+    await client.adjudicate(judgeRequest());
+    expect(stub.requests[0]?.url).toBe("https://gateway.internal.example.com/v1/chat/completions");
+  });
+
+  it("JUDGE_URL 与旧名 OPENAI_URL 同时设置时新名优先；空白新名回落旧名", async () => {
+    process.env[JUDGE_URL_ENV_VAR] = "https://new.example.com/v1";
+    process.env[OPENAI_URL_ENV_VAR] = "https://legacy.example.com/v1";
+    const both = createFetchStub(() => okJudgeResponse(happyAdjudication()));
+    const bothClient = new GptJudgeClient({ apiKey: API_KEY, fetchFn: both.fetch, sleepFn: async () => {} });
+    await bothClient.adjudicate(judgeRequest());
+    expect(both.requests[0]?.url).toBe("https://new.example.com/v1/chat/completions");
+
+    process.env[JUDGE_URL_ENV_VAR] = "   ";
+    const fallback = createFetchStub(() => okJudgeResponse(happyAdjudication()));
+    const fallbackClient = new GptJudgeClient({ apiKey: API_KEY, fetchFn: fallback.fetch, sleepFn: async () => {} });
+    await fallbackClient.adjudicate(judgeRequest());
+    expect(fallback.requests[0]?.url).toBe("https://legacy.example.com/v1/chat/completions");
+  });
+
+  it("非法协议的 JUDGE_URL 报错注明来源（角色名进错误消息）", () => {
+    process.env[JUDGE_URL_ENV_VAR] = "ftp://gateway.example.com";
+    expect(() => new GptJudgeClient({ apiKey: API_KEY })).toThrowError(
+      /baseUrl must start with http:\/\/ or https:\/\/ \(from JUDGE_URL environment variable/,
+    );
+  });
+});
+
+describe("hasJudgeApiKey — 双名存在性探测（预检 / e2e 冒烟门共用口径）", () => {
+  it("任一名 trim 后非空即 true；空白与缺失为 false（与 client 回落语义一致）", () => {
+    expect(hasJudgeApiKey({ [JUDGE_API_KEY_ENV_VAR]: "role-key" })).toBe(true);
+    expect(hasJudgeApiKey({ [OPENAI_API_KEY_ENV_VAR]: "legacy-key" })).toBe(true);
+    expect(hasJudgeApiKey({ [JUDGE_API_KEY_ENV_VAR]: "   " })).toBe(false);
+    expect(hasJudgeApiKey({})).toBe(false);
+  });
+
+  it("空白新名 + 旧名有值 → true（新名空白视为未设置，不吞掉旧名）", () => {
+    expect(
+      hasJudgeApiKey({ [JUDGE_API_KEY_ENV_VAR]: "  ", [OPENAI_API_KEY_ENV_VAR]: "legacy-key" }),
+    ).toBe(true);
   });
 });
 
@@ -162,8 +247,8 @@ describe("GptJudgeClient — 请求 wire 形状（协议参数锁定）", () => 
     expect(body.temperature).toBe(0.2);
     expect(body.top_p).toBe(JUDGE_TOP_P);
     expect(body.top_p).toBe(0.95);
-    expect(body.max_tokens).toBe(JUDGE_MAX_TOKENS);
-    expect(body.max_tokens).toBe(8192);
+    // max_tokens 走默认画像 8192（#42 画像表驱动；论文协议锚）
+    expect(body.max_tokens).toBe(8_192);
     expect(body.stream).toBe(false);
     const messages = body.messages as { role: string; content: string }[];
     expect(messages).toHaveLength(2);
