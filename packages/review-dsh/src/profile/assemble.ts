@@ -32,10 +32,15 @@ import { REVIEW_PRESETS } from "../presets/review-presets.js";
 /**
  * 生产/冒烟组装的政策面：preset 语义 + 真实 API 级 turn 预算（kernel-host 与
  * CLI wrapper 共用——两处都承载真实适配器，thinking 单 turn 分钟级，缺省 10s
- * 只对进程内 fake 成立；#29 冒烟回归）。
+ * 只对进程内 fake 成立；#29 冒烟回归）。model 覆盖（#45）：缺省回落
+ * review-policy 的 DEFAULT_MODEL（自由 id 透传，空串由插件组装期拒绝）。
  */
-export function realApiReviewPolicy(configId: ConfigId): ReviewPolicyConfig {
-  return { ...REVIEW_PRESETS[configId], turnTimeoutMs: REAL_LLM_TURN_TIMEOUT_MS };
+export function realApiReviewPolicy(configId: ConfigId, model?: string): ReviewPolicyConfig {
+  return {
+    ...REVIEW_PRESETS[configId],
+    turnTimeoutMs: REAL_LLM_TURN_TIMEOUT_MS,
+    ...(model !== undefined ? { model } : {}),
+  };
 }
 
 export interface AssembleReviewProfileOptions {

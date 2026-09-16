@@ -404,3 +404,50 @@ describe("fake 与真实 adapter 审计同构（#24 AC4）", () => {
     expect(strip(fakeContent)).toEqual(strip(realContent));
   });
 });
+
+describe("model 审计导出 + wire 画像容忍（#45）", () => {
+  it("toPoc1RunResult 携带 model：缺省 = DEFAULT_MODEL，自定义透传（model 是实验数据，进 RunResult）", async () => {
+    const defaultResult = await runConfigA();
+    expect(toPoc1RunResult(defaultResult).model).toBe("deepseek-v4-flash");
+
+    const { result } = await runIsolated(configAFindingScript(), { policy: { model: "glm-4.7" } }, INPUT);
+    expect(toPoc1RunResult(result).model).toBe("glm-4.7");
+  });
+
+  it("真实 wire 来源（glm 画像）：无 thinking 字段 + 32768 信封的请求重放等价（画像容忍）", async () => {
+    const { fetchFn } = scriptedFetch(configAFindingResponses());
+    const adapter = new DeepSeekLlmAdapter({ apiKey: "sk-test-secret-123", fetchFn, sleepFn: ZERO_WAIT_SLEEP });
+    const { ctx } = await mountAdapter(adapter, { policy: { model: "glm-4.7" } });
+    const result = await ctx.reviewRuntime.run(INPUT);
+    const content = toAuditFileContent(result);
+
+    expect(content.requests.every((request) => request.wireBody !== undefined)).toBe(true);
+    // wire 体按画像序列化：thinking 整体不发、max_tokens 32768 信封在场
+    const firstWire = JSON.parse(String(content.requests[0]?.wireBody)) as Record<string, unknown>;
+    expect("thinking" in firstWire).toBe(false);
+    expect("reasoning_effort" in firstWire).toBe(false);
+    expect(firstWire.max_tokens).toBe(32_768);
+    // 重放闭环：反解忽略信封、effort 恒 default，与结构化请求逐字段等价
+    const replayed = content.requests.map((request) => replayAuditRequest(request));
+    expect(replayed).toEqual(content.requests.map(({ wireBody: _wire, ...request }) => request));
+  });
+
+  it("画像容忍边界：thinking / reasoning_effort 须同进同退，在场必须锁定档", () => {
+    const base = { model: "x-gateway-model", messages: [{ role: "user", content: "q" }], stream: false };
+    const structured = {
+      model: "x-gateway-model",
+      effort: "default",
+      messages: [{ role: "user", content: "q" }],
+      tools: [],
+    };
+    // 半档（有 thinking 无 reasoning_effort）→ 拒绝
+    const halfGear = { ...structured, wireBody: JSON.stringify({ ...base, thinking: { type: "enabled" } }) };
+    expect(() => replayAuditRequest(halfGear as never)).toThrow(/thinking and reasoning_effort/u);
+    // 非锁定档（effort 值漂移）→ 拒绝
+    const driftedGear = {
+      ...structured,
+      wireBody: JSON.stringify({ ...base, thinking: { type: "enabled" }, reasoning_effort: "low" }),
+    };
+    expect(() => replayAuditRequest(driftedGear as never)).toThrow(/thinking and reasoning_effort/u);
+  });
+});

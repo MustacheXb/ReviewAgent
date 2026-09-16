@@ -30,12 +30,15 @@ export interface DshAuditFileContent extends AuditFileContent {
   readonly requests: readonly ExportedAuditRequest[];
 }
 
-/** DSH 运行结果 → POC1 RunResult（metrics / judge 读取端直接消费的形态） */
+/** DSH 运行结果 → POC1 RunResult（metrics / judge 读取端直接消费的形态）。
+ * model 是实验数据（#45）：audit.model 直达 RunResult——读取端从此可按模型
+ * 分口径，旧记录 / 缺席字段的既有语义不变（root 契约 model?: string）。 */
 export function toPoc1RunResult(result: ReviewRunResult): RunResult {
   const audit = result.audit;
   return {
     caseId: audit.caseId,
     configId: audit.configId,
+    model: audit.model,
     findings: result.findings,
     usage: audit.usage,
     rounds: audit.rounds,
@@ -205,9 +208,10 @@ interface WireRequestBody {
   }[];
 }
 
-/** wire 字节 → POC1 LlmRequest（review_* → review.*、thinking 锁档 → effort 标签）。
- * 反向映射与 wire.ts 的正向序列化互逆（ADR-0002 锁档：effort "default" ⇄
- * thinking enabled + reasoning_effort "high"）。 */
+/** wire 字节 → POC1 LlmRequest（review_* → review.*、effort 标签恒 default）。
+ * 反向映射与 wire.ts 的正向序列化互逆（#45 画像容忍：thinking / reasoning_effort
+ * 同进同退——deepseek 画像锁定档在场，omit 画像双缺席；max_tokens 信封反解
+ * 忽略，结构化请求无此字段）。 */
 function fromWireBody(wireBody: string): LlmRequest {
   let body: WireRequestBody;
   try {
@@ -216,9 +220,13 @@ function fromWireBody(wireBody: string): LlmRequest {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`audit-export: wire body is not valid JSON (${message})`);
   }
-  if (body.thinking?.type !== LOCKED_THINKING.type || body.reasoning_effort !== LOCKED_REASONING_EFFORT) {
+  if (
+    (body.thinking === undefined) !== (body.reasoning_effort === undefined) ||
+    (body.thinking !== undefined &&
+      (body.thinking.type !== LOCKED_THINKING.type || body.reasoning_effort !== LOCKED_REASONING_EFFORT))
+  ) {
     throw new Error(
-      `audit-export: wire body is not in the locked effort gear (ADR-0002: thinking enabled + reasoning_effort "high"); got thinking=${JSON.stringify(body.thinking)}, reasoning_effort=${JSON.stringify(body.reasoning_effort)}`,
+      `audit-export: wire body has an inconsistent effort gear — thinking and reasoning_effort must both be present at the locked gear (thinking {type:"enabled"} + reasoning_effort "high") or both absent (profile omit gear); got thinking=${JSON.stringify(body.thinking)}, reasoning_effort=${JSON.stringify(body.reasoning_effort)}`,
     );
   }
   return {

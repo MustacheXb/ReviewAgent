@@ -2,7 +2,7 @@ import { LlmAdapter, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_TURN_TIMEOUT_MS, REAL_LLM_TURN_TIMEOUT_MS } from "../../src/plugins/review-policy.js";
+import { DEFAULT_MODEL, DEFAULT_TURN_TIMEOUT_MS, REAL_LLM_TURN_TIMEOUT_MS } from "../../src/plugins/review-policy.js";
 import { DEFAULT_DEEPSEEK_TIMEOUT_MS } from "../../src/llm/deepseek-adapter.js";
 import { realApiReviewPolicy } from "../../src/profile/assemble.js";
 import type { MrInput } from "../../src/plugins/review-context.js";
@@ -163,5 +163,44 @@ describe("A–E 矩阵收口（#25：内核只装五形态，非矩阵组合组�
     expect(ctx.reviewPolicy.ledger).toBe(true);
     expect(ctx.reviewPolicy.fullRepo).toBe(false);
     expect(ctx.reviewPolicy.prefetch).toBe(false);
+  });
+});
+
+describe("model 政策化（#45：模型路由由请求参数推导，不再硬编码）", () => {
+  it("DEFAULT_MODEL 单源导出 = deepseek-v4-flash（DeepSeek 默认路径行为不变）", () => {
+    expect(DEFAULT_MODEL).toBe("deepseek-v4-flash");
+  });
+
+  it("缺省政策：服务回落 DEFAULT_MODEL；provider / effortLabel 不随 model 变", async () => {
+    const { ctx } = await mount();
+
+    expect(ctx.reviewPolicy.model).toBe("deepseek-v4-flash");
+    expect(ctx.reviewPolicy.provider).toBe("deepseek");
+    expect(ctx.reviewPolicy.effortLabel).toBe("default");
+  });
+
+  it("自定义 model 透传服务（自由 id，画像表接管 wire 序列化）", async () => {
+    const { ctx } = await mount([], { policy: { model: "glm-4.7" } });
+
+    expect(ctx.reviewPolicy.model).toBe("glm-4.7");
+  });
+
+  it("自定义 model 贯穿 runtime：首个 agent 请求的 model = 政策值", async () => {
+    const { ctx, adapter } = await mount([{ kind: "reply", content: '{"summary":"model probe"}' }], {
+      policy: { model: "glm-4.7" },
+    });
+
+    // 首轮请求已捕获即达成本断言目的；脚本耗尽导致的运行失败不是本断言对象
+    await ctx.reviewRuntime.run(INPUT).catch(() => undefined);
+    expect(adapter.capturedRequests[0]?.model).toBe("glm-4.7");
+  });
+
+  it("空字符串 fail fast：组装期拒绝（镜像 turnTimeoutMs 校验模式）", async () => {
+    await expect(mount([], { policy: { model: "" } })).rejects.toThrow(
+      /model must be a non-empty string/u,
+    );
+    await expect(mount([], { policy: { model: "   " } })).rejects.toThrow(
+      /model must be a non-empty string/u,
+    );
   });
 });

@@ -1,5 +1,5 @@
 import type { LlmMessage, LlmRequest, ToolCall, ToolSchema } from "../contracts/llm-client.js";
-import { profileOf } from "review-llm";
+import { profileOf, RETIRED_MODEL_IDS } from "review-llm";
 import { DeepSeekClientError } from "./errors.js";
 import type {
   WireChatCompletionsRequest,
@@ -22,8 +22,8 @@ import type {
 /**
  * 已退役 id（2026-07-24 下线，ADR-0002）：自由 id 接受之下仍直接拒绝——
  * 静默放行只会换来模糊的线上 400，不如本地报错说清楚。
+ * 清单单源在 review-llm（RETIRED_MODEL_IDS，#45 起 root / DSH / runner 门共用）。
  */
-const RETIRED_MODELS: readonly string[] = ["deepseek-chat", "deepseek-reasoner"];
 
 /** harness 侧唯一合法的 effort 标签（runReview 默认档） */
 export const LOCKED_EFFORT_LABEL = "default";
@@ -100,7 +100,7 @@ function validateModel(model: unknown): void {
       `model must be a non-empty string (got ${JSON.stringify(model)}): free model ids are accepted and serialized per the provider profile table (review-llm profileOf)`,
     );
   }
-  if (RETIRED_MODELS.includes(model)) {
+  if (RETIRED_MODEL_IDS.includes(model)) {
     throw new DeepSeekClientError(
       `model ${JSON.stringify(model)} is retired (deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and must not be used; ADR-0002)`,
     );

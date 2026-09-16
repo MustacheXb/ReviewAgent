@@ -303,11 +303,13 @@ describe("DSH kernel host（#27）", () => {
   );
 
   it(
-    "凭据缺失：无 DEEPSEEK_API_KEY → runUnit 拒绝并指引 key 名，进程正常关闭",
+    "凭据缺失：无任何 key 名 → runUnit 拒绝并指引角色名（别名并列），进程正常关闭",
     async () => {
       const env: NodeJS.ProcessEnv = { ...process.env };
       delete env.DEEPSEEK_API_KEY;
       delete env.DEEPSEEK_URL;
+      delete env.REVIEWER_API_KEY;
+      delete env.REVIEWER_URL;
       const auditDir = await makeAuditDir("dsh-host-no-creds-");
       const driver = createDshKernelDriver({ env });
       try {
@@ -319,9 +321,108 @@ describe("DSH kernel host（#27）", () => {
             diff: SAMPLE_MR_CASE.diff,
             auditDir,
           }),
-        ).rejects.toThrow(/DEEPSEEK_API_KEY/);
+        ).rejects.toThrow(/REVIEWER_API_KEY/u);
       } finally {
         await driver.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe("DSH kernel host — model 下传与凭据透传（#45）", () => {
+  it(
+    "驱动器 model 下传：自定义 model 贯穿 host（结果 model + 审计顶层 model + wire 体按画像序列化）",
+    async () => {
+      const stub = await startStubLlmServer(configAResponses());
+      const auditDir = await makeAuditDir("dsh-host-model-glm-");
+      const driver = createDshKernelDriver({ env: stubEnv(stub.url, "sk-model-glm-sentinel") });
+      try {
+        const result = await driver.runUnit({
+          configId: "A",
+          caseId: "model-glm",
+          issueDescription: "",
+          diff: SAMPLE_MR_CASE.diff,
+          repoPath: SAMPLE_MR_CASE.repoPath,
+          auditDir,
+          model: "glm-4.7",
+        });
+
+        // POC1 RunResult.model：model 是实验数据，从请求一路进结果与审计
+        expect(result.model).toBe("glm-4.7");
+        if (result.auditPath === undefined) {
+          throw new Error("driver result is missing auditPath");
+        }
+        const audit = JSON.parse(await readFile(result.auditPath, "utf8")) as {
+          readonly model: string;
+          readonly requests: readonly { readonly wireBody?: string }[];
+        };
+        expect(audit.model).toBe("glm-4.7");
+        // wire 体按画像序列化（#45）：glm 档无 thinking、32768 信封
+        const firstWire = JSON.parse(String(audit.requests[0]?.wireBody)) as Record<string, unknown>;
+        expect("thinking" in firstWire).toBe(false);
+        expect("reasoning_effort" in firstWire).toBe(false);
+        expect(firstWire.max_tokens).toBe(32_768);
+        expect(firstWire.model).toBe("glm-4.7");
+      } finally {
+        await driver.close();
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "缺省 model：不带 model 的 runUnit 回落 deepseek-v4-flash（DeepSeek 默认路径行为不变）",
+    async () => {
+      const stub = await startStubLlmServer(configAResponses());
+      const auditDir = await makeAuditDir("dsh-host-model-default-");
+      const driver = createDshKernelDriver({ env: stubEnv(stub.url, "sk-model-default-sentinel") });
+      try {
+        const result = await driver.runUnit({
+          configId: "A",
+          caseId: "model-default",
+          issueDescription: "",
+          diff: SAMPLE_MR_CASE.diff,
+          repoPath: SAMPLE_MR_CASE.repoPath,
+          auditDir,
+        });
+
+        expect(result.model).toBe("deepseek-v4-flash");
+      } finally {
+        await driver.close();
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "REVIEWER_* 凭据透传：url / key 经角色环境变量到达 host 子进程（别名缺席亦可用）",
+    async () => {
+      const stub = await startStubLlmServer(configAResponses());
+      const auditDir = await makeAuditDir("dsh-host-reviewer-env-");
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      delete env.DEEPSEEK_API_KEY;
+      delete env.DEEPSEEK_URL;
+      env.REVIEWER_URL = stub.url;
+      env.REVIEWER_API_KEY = "sk-reviewer-passthrough-sentinel";
+      const driver = createDshKernelDriver({ env });
+      try {
+        const result = await driver.runUnit({
+          configId: "A",
+          caseId: "reviewer-env",
+          issueDescription: "",
+          diff: SAMPLE_MR_CASE.diff,
+          repoPath: SAMPLE_MR_CASE.repoPath,
+          auditDir,
+        });
+
+        // 角色名凭据完成整条链路（host 子进程解析别名 → 适配器 → stub 端点）
+        expect(result.findings.map((finding) => finding.id)).toEqual(["F001"]);
+      } finally {
+        await driver.close();
+        await stub.close();
       }
     },
     TEST_TIMEOUT_MS,

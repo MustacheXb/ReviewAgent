@@ -8,11 +8,13 @@
  *
  * 退出码契约（票面）：完成（含诚实截断——truncated 经 stdout 顶层呈现，是
  * POC1 record 语义的收敛标注而非失败）0 / 中止或错误 1。
- * 凭据经环境变量（DEEPSEEK_API_KEY / DEEPSEEK_URL），适配器构造期 fail fast，
- * 错误消息不回显 key 值。
+ * 凭据经 reviewer 角色环境变量（REVIEWER_API_KEY / REVIEWER_URL，别名
+ * DEEPSEEK_API_KEY / DEEPSEEK_URL），适配器构造期 fail fast，错误消息不回显
+ * key 值。model 是实验数据（#45）：经 --model 旗标下传（缺省
+ * deepseek-v4-flash），无 model 环境变量。
  *
  * 进程调用形态：review-agent review --repo <path> --mr <diff-file>
- *   [--config A-E] [--issue <text>] [--out <dir>]
+ *   [--config A-E] [--issue <text>] [--out <dir>] [--model <id>]
  */
 
 import { mkdir, mkdtemp, readFile, stat } from "node:fs/promises";
@@ -48,7 +50,7 @@ async function runReviewCommand(args: ReviewCliArgs): Promise<number> {
     const handle = await assembleReviewProfile(ctx, {
       sessionRoot,
       adapter,
-      policy: realApiReviewPolicy(args.config),
+      policy: realApiReviewPolicy(args.config, args.model),
     });
     const result = await ctx.reviewRuntime.run({
       caseId: args.caseId,

@@ -10,6 +10,8 @@ import { defineConfig } from "vitest/config";
  * 五族断言 → 入选文件的映射：
  * - Zone A 字节稳定        → loop/zone-a-stability + loop/zone-a-parity
  *                            + presets/review-presets（每配置字节确定，覆盖 A–E）
+ * - 双包 wire parity        → llm/wire-parity（#45：DSH wire 与 POC1 request-mapper
+ *                            对同一逻辑请求产出相同字节——画像表分派的漂移在此变红）
  * - 无变更零 Cache Break    → loop/cache-discipline
  * - 审计可重放              → audit/audit-export（#24 重放轴）
  * - 六阶段骨架 + 两上界     → loop/walking-skeleton（阶段轨迹）
@@ -35,6 +37,7 @@ export default defineConfig({
       "tests/loop/walking-skeleton.test.ts",
       "tests/loop/zone-a-stability.test.ts",
       "tests/loop/zone-a-parity.test.ts",
+      "tests/llm/wire-parity.test.ts",
       "tests/loop/cache-discipline.test.ts",
       "tests/loop/evidence-gate.test.ts",
       "tests/context/kernel-tools.test.ts",

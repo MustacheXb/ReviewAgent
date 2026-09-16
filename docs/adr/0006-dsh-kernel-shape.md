@@ -92,3 +92,12 @@ Phase 1 的内核组装方式（Round 3 定）：六阶段骨架**不**通过 `c
 
 - **#29 对照口径注记的收口**：诊断跑以冻结 harness 全新重跑同 45 单元（executed=45 failed=0 一遍全过）量出 ±1σ 门噪声底——**POC1-vs-POC1 自身出 1 OUT（正向）/ 3 OUT（反向，同一对数据带取自哪侧结论就变）**，DSH 的 2 OUT 落在噪声底量级内且格不重叠；单元配对 |Δ| 四指标 DSH 全部 ≤ 自身重跑（recall/precision 上更小的单元占 62–76%）；#29 归因的多轮塌缩（21→15 多轮单元）与 token 总账下降（0.74×，比 DSH 的 0.78× 更省）在自身重跑同向复现——**跨日部署漂移 + 协议固有非确定性，非 DSH 运行时效应**。
 - **门协议修订与最终判定**：对称 max σ 带（带宽取两侧 σ 较大者）下 DSH 19/20 IN——唯一残余 OUT 为基线 n=2 的统计无效格（C/linePrecision）；修订建议另含最小样本护栏（n<3 不判定）与单元配对检验升主判据。**DSH 内核接管实验主数据无系统偏差证据**，工程判断收口。完整四门对照表见 `docs/report/DSH 指标对齐门噪声底报告.md`。
+
+### 实现注记（#45 被测模型可换落地后补记，2026-09-16）
+
+- **模型路由由请求参数推导，不再锁死**：#27 时代的「模型门」（内核路由锁死 deepseek-v4-flash，`plan.model ≠ DEFAULT_MODEL` 启动即拒）整段退役——model 是实验数据（#43 定性），自 `review/run` 请求参数 / CLI `--model` 旗标下传进 review-policy（`resolveModel`：非空字符串，缺省回落 `DEFAULT_MODEL`），无 model 环境变量（key 才走环境）。runner 门重写为**退役 id 拒绝**（`RETIRED_MODEL_IDS` 单源在 review-llm，与 DSH adapter / POC1 客户端同清单）+ 自由 id 透传；口径诚实由**回传漂移断言**兜底（内核回传 `result.model ≠ plan.model` → 单元失败留痕不落假记录——「计划以为跑 A、内核实际跑 B」在第一单元即暴露）。
+- **序列化纪律不随自由 id 松动**：自由 id 准入后，wire 体按 provider 画像表分派（review-llm `profileOf`，#43）——deepseek-* 锁定 thinking 档（enabled + high，无 max_tokens）、glm-* 保守档（无 thinking + 32768 信封）、未知 id 回落 omit + 8192；`SUPPORTED_MODELS` 降为 listModels advisory 通报，准入由画像 + 退役清单决定。双包不漂移由 **wire parity fixtures** 锁定（`tests/llm/wire-parity.test.ts`：POC1 request-mapper 与 DSH wire serializer 对同一逻辑请求产出相同字节，7 用例覆盖两档画像 × 自由 id × 工具/多轮形态，进纪律门）。
+- **审计导出的画像容忍**：反解 wire（重放语义）原只认锁定 thinking 档——非 deepseek 画像的 thinking/reasoning_effort 双缺席会炸重放。#45 起档位一致性校验（同进同退，在场必须为锁定档），`max_tokens` 信封反解忽略（LlmRequest 无此字段）；`RunResult.model` 直达（`audit.model`，读取端可按模型分口径）。
+- **凭据角色名双包收敛**：DSH adapter 的 endpoint/key 解析切到共享包 `REVIEWER_API_KEY_ENV_VARS` / `REVIEWER_URL_ENV_VARS` 双名探测序（推荐名 REVIEWER_* 在前，旧名 DEEPSEEK_* 别名）——与 root POC1 客户端同名同序，两包单源成立；spawn 环境透传经 driver `env` 整体传递（kernel-host / CLI 测试锁定角色名单独成立）。
+- **bin 陈旧产物防线（进程边界事故的系统性修复）**：#45 在 kernel-host 编译树引入 review-llm 运行时依赖（`profileOf`）后，「dist 陈旧但存在」的旧在位检查（existsSync）不再可靠——陈旧 dist 缺新导出会让 host 子进程秒死且错误难归因（10 项进程级测试齐红）。修复 = 两 bin 加 **mtime 新鲜度门**（`isCompileStale`：任一 source root 的最新 mtime 严格新于输出即重编；相等视为新鲜），单测 7 例 + 进程级回归钉（backdate-not-corrupt 技法：回拨产物 mtime 而非损坏内容，vitest 并行 worker 下与其他文件的 spawn/清树零竞争）。
+- **DEFAULT_MODEL 双包各自单源**：DSH 侧常量落 review-policy（不 import root run-review——那会把整个 root 依赖图拖进 kernel-host bundle），root 侧落 plan.ts（`DEFAULT_EXPERIMENT_MODEL`）；两值一致由 runner 透传 + 回传漂移断言保持受测（runner 恒以 `model: plan.model` 显式下传，内核缺省值不经 runner 路径行使，漂移即失败）。

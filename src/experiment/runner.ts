@@ -6,7 +6,8 @@ import type { LlmClient } from "../contracts/llm-client.js";
 import type { MRCase } from "../contracts/mr-case.js";
 import type { RunResult } from "../contracts/run.js";
 import { addUsage } from "../loop/usage.js";
-import { DEFAULT_EFFORT, DEFAULT_MODEL, runReview } from "../run/run-review.js";
+import { DEFAULT_EFFORT, runReview } from "../run/run-review.js";
+import { RETIRED_MODEL_IDS } from "review-llm";
 import type { DshKernelDriver } from "./dsh-kernel.js";
 import type { ExperimentPlan, ExpandedPlan, RunUnit } from "./plan.js";
 import { expandPlan } from "./plan.js";
@@ -36,7 +37,8 @@ export interface ExperimentDeps {
   /**
    * DSH 内核驱动（#27，可选）：在场时检视单元改经长驻内核 host 进程执行
    * （SDK JSON-RPC wire），llmClient 仅服务核外工具链（Verifier 二遍）。
-   * 模型路由被内核策略锁死（deepseek-v4-flash）——plan.model 不符时启动即报错。
+   * model 经 runUnit 请求参数透传内核（#45）：自由 id 放行（画像序列化在
+   * 内核 wire 层），退役 id 启动即拒，回传 model 与 plan 漂移即失败单元。
    */
   readonly dshKernel?: DshKernelDriver;
   readonly now?: () => Date;
@@ -93,12 +95,13 @@ export async function runExperiment(
   paths: RunnerPaths,
 ): Promise<ExperimentOutcome> {
   const expanded = expandPlan(plan, cases);
-  if (deps.dshKernel !== undefined && plan.model !== DEFAULT_MODEL) {
-    // 内核策略路由锁死 deepseek-v4-flash（ReviewPolicyService）；不符即拒，
-    // 防止「计划以为在跑 pro、实际内核在跑 flash」的静默口径漂移
+  if (deps.dshKernel !== undefined && RETIRED_MODEL_IDS.includes(plan.model)) {
+    // 退役 id 门（#45）：清单单源在 review-llm（与 DSH adapter / POC1 客户端
+    // 同表）——启动即报错不烧任何单元；其余自由 id 透传内核，由回传漂移
+    // 断言兜底口径诚实
     throw new Error(
-      `experiment "${plan.experimentId}" runs on the DSH kernel, whose model route is locked to ` +
-        `"${DEFAULT_MODEL}" (plan.model = "${plan.model}"): use --model flash, or run POC1 mode.`,
+      `experiment "${plan.experimentId}" runs on the DSH kernel, which rejects retired model ids ` +
+        `(plan.model = "${plan.model}"; deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and must not be used, ADR-0002): pick a live model id.`,
     );
   }
   const store = new RunStore(path.join(paths.experimentRoot, "runs"));
@@ -165,7 +168,8 @@ async function executeUnit(
   try {
     // DSH 路径（#27）：单元经长驻 host 进程执行（review/run；configId 逐单元切
     // preset，审计由 host 落盘、auditPath 随响应回传）——返回 POC1 RunResult，
-    // 下游 composeRecord / store 零改动
+    // 下游 composeRecord / store 零改动。model 随请求透传（#45）；回传 model
+    // 与 plan 漂移 = 记录会撒谎 → 拒绝落盘（口径诚实护栏，单元失败留痕）
     const baseline =
       deps.dshKernel !== undefined
         ? await deps.dshKernel.runUnit({
@@ -175,12 +179,19 @@ async function executeUnit(
             diff: mrCase.diff,
             repoPath: mrCase.repoPath,
             auditDir,
+            model: plan.model,
           })
         : await runReview(CONFIGS[unit.configId], mrCase, deps.llmClient, {
             auditDir,
             model: plan.model,
             effort: DEFAULT_EFFORT,
           });
+    if (baseline.model !== plan.model) {
+      throw new Error(
+        `DSH kernel returned a different model than the plan claims (plan.model = "${plan.model}", ` +
+          `kernel result.model = ${JSON.stringify(baseline.model)}): persisting the record would be dishonest — fix the kernel model route before rerunning`,
+      );
+    }
     const { record } = await composeRecord(unit, mrCase, plan, baseline, deps, now);
     await store.save(record);
     emit(deps, { kind: "completed", unit, findings: record.effective?.findings.length ?? record.baseline.findings.length });

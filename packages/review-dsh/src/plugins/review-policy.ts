@@ -116,6 +116,15 @@ export const MAX_TOOL_CALLS = 6;
 export const DEFAULT_TURN_TIMEOUT_MS = 10_000;
 
 /**
+ * 缺省被测模型（#45）：model 是实验数据——经 JSON-RPC review/run / CLI
+ * --model 走请求并进 audit，无 model 环境变量（key 才走环境）。DSH 本地
+ * 单源（不 import root run-review——那会把整个 root 依赖图拖进 kernel-host
+ * bundle）；root 侧同名缺省值由其自身测试锚定，双包值一致由 #45 parity 面
+ * 之外的 runner 漂移断言兜底。
+ */
+export const DEFAULT_MODEL = "deepseek-v4-flash";
+
+/**
  * 真实 LLM 的单 turn 等待上界（毫秒）：生产/冒烟组装转发用（kernel-host 与
  * CLI wrapper）。缺省 10s 只对进程内 fake（即时回复）成立；真实网关 thinking
  * 单 turn 30-90s+，一轮还含工具执行与适配器内重试（单次请求超时 600s）。取
@@ -162,6 +171,11 @@ export interface ReviewPolicyConfig {
    * configId；仅与 toolsEnabled 同启。
    */
   readonly stablePrefix?: boolean;
+  /**
+   * 被测模型（#45）：缺省回落 DEFAULT_MODEL。自由 id 透传（wire 序列化
+   * 由画像表分派）；空串组装期拒绝。退役 id 的拒绝在 adapter/runner 门。
+   */
+  readonly model?: string;
 }
 
 /** reviewPolicy 服务：config A 政策的唯一持有者（核内其他插件经 inject 消费） */
@@ -178,7 +192,7 @@ export interface ReviewPolicyService {
   readonly maxToolCalls: number;
   /** 单 turn 等待上界（毫秒） */
   readonly turnTimeoutMs: number;
-  /** 模型路由（config A：deepseek / deepseek-v4-flash / effort default） */
+  /** 模型路由（provider = 注册适配器路由键，恒 deepseek；model = 被测模型，缺省 DEFAULT_MODEL；effort 单档 default） */
   readonly provider: string;
   readonly model: string;
   readonly effortLabel: string;
@@ -206,6 +220,7 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
   inject: ["systemPrompt"],
   apply(ctx: Context, config: ReviewPolicyConfig) {
     const turnTimeoutMs = resolveTurnTimeoutMs(config.turnTimeoutMs);
+    const model = resolveModel(config.model);
     if (config.ledger === true && config.toolsEnabled !== true) {
       throw new Error(
         "review-policy: ledger requires toolsEnabled (config E mounts the 7 review.* tools; a ledger without tools has no effect — set toolsEnabled: true or drop ledger)",
@@ -235,7 +250,7 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
       maxToolCalls: MAX_TOOL_CALLS,
       turnTimeoutMs,
       provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model,
       effortLabel: "default",
       toolsEnabled: config.toolsEnabled === true,
       ledger: config.ledger === true,
@@ -259,6 +274,19 @@ function resolveTurnTimeoutMs(value: number | undefined): number {
   }
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`review-policy: turnTimeoutMs must be a positive integer (got ${JSON.stringify(value)})`);
+  }
+  return value;
+}
+
+/** model 校验（#45）：非空字符串，缺省回落 DEFAULT_MODEL；空串组装期 fail fast */
+function resolveModel(value: string | undefined): string {
+  if (value === undefined) {
+    return DEFAULT_MODEL;
+  }
+  if (value.trim().length === 0) {
+    throw new Error(
+      `review-policy: model must be a non-empty string (got ${JSON.stringify(value)}): free model ids are accepted and serialized per the provider profile table (review-llm profileOf)`,
+    );
   }
   return value;
 }

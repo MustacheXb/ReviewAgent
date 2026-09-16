@@ -9,18 +9,20 @@
 import { basename } from "node:path";
 
 import type { ConfigId } from "../../../../src/contracts/config.js";
+import { DEFAULT_MODEL } from "../plugins/review-policy.js";
 import { REVIEW_PRESETS } from "../presets/review-presets.js";
 
 /** 已知旗标（未知旗标 = 用法错误） */
-const KNOWN_FLAGS: readonly string[] = ["--repo", "--mr", "--config", "--issue", "--out"];
+const KNOWN_FLAGS: readonly string[] = ["--repo", "--mr", "--config", "--issue", "--out", "--model"];
 
 /** 用法文案（stderr 错误路径的同款文案，单一来源） */
-export const USAGE_TEXT = `usage: review-agent review --repo <path> --mr <diff-file> [--config A-E] [--issue <text>] [--out <dir>]
+export const USAGE_TEXT = `usage: review-agent review --repo <path> --mr <diff-file> [--config A-E] [--issue <text>] [--out <dir>] [--model <id>]
   --repo    <path>       仓库根目录（必需）
   --mr      <diff-file>  MR diff 文件路径（必需）
   --config  <A-E>        配置形态（缺省 A）
   --issue   <text>       MR 议题描述（缺省空）
-  --out     <dir>        输出目录（审计与会话落盘；缺省 review-agent-output）`;
+  --out     <dir>        输出目录（审计与会话落盘；缺省 review-agent-output）
+  --model   <id>         被测模型 id（缺省 deepseek-v4-flash；自由 id 透传，退役 id 拒绝）`;
 
 /** 解析后的 review 命令参数（config 已收窄为 A–E；caseId 由 --mr 派生） */
 export interface ReviewCliArgs {
@@ -31,6 +33,8 @@ export interface ReviewCliArgs {
   readonly config: ConfigId;
   readonly issue: string;
   readonly out: string;
+  /** 被测模型（#45）：缺省 DEFAULT_MODEL；自由 id 透传（空串/空白 = 用法错误） */
+  readonly model: string;
 }
 
 /** 解析结果：ok 或用法错误消息（调用方负责呈现与退出码） */
@@ -79,6 +83,10 @@ export function parseReviewArgs(argv: readonly string[]): ParseReviewArgsResult 
   if (!(configRaw in REVIEW_PRESETS)) {
     return { ok: false, message: `invalid --config ${JSON.stringify(configRaw)}: expected one of A, B, C, D, E` };
   }
+  const modelRaw = values.get("--model") ?? DEFAULT_MODEL;
+  if (modelRaw.trim().length === 0) {
+    return { ok: false, message: `invalid --model ${JSON.stringify(modelRaw)}: must be a non-empty model id (free ids accepted)` };
+  }
 
   return {
     ok: true,
@@ -89,6 +97,7 @@ export function parseReviewArgs(argv: readonly string[]): ParseReviewArgsResult 
       config: configRaw as ConfigId,
       issue: values.get("--issue") ?? "",
       out: values.get("--out") ?? "review-agent-output",
+      model: modelRaw,
     },
   };
 }

@@ -1,29 +1,40 @@
 /**
- * DeepSeek wire 契约（ADR-0002 语义 1:1 移植，消费线 npm 0.1.2-rc.1）。
+ * chat/completions wire 契约（键序骨架移植自 ADR-0002 冻结薄 harness，消费线
+ * npm 0.1.2-rc.1；非 deepseek 画像差异由本层吸收，ADR-0002）。
  *
- * 请求体在序列化点即字节确定：键序 model → messages → thinking →
- * reasoning_effort → [tools → tool_choice] → stream，采样参数一律不发。
- * 移植自冻结薄 harness 的 src/deepseek/wire-types.ts 与 request-mapper.ts，
- * 输入从 POC1 的 LlmMessage 适配为 DSH 的 Message/ToolSchema。
+ * 请求体在序列化点即字节确定：键序 model → messages → [thinking →
+ * reasoning_effort] → [max_tokens] → [tools → tool_choice] → stream，
+ * 采样参数一律不发。骨架移植自冻结薄 harness 的 src/deepseek/wire-types.ts
+ * 与 request-mapper.ts，输入从 POC1 的 LlmMessage 适配为 DSH 的
+ * Message/ToolSchema。
+ *
+ * #45 起序列化策略由 provider 画像表驱动（review-llm profileOf，与 POC1
+ * request-mapper 同一单源）：thinking / reasoning_effort 只在画像声明
+ * enabled 时出场（DeepSeek 锁定档），max_tokens 按画像信封补齐。双包对
+ * 同一逻辑请求的逐字节一致由 tests/llm/wire-parity.test.ts 钉死。
  */
 
 import type { ContentBlock, GenerateOptions, Message, TextBlock, ToolCallBlock, ToolResultBlock, ToolSchema } from "@deepseek-ai/dsh-llm";
+
+import { profileOf } from "review-llm";
 
 /** 锁定档位的线上字节：thinking 默认档 = enabled + reasoning_effort "high"（ADR-0002 单档） */
 export const LOCKED_EFFORT_LABEL = "default";
 export const LOCKED_REASONING_EFFORT = "high";
 export const LOCKED_THINKING = { type: "enabled" } as const;
 
-/** ADR-0002 模型白名单：deepseek-chat / deepseek-reasoner 已于 2026-07-24 退役 */
+/** 本适配器实测可用的 DeepSeek 官方模型（listModels 建议性清单，非准入白名单——#45 起准入由画像表 + 退役清单决定） */
 export const SUPPORTED_MODELS: readonly string[] = ["deepseek-v4-flash", "deepseek-v4-pro"];
 
 /** POST /chat/completions 请求体（字段顺序即序列化顺序） */
 export interface WireChatCompletionsRequest {
   readonly model: string;
   readonly messages: readonly WireMessage[];
-  /** ADR-0002：thinking 默认档，显式传（字节可审计，勿依赖服务端默认） */
-  readonly thinking: { readonly type: "enabled" };
-  readonly reasoning_effort: "high";
+  /** ADR-0002：thinking 默认档，显式传（字节可审计，勿依赖服务端默认）。画像 omit 档整体不发（#45）。 */
+  readonly thinking?: { readonly type: "enabled" };
+  readonly reasoning_effort?: "high";
+  /** completion 信封（画像声明时序列化；DeepSeek thinking wire 不传，#45） */
+  readonly max_tokens?: number;
   readonly tools?: readonly WireTool[];
   readonly tool_choice?: "auto";
   readonly stream: false;
@@ -136,12 +147,14 @@ export function toWireMessages(options: GenerateOptions): readonly WireMessage[]
 
 /**
  * 组装 chat/completions 请求体。字段顺序即 JSON.stringify 的序列化顺序；
- * 零工具时 tools/tool_choice 整体省略（不发空数组）。
+ * 零工具时 tools/tool_choice 整体省略（不发空数组）。thinking 档与
+ * max_tokens 信封由画像表分派（#45），键序与 POC1 request-mapper 逐位对齐。
  */
 export function buildChatCompletionsBody(
   options: GenerateOptions,
   system?: string,
 ): WireChatCompletionsRequest {
+  const profile = profileOf(options.model);
   const messages = toWireMessages(system !== undefined ? { ...options, system } : options);
   const tools: readonly WireTool[] = (options.tools ?? []).map((tool) => ({
     type: "function",
@@ -154,8 +167,10 @@ export function buildChatCompletionsBody(
   const body: WireChatCompletionsRequest = {
     model: options.model,
     messages,
-    thinking: LOCKED_THINKING,
-    reasoning_effort: LOCKED_REASONING_EFFORT,
+    ...(profile.thinking.kind === "enabled"
+      ? { thinking: LOCKED_THINKING, reasoning_effort: profile.thinking.reasoningEffort }
+      : {}),
+    ...(profile.completionMaxTokens !== undefined ? { max_tokens: profile.completionMaxTokens } : {}),
     ...(tools.length > 0 ? { tools, tool_choice: "auto" as const } : {}),
     stream: false,
   };

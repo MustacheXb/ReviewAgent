@@ -43,6 +43,7 @@ describe("parseReviewArgs（#26）", () => {
         config: "A",
         issue: "",
         out: "review-agent-output",
+        model: "deepseek-v4-flash",
       } satisfies ReviewCliArgs,
     });
   });
@@ -72,7 +73,7 @@ describe("parseReviewArgs（#26）", () => {
     ]);
     expect(parsed).toEqual({
       ok: true,
-      args: { repo: "r", mr: "m", caseId: "m", config: "A", issue: "Vulnerability fix", out: "/tmp/out" },
+      args: { repo: "r", mr: "m", caseId: "m", config: "A", issue: "Vulnerability fix", out: "/tmp/out", model: "deepseek-v4-flash" },
     });
   });
 
@@ -135,6 +136,47 @@ describe("parseReviewArgs（#26）", () => {
   it("用法文案：包含完整命令形状（烟测 stderr 的同款文案单一来源）", () => {
     expect(USAGE_TEXT).toContain("review-agent review --repo <path> --mr <diff-file>");
     expect(USAGE_TEXT).toContain("--config");
+    expect(USAGE_TEXT).toContain("--model");
+  });
+});
+
+// ---------- --model（#45：被测模型经 CLI 旗标下传） ----------
+
+describe("parseReviewArgs --model（#45）", () => {
+  it("透传：--model glm-4.7 进入解析结果（自由 id，不设白名单）", () => {
+    const parsed = parseReviewArgs(["review", "--repo", "r", "--mr", "m", "--model", "glm-4.7"]);
+    expect(parsed).toMatchObject({ ok: true, args: { model: "glm-4.7" } });
+  });
+
+  it("缺省：不带 --model → deepseek-v4-flash（与内核 DEFAULT_MODEL 同值，双包各自单源）", () => {
+    const parsed = parseReviewArgs(["review", "--repo", "r", "--mr", "m"]);
+    expect(parsed).toMatchObject({ ok: true, args: { model: "deepseek-v4-flash" } });
+  });
+
+  it("空串：--model \"\" → 用法错误（解析缝拒绝，不留给组装期）", () => {
+    const parsed = parseReviewArgs(["review", "--repo", "r", "--mr", "m", "--model", ""]);
+    expect(parsed).toMatchObject({ ok: false });
+    if (parsed.ok === false) {
+      expect(parsed.message).toContain("--model");
+    }
+  });
+
+  it("重复旗标：两个 --model → 用法错误", () => {
+    const parsed = parseReviewArgs([
+      "review",
+      "--repo",
+      "r",
+      "--mr",
+      "m",
+      "--model",
+      "glm-4.7",
+      "--model",
+      "qwen3.8-flash",
+    ]);
+    expect(parsed).toMatchObject({ ok: false });
+    if (parsed.ok === false) {
+      expect(parsed.message).toContain("--model");
+    }
   });
 });
 

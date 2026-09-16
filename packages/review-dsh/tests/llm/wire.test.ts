@@ -40,7 +40,29 @@ describe("buildChatCompletionsBody（ADR-0002 wire 契约）", () => {
     expect("tool_choice" in body).toBe(false);
   });
 
-  it("不发送任何采样参数（temperature / top_p / presence_penalty / frequency_penalty / max_tokens 一律缺席）", () => {
+  it("#45 画像 omit 档（glm）：键序 model → messages → max_tokens → stream，thinking 字段整体不发", () => {
+    const body = buildChatCompletionsBody({
+      ...baseOptions([userMessage("q")]),
+      model: "glm-4.7",
+    });
+
+    expect(Object.keys(body)).toEqual(["model", "messages", "max_tokens", "stream"]);
+    expect("thinking" in body).toBe(false);
+    expect("reasoning_effort" in body).toBe(false);
+    expect(body.max_tokens).toBe(32_768);
+  });
+
+  it("#45 未知模型回落保守画像：无 thinking + 8192 信封（新模型至少不 400、不静默截断）", () => {
+    const body = buildChatCompletionsBody({
+      ...baseOptions([userMessage("q")]),
+      model: "my-gateway-model",
+    });
+
+    expect("thinking" in body).toBe(false);
+    expect(body.max_tokens).toBe(8_192);
+  });
+
+  it("采样参数一律不发（temperature / top_p / presence_penalty / frequency_penalty）；max_tokens 仅由画像信封分派，DeepSeek thinking 档缺席", () => {
     const body = buildChatCompletionsBody(baseOptions([userMessage("x")]));
 
     expect("temperature" in body).toBe(false);

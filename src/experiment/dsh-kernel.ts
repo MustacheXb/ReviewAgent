@@ -11,7 +11,8 @@
  *
  * 生命周期：一个 driver = 一个 host 进程，整批单元复用（不为单元 spawn）；
  * close = 协议 shutdown（有界）→ stdin EOF → SIGTERM → SIGKILL 阶梯。
- * 凭据经环境变量透传（DEEPSEEK_API_KEY / DEEPSEEK_URL），不落代码与日志。
+ * 凭据经环境变量透传（REVIEWER_API_KEY / REVIEWER_URL，别名 DEEPSEEK_*），
+ * 不落代码与日志；model 是实验数据（#45），走 review/run 请求参数而非环境。
  */
 
 import { spawn } from "node:child_process";
@@ -32,6 +33,8 @@ export interface DshKernelUnitRequest {
   readonly diff: string;
   readonly repoPath?: string;
   readonly auditDir: string;
+  /** 被测模型（#45）：缺省回落 host 侧 DEFAULT_MODEL；自由 id 透传 */
+  readonly model?: string;
 }
 
 export interface DshKernelDriverOptions {
@@ -135,6 +138,7 @@ export function createDshKernelDriver(options: DshKernelDriverOptions = {}): Dsh
         diff: unit.diff,
         ...(unit.repoPath !== undefined ? { repoPath: unit.repoPath } : {}),
         auditDir: unit.auditDir,
+        ...(unit.model !== undefined ? { model: unit.model } : {}),
       });
       return parseRunResult(response, stderrTail.join(""));
     },
@@ -189,6 +193,7 @@ function parseRunResult(response: unknown, stderrTail: string): RunResult {
   const findings = record.findings;
   const audit = record.audit;
   const usage = record.usage;
+  const model = record.model;
   if (!Array.isArray(findings) || findings.some(isNotPlainObject)) {
     throw new Error(`dsh-kernel: review/run response field "findings" must be an array of objects`);
   }
@@ -200,9 +205,13 @@ function parseRunResult(response: unknown, stderrTail: string): RunResult {
       `dsh-kernel: review/run response field "usage" must be an object with finite token counts`,
     );
   }
+  if (model !== undefined && typeof model !== "string") {
+    throw new Error(`dsh-kernel: review/run response field "model" must be a string when present`);
+  }
   return {
     caseId: stringField("caseId"),
     configId: requireKnownConfigId(record),
+    ...(model !== undefined ? { model } : {}),
     findings: findings as RunResult["findings"],
     usage: usage as RunResult["usage"],
     rounds: numberField("rounds"),

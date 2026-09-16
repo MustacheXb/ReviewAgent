@@ -142,20 +142,45 @@ describe("DeepSeekLlmAdapter：ADR-0002 语义（stream 直连，fake fetch 零�
     expect("stop" in body).toBe(false);
   });
 
-  it("模型白名单：退役 id（deepseek-chat / deepseek-reasoner）拒绝，白名单内放行", async () => {
-    const ok = scriptedFetch([chatResponse({ content: "ok" })]);
-    await collect(makeAdapter(ok.fetchFn).stream(requestOptions()));
-    expect(ok.calls).toHaveLength(1);
-
-    const pro = scriptedFetch([chatResponse({ content: "ok" })]);
-    await collect(makeAdapter(pro.fetchFn).stream(requestOptions({ model: "deepseek-v4-pro" })));
-    expect(pro.calls).toHaveLength(1);
+  it("#45 自由 id 准入：任意模型 id 原样上 wire（画像表接管序列化）；退役 id 拒绝", async () => {
+    for (const free of ["glm-4.7", "qwen3.8-flash", "my-gateway-model", "deepseek-v4-pro"]) {
+      const script = scriptedFetch([chatResponse({ content: "ok" })]);
+      await collect(makeAdapter(script.fetchFn).stream(requestOptions({ model: free })));
+      expect(script.calls).toHaveLength(1);
+      expect(sentBody(script.calls[0]!).model).toBe(free);
+    }
 
     for (const retired of ["deepseek-chat", "deepseek-reasoner"]) {
       const rejected = scriptedFetch([]);
       await expect(collect(makeAdapter(rejected.fetchFn).stream(requestOptions({ model: retired }))))
-        .rejects.toThrow(/unsupported model/u);
+        .rejects.toThrow(/retired/u);
       expect(rejected.calls).toHaveLength(0);
+    }
+  });
+
+  it("#45 空模型 id 本地拒绝（fail fast，零网络）", async () => {
+    const { fetchFn, calls } = scriptedFetch([]);
+    const adapter = makeAdapter(fetchFn);
+
+    await expect(collect(adapter.stream(requestOptions({ model: "" })))).rejects.toThrow(/non-empty string/u);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("#45 reviewer 角色环境变量：REVIEWER_API_KEY / REVIEWER_URL 独立可用（DEEPSEEK_* 别名缺席）", async () => {
+    vi.stubEnv("REVIEWER_API_KEY", "sk-reviewer-role-sentinel");
+    vi.stubEnv("REVIEWER_URL", "http://127.0.0.1:8787");
+    vi.stubEnv("DEEPSEEK_API_KEY", "");
+    vi.stubEnv("DEEPSEEK_URL", "");
+    try {
+      const { fetchFn, calls } = scriptedFetch([chatResponse({ content: "ok" })]);
+      const adapter = new DeepSeekLlmAdapter({ fetchFn, sleepFn: ZERO_WAIT_SLEEP });
+      await collect(adapter.stream(requestOptions()));
+
+      expect(calls[0]?.url).toBe("http://127.0.0.1:8787/chat/completions");
+      const headers = (calls[0]?.init.headers ?? {}) as Record<string, string>;
+      expect(headers.authorization).toBe("Bearer sk-reviewer-role-sentinel");
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 
@@ -266,14 +291,14 @@ describe("DeepSeekLlmAdapter：wire 序列化点字节捕获（POC1 可重放字
     expect(chunks.at(-1)).toMatchObject({ type: "finish", reason: { kind: "stop" } });
   });
 
-  it("本地构造错不消耗脚本也不捕获（模型白名单拒绝先于序列化）", async () => {
+  it("本地构造错不消耗脚本也不捕获（退役 id 拒绝先于序列化）", async () => {
     const wireLog = new WireRequestLog();
     const { fetchFn, calls } = scriptedFetch([]);
     const adapter = makeAdapter(fetchFn, wireLog);
 
     await expect(
       collect(adapter.stream(requestOptions({ model: "deepseek-chat" }))),
-    ).rejects.toThrow(/unsupported model/u);
+    ).rejects.toThrow(/retired/u);
     expect(calls).toHaveLength(0);
     expect(wireLog.requests).toHaveLength(0);
   });
@@ -467,12 +492,13 @@ describe("DeepSeekLlmAdapter：凭据与请求头纪律", () => {
     }
   });
 
-  it("缺 key fail fast：构造期即报 DEEPSEEK_API_KEY（消息不回显任何值）", () => {
+  it("缺 key fail fast：构造期即报角色名（REVIEWER_API_KEY 优先提示，含 DEEPSEEK_API_KEY 别名；消息不回显任何值）", () => {
     vi.stubEnv("DEEPSEEK_API_KEY", "");
+    vi.stubEnv("REVIEWER_API_KEY", "");
     try {
       expect(
         () => new DeepSeekLlmAdapter({ fetchFn: async () => new Response("{}", { status: 200 }) }),
-      ).toThrow(/DEEPSEEK_API_KEY/u);
+      ).toThrow(/REVIEWER_API_KEY/u);
     } finally {
       vi.unstubAllEnvs();
     }

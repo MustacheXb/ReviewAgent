@@ -177,6 +177,52 @@ describe("CLI 进程级烟测（#26）", () => {
   );
 
   it(
+    "--model 下传（#45）：glm-4.7 经 CLI 旗标 → 审计顶层 model + wire 体按画像序列化",
+    async () => {
+      const stub = await startStubLlmServer(configAResponses());
+      try {
+        const outDir = await mkdtemp(join(tmpdir(), "review-agent-cli-smoke-model-"));
+        workDirs.push(outDir);
+        const diffFile = join(outDir, "fix-url-encoding.diff");
+        await writeFile(diffFile, SAMPLE_MR_CASE.diff, "utf8");
+
+        const run = await runCli(
+          [
+            "review",
+            "--repo",
+            SAMPLE_MR_CASE.repoPath,
+            "--mr",
+            diffFile,
+            "--out",
+            outDir,
+            "--model",
+            "glm-4.7",
+          ],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-smoke-model-key" },
+        );
+
+        expect(run.code).toBe(0);
+        const outcome = JSON.parse(run.stdout) as Record<string, unknown>;
+        const audit = JSON.parse(await readFile(outcome.auditPath as string, "utf8")) as {
+          readonly model: string;
+          readonly requests: readonly { readonly wireBody?: string }[];
+        };
+        // CLI 旗标 → policy → 审计顶层 model（实验数据一路进审计）
+        expect(audit.model).toBe("glm-4.7");
+        // wire 体按画像序列化：glm 档无 thinking、32768 信封
+        const firstWire = JSON.parse(String(audit.requests[0]?.wireBody)) as Record<string, unknown>;
+        expect(firstWire.model).toBe("glm-4.7");
+        expect("thinking" in firstWire).toBe(false);
+        expect("reasoning_effort" in firstWire).toBe(false);
+        expect(firstWire.max_tokens).toBe(32_768);
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "config 越界：--config F → 退出码 1 + stderr 用法信息，stdout 干净",
     async () => {
       const run = await runCli(

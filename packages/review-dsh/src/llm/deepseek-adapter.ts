@@ -6,13 +6,16 @@
  * 自拼 JSON 是唯一干净做法（研究笔记结论，1:1 保留）。
  *
  * 锁定纪律（ADR-0002，逐项有测试）：
- * - model 白名单 = deepseek-v4-flash（主力）+ deepseek-v4-pro（仅高险子集消融；
- *   退役 id 直接拒绝）；
  * - effort 单档锁定：harness 侧仅接受 "default"，线上恒为
  *   thinking {type:"enabled"} + reasoning_effort "high"；
- * - 请求不携带 temperature/top_p/max_tokens/stop 等采样参数（wire.ts 序列化纪律）；
+ * - 请求不携带 temperature/top_p/stop 等采样参数（max_tokens 仅由画像信封
+ *   分派，wire.ts 序列化纪律）；
  * - usage 记账含 cached tokens（miss/hit 不相交，response.ts）；
  * - `review.*` → `review_*` 工具名映射（请求侧 wire.ts / 响应侧反解）。
+ *
+ * 模型准入（#45）：自由 id 接受——序列化策略由 provider 画像表分派
+ * （review-llm profileOf，wire.ts 消费）；退役 id（RETIRED_MODEL_IDS 单源）
+ * 本地拒绝。SUPPORTED_MODELS 降为 listModels 的 advisory 通报。
  *
  * wire 字节捕获：序列化点（JSON.stringify）记录请求原文，一次逻辑调用一条，
  * 重试复用同一字节——POC1「可重放字节」契约只能从持有序列化的一方采集。
@@ -23,8 +26,9 @@
  * 已消耗的 usage 并账。内核侧 providerRetryPolicy 仅供未挂载的 dsh-llm-retry
  * 插件消费，无双重重试。重试耗尽 → 终态 error finish（failureOf 折叠稳定 code）。
  *
- * 凭据纪律：API key 仅经 DEEPSEEK_API_KEY 环境变量或显式参数注入，绝不硬编码、
- * 绝不出现在错误信息中（服务端回显时 redact 兜底）。
+ * 凭据纪律：API key 仅经 reviewer 角色环境变量（REVIEWER_API_KEY，别名
+ * DEEPSEEK_API_KEY，#45 起与 root POC1 客户端同名单源）或显式参数注入，
+ * 绝不硬编码、绝不出现在错误信息中（服务端回显时 redact 兜底）。
  *
  * endpoint/key 解析与 DeepSeek 接入常量单源自 review-llm 共享包（#41，
  * 与 root POC1 客户端同源；错误消息文本原样保留，既有测试锚定）。
@@ -62,12 +66,13 @@ import {
   DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
   DEFAULT_DEEPSEEK_TIMEOUT_MS,
   DEEPSEEK_API_BASE_URL,
-  DEEPSEEK_API_KEY_ENV_VAR,
-  DEEPSEEK_URL_ENV_VAR,
   nonNegativeIntOption,
   positiveIntOption,
   resolveApiKey,
   resolveEndpointUrl,
+  RETIRED_MODEL_IDS,
+  REVIEWER_API_KEY_ENV_VARS,
+  REVIEWER_URL_ENV_VARS,
 } from "review-llm";
 
 /** DeepSeek 接入常量单源在 review-llm（#41 起双包共享）；此处 re-export 维持既有导入面 */
@@ -76,8 +81,9 @@ export {
   DEFAULT_DEEPSEEK_RETRY_BASE_DELAY_MS,
   DEFAULT_DEEPSEEK_TIMEOUT_MS,
   DEEPSEEK_API_BASE_URL,
-  DEEPSEEK_API_KEY_ENV_VAR,
-  DEEPSEEK_URL_ENV_VAR,
+  RETIRED_MODEL_IDS,
+  REVIEWER_API_KEY_ENV_VARS,
+  REVIEWER_URL_ENV_VARS,
 };
 
 const SERVICE_LABEL = "DeepSeek API";
@@ -89,9 +95,9 @@ const ERROR_MESSAGE_SNIPPET_LENGTH = 300;
 const INVALID_JSON_SNIPPET_LENGTH = 120;
 
 export interface DeepSeekAdapterOptions {
-  /** API key；缺省读环境变量 DEEPSEEK_API_KEY（构造期校验，缺失 fail fast） */
+  /** API key；缺省读 reviewer 角色环境变量 REVIEWER_API_KEY（别名 DEEPSEEK_API_KEY；构造期校验，缺失 fail fast） */
   readonly apiKey?: string;
-  /** API base URL；显式选项 > DEEPSEEK_URL 环境变量 > 缺省 https://api.deepseek.com（中转/代理端点用；测试注入本地地址） */
+  /** API base URL；显式选项 > REVIEWER_URL 环境变量（别名 DEEPSEEK_URL）> 缺省 https://api.deepseek.com（中转/代理端点用；测试注入本地地址） */
   readonly baseUrl?: string;
   /** 单次请求超时（毫秒）；缺省 600_000（thinking 模式长思考，超时给足） */
   readonly timeoutMs?: number;
@@ -124,14 +130,14 @@ export class DeepSeekLlmAdapter extends LlmAdapter {
     // 校验顺序与 POC1 客户端一致（key → baseUrl → timeoutMs → maxRetries → retryBaseDelayMs）
     this.apiKey = resolveApiKey({
       explicit: options.apiKey,
-      envVarNames: [DEEPSEEK_API_KEY_ENV_VAR],
+      envVarNames: REVIEWER_API_KEY_ENV_VARS,
       serviceLabel: SERVICE_LABEL,
       clientError: deepSeekClientError,
     });
     this.endpointUrl = resolveEndpointUrl({
       baseUrl: options.baseUrl,
       defaultBaseUrl: DEEPSEEK_API_BASE_URL,
-      envVarNames: [DEEPSEEK_URL_ENV_VAR],
+      envVarNames: REVIEWER_URL_ENV_VARS,
       clientError: deepSeekClientError,
     });
     this.timeoutMs = positiveIntOption(
@@ -302,11 +308,17 @@ export class DeepSeekLlmAdapter extends LlmAdapter {
   }
 }
 
-/** 路由政策校验（ADR-0002）：模型白名单 + effort 单档锁定 */
+/** 路由政策校验（#45）：自由 id 准入（画像表接管序列化）+ 退役 id 拒绝 + effort 单档锁定 */
 function validateRoute(options: GenerateOptions): void {
-  if (!SUPPORTED_MODELS.includes(options.model)) {
+  const model = options.model;
+  if (typeof model !== "string" || model.trim().length === 0) {
     throw new DeepSeekClientError(
-      `unsupported model ${JSON.stringify(options.model)}: the DeepSeek adapter supports ${SUPPORTED_MODELS.map((m) => JSON.stringify(m)).join(", ")} (ADR-0002; deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and must not be used)`,
+      `model must be a non-empty string (got ${JSON.stringify(model)}): free model ids are accepted and serialized per the provider profile table (review-llm profileOf)`,
+    );
+  }
+  if (RETIRED_MODEL_IDS.includes(model)) {
+    throw new DeepSeekClientError(
+      `model ${JSON.stringify(model)} is retired (deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and must not be used; ADR-0002)`,
     );
   }
   if (options.reasoningEffort !== undefined && options.reasoningEffort !== ReasoningEffortId(LOCKED_EFFORT_LABEL)) {

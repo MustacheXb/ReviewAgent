@@ -105,3 +105,11 @@ export function providerFamilyOf(model: string): ProviderFamily | null {
   }
   return null;
 }
+
+/**
+ * 已退役模型 id（2026-07-24 下线，ADR-0002）：自由 id 接受之下仍直接拒绝
+ * ——静默放行只会换来模糊的线上 400，不如本地报错说清楚。单源清单
+ * （#45 起 root request-mapper、DSH 适配器与实验 runner 门共用），
+ * 恰好命中 deepseek 画像前缀——拒绝是本清单的显式行为，不是 pattern 副作用。
+ */
+export const RETIRED_MODEL_IDS: readonly string[] = ["deepseek-chat", "deepseek-reasoner"];

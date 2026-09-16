@@ -7,10 +7,12 @@
  * 与 judge 链的 JUDGE_* / OPENAI_* 别名语义一致，#42）。
  *
  * 常量单源在此（而非 root 客户端）：reviewer 角色横跨 root POC1 与
- * packages/review-dsh 两条路径。当前消费方是 root 侧（客户端构造、实验
- * 预检、e2e 冒烟门）；review-dsh 的 LLM 适配器（deepseek-adapter）暂仍
- * 只认旧名 DEEPSEEK_API_KEY / DEEPSEEK_URL，#44 接入时复用此处常量收敛
- * ——届时探测序与存在性语义才真正两包单源。
+ * packages/review-dsh 两条路径。消费方双包收敛（#45）：root 侧（客户端
+ * 构造、实验预检、e2e 冒烟门）与 review-dsh 的 LLM 适配器
+ * （deepseek-adapter：构造期 resolveApiKey / resolveEndpointUrl 注入
+ * REVIEWER_* 双名探测序）同名同序——探测序与存在性语义两包单源。
+ * kernel-host / CLI wrapper 的子进程环境透传经 spawn env 整体传递，
+ * 不经此模块。
  *
  * 画像（thinking 序列化 / completion 信封 / usage 能力）是正交的另一轴，
  * 见 ./profile.ts；本模块只管「连到哪、用什么凭证」。

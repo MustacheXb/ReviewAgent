@@ -21,7 +21,7 @@ export {
   DEEPSEEK_API_KEY_ENV_VAR,
   DEEPSEEK_URL_ENV_VAR,
 } from "./deepseek.js";
-export { DEFAULT_COMPLETION_MAX_TOKENS, profileOf, providerFamilyOf } from "./profile.js";
+export { DEFAULT_COMPLETION_MAX_TOKENS, profileOf, providerFamilyOf, RETIRED_MODEL_IDS } from "./profile.js";
 export type {
   ProviderFamily,
   ProviderProfile,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { profileOf, providerFamilyOf } from "./profile.js";
+import { profileOf, providerFamilyOf, RETIRED_MODEL_IDS } from "./profile.js";
 
 /**
  * provider 参数画像表（#42 落地）：模型 id pattern → 画像三维度
@@ -90,5 +90,18 @@ describe("providerFamilyOf — 家族判定（#43 异构校验的对照面，与
     expect(providerFamilyOf("qwen3.8-flash")).toBeNull();
     expect(providerFamilyOf("my-deepseek-relay")).toBeNull();
     expect(providerFamilyOf("xglm-1")).toBeNull();
+  });
+});
+
+describe("RETIRED_MODEL_IDS — 退役 id 单源（#45：准入由画像表收敛，退役拒绝保留）", () => {
+  it("恰为 2026-07-24 退役的两个 DeepSeek id（加删条目须过目此测试）", () => {
+    expect(RETIRED_MODEL_IDS).toEqual(["deepseek-chat", "deepseek-reasoner"]);
+  });
+
+  it("退役 id 仍命中 deepseek 画像前缀——拒绝是显式清单行为，不是 pattern 副作用", () => {
+    for (const retired of RETIRED_MODEL_IDS) {
+      expect(profileOf(retired).thinking.kind).toBe("enabled");
+      expect(providerFamilyOf(retired)).toBe("deepseek");
+    }
   });
 });

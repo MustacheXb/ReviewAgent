@@ -13,9 +13,11 @@
  * 零共享状态；config 经请求参数逐单元切换（REVIEW_PRESETS 真源）。失败单元
  * 经错误帧回报（-32603），进程存活继续下一单元（实验运行器的失败隔离）。
  *
- * 凭据经环境变量（DEEPSEEK_API_KEY / DEEPSEEK_URL），适配器每请求构造期
- * fail fast；错误消息不回显 key 值。stdout 只承载 JSON-RPC 帧（协议纯净性
- * 由部署保证——同 dsh-sdk-jsonrpc-server 约定），诊断不写 stdout。
+ * 凭据经 reviewer 角色环境变量（REVIEWER_API_KEY / REVIEWER_URL，别名
+ * DEEPSEEK_API_KEY / DEEPSEEK_URL），适配器每请求构造期 fail fast；错误消息
+ * 不回显 key 值。model 是实验数据（#45）：经 review/run 参数下传进 policy
+ * （缺省回落 DEFAULT_MODEL），无 model 环境变量。stdout 只承载 JSON-RPC 帧
+ * （协议纯净性由部署保证——同 dsh-sdk-jsonrpc-server 约定），诊断不写 stdout。
  *
  * 进程调用形态：review-kernel-host（stdin/stdout = JSON-RPC；EOF / shutdown /
  * 信号均以 0 退出）。
@@ -43,6 +45,8 @@ interface ReviewRunParams {
   readonly diff: string;
   readonly repoPath?: string;
   readonly auditDir: string;
+  /** 被测模型（#45）：缺省回落 DEFAULT_MODEL；自由 id 透传（空串 fail fast） */
+  readonly model?: string;
 }
 
 /** 必填非空字符串字段提取（缺场/空串/类型错误 = fail fast 错误帧） */
@@ -68,6 +72,10 @@ function parseReviewRunParams(params: Record<string, unknown>): ReviewRunParams 
   if (issueDescription !== undefined && typeof issueDescription !== "string") {
     throw new Error(`review/run: "issueDescription" must be a string when present`);
   }
+  const model = params.model;
+  if (model !== undefined && (typeof model !== "string" || model.trim().length === 0)) {
+    throw new Error(`review/run: "model" must be a non-empty string when present`);
+  }
   return {
     configId: configId as ConfigId,
     caseId: requireString(params, "caseId"),
@@ -75,6 +83,7 @@ function parseReviewRunParams(params: Record<string, unknown>): ReviewRunParams 
     diff: requireString(params, "diff"),
     ...(repoPath !== undefined ? { repoPath } : {}),
     auditDir: requireString(params, "auditDir"),
+    ...(model !== undefined ? { model } : {}),
   };
 }
 
@@ -93,7 +102,7 @@ async function handleReviewRun(params: Record<string, unknown>): Promise<unknown
     await assembleReviewProfile(ctx, {
       sessionRoot,
       adapter,
-      policy: realApiReviewPolicy(request.configId),
+      policy: realApiReviewPolicy(request.configId, request.model),
     });
     const result = await ctx.reviewRuntime.run({
       caseId: request.caseId,
