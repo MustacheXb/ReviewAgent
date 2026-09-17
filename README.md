@@ -60,6 +60,55 @@ CI（push / PR）跑两层门：`discipline-gate`（确定性纪律门 · 零网
 | `pnpm --filter review-dsh cli review --repo <path> --mr <diff> [--config A-E] [--model <id>]` | 单 MR 检视（DSH 内核 CLI；凭据经 `.env.local` / `REVIEWER_*`） |
 | `pnpm --filter review-dsh cli smoke [--model <id>]` | 网关冒烟自检（#46）：双探针 + 人话诊断，通过 0 / 失败 1 |
 
+## 单次检视执行（review-agent CLI）
+
+单案检视入口是 `review-agent` CLI：薄 wrapper（解析 → `.env.local` 装载 → 装配 → run → 导出 → 呈现），**内核为 DSH**（cordis Context + 核内五插件，进程内直挂，见 `packages/review-dsh/src/cli/main.ts`；区别于根 `src/` 的 POC1 薄 harness——后者是冻结参照与共享模块源，不再被执行）。stdout 输出单个 JSON 文档（findings / rounds / toolCalls / truncated / auditPath）；审计与会话落 `--out` 目录；退出码：完成（含诚实截断）0 / 中止 1。被测模型缺省 `deepseek-v4-flash`，换模型加 `--model <id>`。以下命令均从**仓库根**以 `node packages/review-dsh/bin/review-agent.js` 直跑，以复用仓根 `.env.local`（`pnpm --filter` 形式的 cwd 在包目录，见下节凭据说明）。
+
+### 评测场景（VUL4J 单案）
+
+评测口径三要素：**物化仓（base 态）+ 数据集原生 diff + 数据集原生英文 issue**。issue 改用自编文本会引入口径污染；自编中文还会被模型引用进 evidence、触发 NON_ENGLISH 门整条拒绝。前置：数据集已物化（`pnpm materialize:vul4j`，仓落在 `.cache/datasets/vul4j-repos/`）。换案只改 `CASE`（30 案清单见 `data/vul4j/target-cases.json`）：
+
+```bash
+cd <本仓根目录>
+CASE=VUL4J-6
+
+REPO=$(node -p "require('./data/vul4j/target-cases.json').find(x=>x.caseId==='$CASE').repoPath")
+ISSUE=$(node -p "require('./data/vul4j/target-cases.json').find(x=>x.caseId==='$CASE').issueDescription")
+node -e "require('fs').writeFileSync('$CASE.diff',require('./data/vul4j/target-cases.json').find(x=>x.caseId==='$CASE').diff)"
+
+node packages/review-dsh/bin/review-agent.js review \
+  --repo "$REPO" --mr "$CASE.diff" --config B \
+  --issue "$ISSUE" --out "runs/local-review-$CASE"
+```
+
+配置语义见顶部 A–E 表（B = 零工具 + 确定性预取，生产拍板形态）。可选：跑前查该案基线（`runs/phase2-dsh/runs/vul4j/<案>/B/rep-*.json` 的 `baseline.findings`）——被测模型非确定，单次结果落在基线 rep 波动族内即属正常复现。
+
+### 检视本地任意代码仓
+
+命令与具体目标仓解耦，参数抽象为 `<目标仓>`、`<MR diff 文件>`、`<变更描述>`：
+
+```bash
+cd <本仓根目录>    # .env.local 与 CLI 路径均按 cwd 解析
+
+# 1) 在目标仓生成 MR diff（四选一，diff 描述待检视的变更）
+git -C <目标仓> diff <base>...<head> > <MR diff 文件>      # 分支相对 base 的全部变更
+git -C <目标仓> diff HEAD~<N> > <MR diff 文件>             # 最近 N 次提交
+git -C <目标仓> diff <commit>~1 <commit> > <MR diff 文件>  # 指定某次提交
+git -C <目标仓> diff HEAD > <MR diff 文件>                 # 未提交的工作区变更
+
+# 2) 检视
+node packages/review-dsh/bin/review-agent.js review \
+  --repo <目标仓> --mr <MR diff 文件> --config B \
+  --issue "<变更描述>" \
+  --out runs/local-review-<名目>
+```
+
+三个使用注意：
+
+1. **中文 MR 描述是当前内核的已知边界，不是用户义务**：检视产出（title / description / evidence）被 NON_ENGLISH 门要求纯英文（Zone A 提示词同步锁英文），而模型会把 `--issue` 中的中文描述自然引用进 evidence，导致整条 finding 被拒。评测场景用数据集原生英文 issue 属测量契约；日常单次检视想稳定拿到产出，`--issue` 暂用英文是权宜绕行。企业场景 MR 标题/描述多为中文，正解在内核侧——输出语言配置化已列入《Config B 生产化方案——差距分析、推荐路线与修改建议》（`docs/design/`，§3.2：`outputLanguage: "en" | "zh"`，Zone A 按语言分序列稳定前缀，换语言后须抽样质量验证）。
+2. **内核面向 Java**：角色提示词为 senior Java code reviewer、符号索引基于 tree-sitter-java。检视非 Java 仓可运行（diff 与 Zone B 仓库结构图仍工作），但符号预取层为空、角色错配，质量不保证。
+3. **基线态语义**：检视读的上下文以仓内现状为准（CLI 不 apply diff）；评测约定仓停在 diff 的 base 侧。日常检视「仓在 head、diff 描述该段变更」亦可，上下文有轻微漂移。
+
 ## 凭据配置（.env.local，绝不入库）
 
 实验运行器（仓库根执行）与 `review-agent` CLI（其所在 cwd 执行，#46）都会自动装载 `.env.local`（gitignored）：已有非空环境变量优先、不被覆盖；装载摘要只报键名与行号，key 值绝不回显。key 缺失即启动报错并给清单。注意 `.env.local` 按调用进程的 cwd 解析——`pnpm --filter review-dsh cli …` 的 cwd 是包目录（读 `packages/review-dsh/.env.local`）；要复用仓库根的 `.env.local`，从仓库根直接 `node packages/review-dsh/bin/review-agent.js …`：
