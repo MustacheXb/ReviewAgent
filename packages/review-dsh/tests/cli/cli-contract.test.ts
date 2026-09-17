@@ -16,7 +16,11 @@
  * - caseId 派生（--mr 文件名去扩展名）在解析缝锁定——wrapper 不自带身份
  *   政策；
  * - 呈现：stdout 形状 = 单个 JSON 文档（ok/caseId/configId/runId/truncated/
- *   rounds/toolCalls/findings/auditPath 全字段在）。
+ *   rounds/toolCalls/findings/auditPath 全字段在）；
+ * - #56 切分内建：CLI 输入 → MRCase（检视四字段直传、truth 恒 null、labels
+ *   中性载体）；超界合并呈现 = ok 包络 + 跨片求和摘要（rounds/toolCalls/
+ *   usage 之和、truncated 任一片）+ shards 节 + shardIds 溯源，顶层不带
+ *   runId/auditPath（多片无单一关联键，关联键在各片条目）。
  */
 
 import { describe, expect, it } from "vitest";
@@ -27,7 +31,13 @@ import {
   type SmokeCliArgs,
   USAGE_TEXT,
 } from "../../src/cli/args.js";
-import { renderReviewOutcome, type ReviewOutcome } from "../../src/cli/render.js";
+import { cliMrCase } from "../../src/cli/orchestration.js";
+import {
+  renderReviewOutcome,
+  renderShardedReviewOutcome,
+  type ReviewOutcome,
+  type ShardedReviewOutcome,
+} from "../../src/cli/render.js";
 import { FINDING_F001 } from "../../../../tests/helpers/dsh-replies.js";
 
 // ---------- 参数解析（review 子命令） ----------
@@ -280,5 +290,108 @@ describe("renderReviewOutcome（#26）", () => {
     expect(parsed.findings).toEqual([]);
     expect(parsed.truncated).toBe(true);
     expect(parsed.rounds).toBe(5);
+  });
+});
+
+// ---------- #56 切分内建：CLI 输入 → MRCase 与超界合并呈现 ----------
+
+describe("cliMrCase（#56）", () => {
+  it("CLI 输入 → MRCase：检视四字段直传；truth 恒 null、labels 为中性载体（生产路径无数据集语义）", () => {
+    const args: ReviewCliArgs = {
+      repo: "/repos/x",
+      mr: "big-mr.diff",
+      caseId: "big-mr",
+      config: "B",
+      issue: "refactor across packages",
+      out: "review-agent-output",
+      model: "deepseek-v4-flash",
+    };
+    expect(cliMrCase(args, "/repos/x", "diff-bytes")).toEqual({
+      caseId: "big-mr",
+      repoPath: "/repos/x",
+      diff: "diff-bytes",
+      issueDescription: "refactor across packages",
+      truth: null,
+      labels: { source: "production", riskClass: "Medium", allowedConfigs: ["B"] },
+    });
+  });
+});
+
+describe("renderShardedReviewOutcome（#56）", () => {
+  const SHARDED_OUTCOME: ShardedReviewOutcome = {
+    caseId: "big-mr",
+    configId: "A",
+    truncated: false,
+    rounds: 2,
+    toolCalls: 0,
+    usage: { inputTokens: 1200, outputTokens: 120, cacheReadTokens: 600 },
+    findings: [{ ...FINDING_F001, shardIds: ["big-mr#shard-001", "big-mr#shard-002"] }],
+    shards: {
+      reason: "files",
+      boundary: { maxFiles: 10, maxDiffLines: 2000 },
+      count: 2,
+      entries: [
+        {
+          shardId: "big-mr#shard-001",
+          files: 6,
+          diffLines: 12,
+          outOfDomain: false,
+          runId: "20260918T000000Z-A-big-mr-shard-001",
+          auditPath: "D:\\audit\\20260918T000000Z-A-big-mr-shard-001.json",
+        },
+        {
+          shardId: "big-mr#shard-002",
+          files: 6,
+          diffLines: 12,
+          outOfDomain: false,
+          runId: "20260918T000001Z-A-big-mr-shard-002",
+          auditPath: "D:\\audit\\20260918T000001Z-A-big-mr-shard-002.json",
+        },
+      ],
+    },
+  };
+
+  it("stdout 形状：单个 JSON 文档（ok 包络 + 跨片求和摘要含 usage + shards 节；findings 携带 shardIds；顶层不带 runId/auditPath）", () => {
+    const rendered = renderShardedReviewOutcome(SHARDED_OUTCOME);
+    expect(() => JSON.parse(rendered)).not.toThrow();
+    expect(JSON.parse(rendered)).toEqual({
+      ok: true,
+      caseId: "big-mr",
+      configId: "A",
+      truncated: false,
+      rounds: 2,
+      toolCalls: 0,
+      usage: { inputTokens: 1200, outputTokens: 120, cacheReadTokens: 600 },
+      findings: [{ ...FINDING_F001, shardIds: ["big-mr#shard-001", "big-mr#shard-002"] }],
+      shards: SHARDED_OUTCOME.shards,
+    });
+  });
+
+  it("单文件超界片如实呈现 outOfDomain；任一片截断则顶层 truncated", () => {
+    const rendered = renderShardedReviewOutcome({
+      ...SHARDED_OUTCOME,
+      truncated: true,
+      shards: {
+        reason: "lines",
+        boundary: { maxFiles: 10, maxDiffLines: 2000 },
+        count: 1,
+        entries: [
+          {
+            shardId: "big-mr#shard-001",
+            files: 1,
+            diffLines: 2001,
+            outOfDomain: true,
+            runId: "run-x",
+            auditPath: "D:\\audit\\run-x.json",
+          },
+        ],
+      },
+    });
+    const parsed = JSON.parse(rendered) as Record<string, unknown>;
+    expect(parsed.truncated).toBe(true);
+    const shards = parsed.shards as { reason: string; count: number; entries: { outOfDomain: boolean }[] };
+    expect(shards.reason).toBe("lines");
+    expect(shards.count).toBe(1);
+    expect(shards.entries[0]!.outOfDomain).toBe(true);
   });
 });

@@ -2,20 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { MRCase } from "../../src/contracts/mr-case.js";
 import { DEFAULT_MR_BOUNDARY, measureDiffBoundary } from "../../src/dataset/mr-boundary-filter.js";
 import { parseUnifiedDiff } from "../../src/dataset/diff/parse-unified-diff.js";
+import { fileBlock } from "../helpers/diff-blocks.js";
 import { DEFAULT_SHARD_CONFIG, planShards } from "../../src/sharding/plan-shards.js";
-
-/** 构造单文件 diff 块：1 context + N 新增行 + 1 context（变更行数 = N） */
-function fileBlock(path: string, changedLineCount: number): string {
-  const adds = Array.from({ length: changedLineCount }, (_, i) => `+line ${i + 1}`);
-  return [
-    `--- ${path}`,
-    `+++ ${path}`,
-    `@@ -1,2 +1,${2 + changedLineCount} @@`,
-    " base",
-    ...adds,
-    " tail",
-  ].join("\n") + "\n";
-}
 
 function makeCase(caseId: string, diff: string, truth: MRCase["truth"] = null): MRCase {
   return {

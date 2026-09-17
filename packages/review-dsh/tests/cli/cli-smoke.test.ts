@@ -19,10 +19,17 @@
  *   已有环境变量优先不被覆盖），摘要走 stderr（review 的 stdout 契约是
  *   单个 JSON 文档）；
  * - #46 smoke 子命令：双探针 200 → 退出码 0 + 人话报告；凭据缺失 →
- *   退出码 1 + 人话诊断（verdict 路径，不是异常路径）。
+ *   退出码 1 + 人话诊断（verdict 路径，不是异常路径）；
+ * - #56 内建切分：超界 MR（文件数 / 行数超验证域）经同一入口分流——
+ *   切分串行执行、findings 按锚点键合并、每片独立审计（runId 命名文件，
+ *   shards 节关联）；单文件超界单片 outOfDomain 执行（不拒绝）；分片数
+ *   超限整单拒绝；diff 不可解析（纯重命名块等）回退 #26 原路径直通（旧
+ *   CLI 从不解析 diff——该输入集必须保真）。域内 MR 的成功 / 截断路径同时
+ *   是 #56 直通分支的回归网（呈现与 #26 原路径逐字节一致）。
  *
- * 退出码契约（票面）：完成（含诚实截断）0 / 中止或错误 1；smoke 按诊断
- * 结论给码（通过 0 / 任何失败诊断 1）。
+ * 退出码契约（#56 起三态）：完成（含诚实截断、超界切分与超界单片执行）0 /
+ * 分片数超限拒绝 2（与运行失败可区分，平台侧可据此提示拆 MR）/ 其余中止
+ * 或错误 1；smoke 按诊断结论给码（通过 0 / 任何失败诊断 1）。
  */
 
 import { execFile } from "node:child_process";
@@ -33,7 +40,15 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
-import { chatResponse, configAResponses, CONFIG_A_REPLIES, SMOKE_PING_TOOL_CALL_BODY } from "../../../../tests/helpers/dsh-replies.js";
+import {
+  chatResponse,
+  configARepliesFor,
+  configAResponses,
+  CONFIG_A_REPLIES,
+  FINDING_F001,
+  SMOKE_PING_TOOL_CALL_BODY,
+} from "../../../../tests/helpers/dsh-replies.js";
+import { fileBlock } from "../../../../tests/helpers/diff-blocks.js";
 import { startStubLlmServer } from "../../../../tests/helpers/stub-llm-server.js";
 
 const PACKAGE_DIR = fileURLToPath(new URL("../..", import.meta.url));
@@ -414,6 +429,252 @@ describe("CLI .env.local 与 smoke 子命令（#46）", () => {
       expect(run.stdout).toContain("凭据缺失");
       expect(run.stdout).toContain("REVIEWER_API_KEY");
       expect(run.stdout).toContain(".env.local");
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+// ---------- #56 内建切分：超界 MR 同一入口分流 / 合并呈现 / 退出码三态 ----------
+
+/** #56 超界分片呈现的 shards 节读取面（进程级只断言外部行为） */
+interface ShardsSectionView {
+  readonly reason: string;
+  readonly boundary: { readonly maxFiles: number; readonly maxDiffLines: number };
+  readonly count: number;
+  readonly entries: readonly {
+    readonly shardId: string;
+    readonly files: number;
+    readonly diffLines: number;
+    readonly outOfDomain: boolean;
+    readonly runId: string;
+    readonly auditPath: string;
+  }[];
+}
+
+describe("CLI 内建切分（#56）", () => {
+  /** shard-002 剧本 finding：与 F001 同规则同类别、异文件异行 → 锚点键不命中（各自独立呈现） */
+  const FINDING_F002 = {
+    ...FINDING_F001,
+    id: "F002",
+    file: "src/main/java/Other.java",
+    line: 7,
+    evidence: ["Other.java:7 - URLEncoder.encode applied to the joined query string"],
+  };
+
+  /** shard-002 剧本：config A 六阶段同款，candidates / verdicts 换 F002（剧本结构单源） */
+  function configAF002Responses(): string[] {
+    return configARepliesFor(FINDING_F002).map(chatResponse);
+  }
+
+  it(
+    "超界切分：12 文件 → 2 片串行 → 退出码 0 + 单 JSON 合并呈现（shards 节 + 各片审计关联）",
+    async () => {
+      // 剧本按序：回复 1–6 = shard-001（F001）、7–12 = shard-002（F002）——
+      // 串行执行下序号对齐；若两片交错，findings 与各片审计即错位（对齐断言即串行证明）
+      const stub = await startStubLlmServer([...configAResponses(), ...configAF002Responses()]);
+      try {
+        const outDir = await mkdtemp(join(tmpdir(), "review-agent-cli-shard-"));
+        workDirs.push(outDir);
+        const diffFile = join(outDir, "big-mr.diff");
+        const diff = [
+          ...Array.from({ length: 6 }, (_, i) => `src/pkg-a/A${i + 1}.java`),
+          ...Array.from({ length: 6 }, (_, i) => `src/pkg-b/B${i + 1}.java`),
+        ]
+          .map((file) => fileBlock(file, 2))
+          .join("");
+        await writeFile(diffFile, diff, "utf8");
+
+        const run = await runCli(
+          ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", outDir],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-shard-key" },
+        );
+
+        // —— 退出码：超界切分完成 = 0（定义结局，不是拒绝也不是失败）
+        expect(run.code).toBe(0);
+        const outcome = JSON.parse(run.stdout) as Record<string, unknown>;
+        // —— 跨片求和摘要：rounds / toolCalls / usage = 各片之和（决策 13——
+        //    stub 常量：每请求 miss 100 / completion 10 / cache hit 50 → 每片
+        //    6 请求 {600, 60, 300}，两片和）；超界呈现不带顶层 runId /
+        //    auditPath（多片无单一关联键——各片条目承载）
+        expect(outcome).toMatchObject({
+          ok: true,
+          caseId: "big-mr",
+          configId: "A",
+          truncated: false,
+          rounds: 2,
+          toolCalls: 0,
+        });
+        expect(outcome.usage).toEqual({
+          inputTokens: 1200,
+          outputTokens: 120,
+          cacheReadTokens: 600,
+        });
+        expect("runId" in outcome).toBe(false);
+        expect("auditPath" in outcome).toBe(false);
+        // —— shards 节：files 维度超界、2 片（目录亲和：每片 6 文件 12 行）
+        const shards = outcome.shards as ShardsSectionView;
+        expect(shards).toMatchObject({
+          reason: "files",
+          boundary: { maxFiles: 10, maxDiffLines: 2000 },
+          count: 2,
+        });
+        expect(shards.entries.map((entry) => entry.shardId)).toEqual([
+          "big-mr#shard-001",
+          "big-mr#shard-002",
+        ]);
+        expect(
+          shards.entries.every(
+            (entry) => entry.files === 6 && entry.diffLines === 12 && !entry.outOfDomain,
+          ),
+        ).toBe(true);
+        // —— 合并 findings：F001（片 1）/ F002（片 2）各带单 shardIds（异文件不并）
+        const findings = outcome.findings as { readonly id: string; readonly shardIds: string[] }[];
+        expect(findings).toHaveLength(2);
+        expect(findings[0]).toMatchObject({ id: "F001", shardIds: ["big-mr#shard-001"] });
+        expect(findings[1]).toMatchObject({ id: "F002", shardIds: ["big-mr#shard-002"] });
+        // —— 每片独立审计（runId 命名文件）可读且与条目对齐：片 1 审计含 F001、
+        //    片 2 含 F002（stub 序号对齐——串行执行的可观测证明）
+        for (const [index, expectedFindingId] of ["F001", "F002"].entries()) {
+          const entry = shards.entries[index]!;
+          const audit = JSON.parse(await readFile(entry.auditPath, "utf8")) as {
+            readonly runId: string;
+            readonly caseId: string;
+            readonly findings: readonly { readonly id: string }[];
+            readonly requests: readonly unknown[];
+          };
+          expect(audit.runId).toBe(entry.runId);
+          expect(audit.caseId).toBe(`big-mr#shard-00${index + 1}`);
+          expect(audit.findings.map((finding) => finding.id)).toEqual([expectedFindingId]);
+          expect(audit.requests).toHaveLength(6);
+        }
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "单文件超界：2001 行 → 单片 outOfDomain 执行（不拒绝）→ 退出码 0 + reason=lines",
+    async () => {
+      const stub = await startStubLlmServer(configAResponses());
+      try {
+        const outDir = await mkdtemp(join(tmpdir(), "review-agent-cli-shard-ood-"));
+        workDirs.push(outDir);
+        const diffFile = join(outDir, "huge-file.diff");
+        await writeFile(diffFile, fileBlock("src/main/java/Huge.java", 2001), "utf8");
+
+        const run = await runCli(
+          ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", outDir],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-shard-ood-key" },
+        );
+
+        // —— 退出码 0：单文件无法再切 → 单片执行是定义结局（带超界标注，不拒绝）
+        expect(run.code).toBe(0);
+        const outcome = JSON.parse(run.stdout) as Record<string, unknown>;
+        const shards = outcome.shards as ShardsSectionView;
+        expect(shards).toMatchObject({ reason: "lines", count: 1 });
+        expect(shards.entries[0]).toMatchObject({
+          shardId: "huge-file#shard-001",
+          files: 1,
+          diffLines: 2001,
+          outOfDomain: true,
+        });
+        // 该片照常执行与过闸：F001 呈现并携带单片 provenance；审计可读且对齐
+        const findings = outcome.findings as { readonly id: string; readonly shardIds: string[] }[];
+        expect(findings[0]).toMatchObject({ id: "F001", shardIds: ["huge-file#shard-001"] });
+        const audit = JSON.parse(
+          await readFile(shards.entries[0]!.auditPath, "utf8"),
+        ) as { readonly runId: string; readonly caseId: string };
+        expect(audit.runId).toBe(shards.entries[0]!.runId);
+        expect(audit.caseId).toBe("huge-file#shard-001");
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "分片数超限：210 文件同目录 → 21 片 > 上限 20 → 退出码 2 + stderr 人话 + stdout 干净",
+    async () => {
+      // 空剧本 stub：拒绝发生在任何运行之前（零运行成本）——若有请求发出，
+      // stub 500 → 退出码 1 ≠ 2，测试即失败（双重兜底）
+      const stub = await startStubLlmServer([]);
+      try {
+        const outDir = await mkdtemp(join(tmpdir(), "review-agent-cli-shard-limit-"));
+        workDirs.push(outDir);
+        const diffFile = join(outDir, "too-many.diff");
+        const diff = Array.from({ length: 210 }, (_, i) => fileBlock(`src/pkg/P${i}.java`, 2)).join("");
+        await writeFile(diffFile, diff, "utf8");
+
+        const run = await runCli(
+          ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", outDir],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-shard-limit-key" },
+        );
+
+        // —— 退出码三态：分片超限拒绝 = 2（与运行失败 1 可区分）
+        expect(run.code).toBe(2);
+        // stderr 人话：含所需片数与上限、指引主动拆分 MR
+        expect(run.stderr).toContain("拒绝检视");
+        expect(run.stderr).toContain("所需分片数 21");
+        expect(run.stderr).toContain("上限 20");
+        expect(run.stderr).toContain("拆分");
+        // —— stdout 干净：拒绝不发结果文档
+        expect(run.stdout).toBe("");
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "不可解析 diff（纯重命名块）：MALFORMED_DIFF → 回退 #26 原路径直通 → 退出码 0 + 域内形状",
+    async () => {
+      // 纯重命名块（rename from / to、无 hunk）是旧 CLI 照常跑的输入集——
+      // 解析器对其硬失败（skipGitHeader），边界无法判定 → 回退直通，绝不比
+      // 旧行为差（AC1 回归锁的输入集补全）
+      const stub = await startStubLlmServer(configAResponses());
+      try {
+        const outDir = await mkdtemp(join(tmpdir(), "review-agent-cli-shard-rename-"));
+        workDirs.push(outDir);
+        const diffFile = join(outDir, "rename-only.diff");
+        const diff = [
+          "diff --git a/src/Old.java b/src/New.java",
+          "similarity index 100%",
+          "rename from src/Old.java",
+          "rename to src/New.java",
+          "",
+        ].join("\n");
+        await writeFile(diffFile, diff, "utf8");
+
+        const run = await runCli(
+          ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", outDir],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-shard-rename-key" },
+        );
+
+        // —— 回退直通完成 = 0（旧路径语义，不是拒绝也不是失败）
+        expect(run.code).toBe(0);
+        const outcome = JSON.parse(run.stdout) as Record<string, unknown>;
+        // —— 域内形状：runId / auditPath 在场、不带 shards 节（未切分——决策 11）
+        expect(outcome).toMatchObject({ ok: true, caseId: "rename-only", configId: "A" });
+        expect("shards" in outcome).toBe(false);
+        expect(typeof outcome.runId).toBe("string");
+        expect(typeof outcome.auditPath).toBe("string");
+        // —— 直通运行照常产出：F001 过闸呈现 + 审计可读且 runId 对齐
+        //    （内核从不解析 diff——rename 块只是 diff 文本）
+        const findings = outcome.findings as { readonly id: string }[];
+        expect(findings.map((finding) => finding.id)).toEqual(["F001"]);
+        const audit = JSON.parse(await readFile(outcome.auditPath as string, "utf8")) as {
+          readonly runId: string;
+          readonly requests: readonly unknown[];
+        };
+        expect(audit.runId).toBe(outcome.runId);
+        expect(audit.requests).toHaveLength(6);
+      } finally {
+        await stub.close();
+      }
     },
     TEST_TIMEOUT_MS,
   );

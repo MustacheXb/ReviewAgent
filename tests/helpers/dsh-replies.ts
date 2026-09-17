@@ -64,3 +64,18 @@ export const SMOKE_PING_TOOL_CALL_BODY = {
 export function configAResponses(): string[] {
   return CONFIG_A_REPLIES.map(chatResponse);
 }
+
+/**
+ * config A 六阶段剧本的指定 finding 变体：candidates（第 5 回复）与 verdicts
+ * （第 6 回复）随剧本结构在此单一来源，消费方不再魔数下标。
+ */
+export function configARepliesFor(finding: Finding): string[] {
+  return [
+    ...CONFIG_A_REPLIES.slice(0, 4),
+    JSON.stringify({ candidates: [finding] }),
+    JSON.stringify({
+      verdicts: [{ id: finding.id, pass: true, reason: "evidence supports the finding" }],
+      complete: true,
+    }),
+  ];
+}
