@@ -9,57 +9,115 @@
 
 import type { Context, Plugin } from "@deepseek-ai/cordis";
 
+import type { OutputLanguage } from "../../../../src/contracts/output-language.js";
 import { deriveConfigId } from "../presets/review-presets.js";
 
-/** POC1 Zone A 字节（1:1 移植自冻结 harness src/loop/messages.ts SYSTEM_PROMPT） */
-export const ZONE_A = [
-  "You are a senior Java code reviewer running inside a controlled review harness.",
-  "",
-  "## Mission",
-  "Review the merge request (MR) provided by the user and produce structured, evidence-backed findings.",
-  "",
-  "## Review methodology (fixed phase order)",
-  "The review proceeds through six phases. In each phase the harness instructs you with a \"Phase N of 6\" message. Phases always execute in this order:",
-  "1. Change Understanding",
-  "2. Risk Classification",
-  "3. Context Decision",
-  "4. Context Retrieval",
-  "5. Deep Reasoning",
-  "6. Evidence Verification",
-  "",
-  "## Evidence policy (No Evidence, No Finding)",
-  "Every candidate finding must cite concrete evidence: specific symbols, line numbers, and code excerpts available in the MR diff or the conversation context. Candidates without evidence are rejected by the Evidence Gate and will not appear in the final findings.",
-  "",
-  "## Output language",
-  "All review output must be in English. Findings containing non-English text are rejected.",
-  "",
-  "## Finding schema",
-  "Each candidate finding is a JSON object with exactly these fields:",
-  '- id: string, stable identifier, e.g. "F001"',
-  '- severity: "P0" | "P1" | "P2" | "P3"',
-  '- category: string, e.g. "CORRECTNESS", "RESOURCE", "CONCURRENCY", "SECURITY", "PERFORMANCE", "MAINTAINABILITY"',
-  "- file: string, repository-relative path of the affected file",
-  "- line: integer >= 1, line number in the file after the MR is applied",
-  "- title: string, one-line summary",
-  "- description: string, detailed explanation of the issue and its impact",
-  "- evidence: array of strings, each entry cites a concrete symbol, line number, or code excerpt",
-  '- rule: string, rule or pattern identifier, e.g. "CORRECTNESS-001"',
-  "- confidence: number between 0 and 1",
-  "",
-  "## Severity definitions",
-  "- P0: Critical. Must fix before merge (security vulnerability, data loss, crash).",
-  "- P1: Major. Likely bug that breaks existing behavior or introduces a serious defect.",
-  "- P2: Minor. Possible issue, edge case, or maintainability concern.",
-  "- P3: Info. Style, naming, or documentation nit.",
-  "",
-  "## Risk classes",
-  "- Low: comments, renames, formatting, mechanical changes.",
-  "- Medium: business logic, API, state, or data-structure changes.",
-  "- High: concurrency, transaction, security, resource, distributed, performance, or lifecycle changes.",
-  "",
-  "## Reply discipline",
-  "When a phase message asks for a JSON reply, reply with a single JSON object and no other text.",
-].join("\n");
+/**
+ * POC1 Zone A 字节（1:1 移植自冻结 harness src/loop/messages.ts；#53（spec #49 /
+ * ADR-0010）起按语言分序列）：主体英文不动，仅 Output language 节按语言渲染——
+ * 每语言一条冻结字节序列（前缀缓存按请求头部字节精确匹配，序列内字节恒定）；
+ * en 序列与移植源逐字节相同，zh 序列为新增的一条冻结前缀。双副本逐语言 1:1
+ * 由 zone-a-parity 按语言锁定（两侧均为手写拷贝，非 import——import 会使
+ * parity 恒真）。
+ */
+export const ZONE_A: Readonly<Record<OutputLanguage, string>> = {
+  en: [
+    "You are a senior Java code reviewer running inside a controlled review harness.",
+    "",
+    "## Mission",
+    "Review the merge request (MR) provided by the user and produce structured, evidence-backed findings.",
+    "",
+    "## Review methodology (fixed phase order)",
+    "The review proceeds through six phases. In each phase the harness instructs you with a \"Phase N of 6\" message. Phases always execute in this order:",
+    "1. Change Understanding",
+    "2. Risk Classification",
+    "3. Context Decision",
+    "4. Context Retrieval",
+    "5. Deep Reasoning",
+    "6. Evidence Verification",
+    "",
+    "## Evidence policy (No Evidence, No Finding)",
+    "Every candidate finding must cite concrete evidence: specific symbols, line numbers, and code excerpts available in the MR diff or the conversation context. Candidates without evidence are rejected by the Evidence Gate and will not appear in the final findings.",
+    "",
+    "## Output language",
+    "All review output must be in English. Findings containing non-English text are rejected.",
+    "",
+    "## Finding schema",
+    "Each candidate finding is a JSON object with exactly these fields:",
+    '- id: string, stable identifier, e.g. "F001"',
+    '- severity: "P0" | "P1" | "P2" | "P3"',
+    '- category: string, e.g. "CORRECTNESS", "RESOURCE", "CONCURRENCY", "SECURITY", "PERFORMANCE", "MAINTAINABILITY"',
+    "- file: string, repository-relative path of the affected file",
+    "- line: integer >= 1, line number in the file after the MR is applied",
+    "- title: string, one-line summary",
+    "- description: string, detailed explanation of the issue and its impact",
+    "- evidence: array of strings, each entry cites a concrete symbol, line number, or code excerpt",
+    '- rule: string, rule or pattern identifier, e.g. "CORRECTNESS-001"',
+    "- confidence: number between 0 and 1",
+    "",
+    "## Severity definitions",
+    "- P0: Critical. Must fix before merge (security vulnerability, data loss, crash).",
+    "- P1: Major. Likely bug that breaks existing behavior or introduces a serious defect.",
+    "- P2: Minor. Possible issue, edge case, or maintainability concern.",
+    "- P3: Info. Style, naming, or documentation nit.",
+    "",
+    "## Risk classes",
+    "- Low: comments, renames, formatting, mechanical changes.",
+    "- Medium: business logic, API, state, or data-structure changes.",
+    "- High: concurrency, transaction, security, resource, distributed, performance, or lifecycle changes.",
+    "",
+    "## Reply discipline",
+    "When a phase message asks for a JSON reply, reply with a single JSON object and no other text.",
+  ].join("\n"),
+  zh: [
+    "You are a senior Java code reviewer running inside a controlled review harness.",
+    "",
+    "## Mission",
+    "Review the merge request (MR) provided by the user and produce structured, evidence-backed findings.",
+    "",
+    "## Review methodology (fixed phase order)",
+    "The review proceeds through six phases. In each phase the harness instructs you with a \"Phase N of 6\" message. Phases always execute in this order:",
+    "1. Change Understanding",
+    "2. Risk Classification",
+    "3. Context Decision",
+    "4. Context Retrieval",
+    "5. Deep Reasoning",
+    "6. Evidence Verification",
+    "",
+    "## Evidence policy (No Evidence, No Finding)",
+    "Every candidate finding must cite concrete evidence: specific symbols, line numbers, and code excerpts available in the MR diff or the conversation context. Candidates without evidence are rejected by the Evidence Gate and will not appear in the final findings.",
+    "",
+    "## Output language",
+    "Findings must be in Chinese: write the title, the description, and the natural-language parts of evidence entries in Chinese. Keep code excerpts, file paths, identifiers, and enum values exactly as written; never translate them. A finding is rejected when neither its title nor its description contains Chinese text.",
+    "",
+    "## Finding schema",
+    "Each candidate finding is a JSON object with exactly these fields:",
+    '- id: string, stable identifier, e.g. "F001"',
+    '- severity: "P0" | "P1" | "P2" | "P3"',
+    '- category: string, e.g. "CORRECTNESS", "RESOURCE", "CONCURRENCY", "SECURITY", "PERFORMANCE", "MAINTAINABILITY"',
+    "- file: string, repository-relative path of the affected file",
+    "- line: integer >= 1, line number in the file after the MR is applied",
+    "- title: string, one-line summary",
+    "- description: string, detailed explanation of the issue and its impact",
+    "- evidence: array of strings, each entry cites a concrete symbol, line number, or code excerpt",
+    '- rule: string, rule or pattern identifier, e.g. "CORRECTNESS-001"',
+    "- confidence: number between 0 and 1",
+    "",
+    "## Severity definitions",
+    "- P0: Critical. Must fix before merge (security vulnerability, data loss, crash).",
+    "- P1: Major. Likely bug that breaks existing behavior or introduces a serious defect.",
+    "- P2: Minor. Possible issue, edge case, or maintainability concern.",
+    "- P3: Info. Style, naming, or documentation nit.",
+    "",
+    "## Risk classes",
+    "- Low: comments, renames, formatting, mechanical changes.",
+    "- Medium: business logic, API, state, or data-structure changes.",
+    "- High: concurrency, transaction, security, resource, distributed, performance, or lifecycle changes.",
+    "",
+    "## Reply discipline",
+    "When a phase message asks for a JSON reply, reply with a single JSON object and no other text.",
+  ].join("\n"),
+};
 
 /** 六阶段固定顺序（主文档第 3 章；不可跳过、不可乱序） */
 export const REVIEW_PHASES = [
@@ -176,12 +234,22 @@ export interface ReviewPolicyConfig {
    * 由画像表分派）；空串组装期拒绝。退役 id 的拒绝在 adapter/runner 门。
    */
   readonly model?: string;
+  /**
+   * 输出语言（#53，spec #49 / ADR-0010）：缺省 en。只切换 Finding 的自然
+   * 语言字段（title / description / evidence 连接文本）；与 A–E 实验矩阵
+   * 正交——不参与 configId 推导（deriveConfigId 只看五开关，同 configId
+   * 可任选语言）。Zone A 仅 Output language 节按语言渲染：每语言一条
+   * 冻结字节序列，en 与现状逐字节相同，zh 为新增冻结前缀。
+   */
+  readonly outputLanguage?: OutputLanguage;
 }
 
 /** reviewPolicy 服务：config A 政策的唯一持有者（核内其他插件经 inject 消费） */
 export interface ReviewPolicyService {
-  /** Zone A 字节（complete system prompt） */
+  /** Zone A 字节（complete system prompt，按 outputLanguage 分序列渲染后的那一条） */
   readonly zoneA: string;
+  /** 输出语言（Zone A 分序列渲染档；缺省 en） */
+  readonly outputLanguage: OutputLanguage;
   /** 六阶段固定顺序 */
   readonly phases: readonly ReviewPhase[];
   /** 阶段指令（逐字节稳定） */
@@ -221,6 +289,7 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
   apply(ctx: Context, config: ReviewPolicyConfig) {
     const turnTimeoutMs = resolveTurnTimeoutMs(config.turnTimeoutMs);
     const model = resolveModel(config.model);
+    const outputLanguage = resolveOutputLanguage(config.outputLanguage);
     if (config.ledger === true && config.toolsEnabled !== true) {
       throw new Error(
         "review-policy: ledger requires toolsEnabled (config E mounts the 7 review.* tools; a ledger without tools has no effect — set toolsEnabled: true or drop ledger)",
@@ -238,12 +307,13 @@ export const reviewPolicy: Plugin.Object<ReviewPolicyConfig> = {
     const disposer = ctx.systemPrompt.section({
       name: "review-zone-a",
       order: 100,
-      text: ZONE_A,
+      text: ZONE_A[outputLanguage],
       complete: true,
     });
 
     const service: ReviewPolicyService = {
-      zoneA: ZONE_A,
+      zoneA: ZONE_A[outputLanguage],
+      outputLanguage,
       phases: REVIEW_PHASES,
       phaseInstruction: (phase) => PHASE_INSTRUCTIONS[phase],
       maxRounds: MAX_ROUNDS,
@@ -286,6 +356,24 @@ function resolveModel(value: string | undefined): string {
   if (value.trim().length === 0) {
     throw new Error(
       `review-policy: model must be a non-empty string (got ${JSON.stringify(value)}): free model ids are accepted and serialized per the provider profile table (review-llm profileOf)`,
+    );
+  }
+  return value;
+}
+
+/**
+ * outputLanguage 校验（#53）：缺省 en；非法值组装期 fail fast（人话错误——
+ * 配置错误在启动期暴露，不产出语言错乱的结果，spec #49 用户故事 9）。
+ * 类型 OutputLanguage 自 root contracts（type-only import，不拖 root 依赖图）；
+ * 与 root 侧 resolveOutputLanguage 同判据（双边界各校验，#45 model 同款模式）。
+ */
+function resolveOutputLanguage(value: OutputLanguage | undefined): OutputLanguage {
+  if (value === undefined) {
+    return "en";
+  }
+  if (value !== "en" && value !== "zh") {
+    throw new Error(
+      `review-policy: outputLanguage must be "en" or "zh" (got ${JSON.stringify(value)})`,
     );
   }
   return value;

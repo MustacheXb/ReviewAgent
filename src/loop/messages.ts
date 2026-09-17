@@ -1,11 +1,17 @@
 import type { MRCase } from "../contracts/mr-case.js";
 import type { LlmMessage } from "../contracts/llm-client.js";
+import { resolveOutputLanguage, type OutputLanguage } from "../contracts/output-language.js";
 
 /**
  * Zone A 稳定前缀：检视角色、政策、六阶段方法论、输出 Schema、Severity 定义、Evidence Policy。
  * 字节稳定：不含任何 run 特定数据（caseId / diff 均在 Zone C），同一 harness 版本内所有请求共享同一字节。
+ *
+ * #53（spec #49 / ADR-0010）起按语言分序列：主体英文不动，仅 Output language
+ * 节按语言渲染——每语言一条冻结字节序列（前缀缓存按请求头部字节精确匹配，
+ * 序列内字节恒定）；en 序列与分序列改造前逐字节相同（en 是全部既有实验
+ * 结论的锚定形态），zh 序列为新增的一条冻结前缀。
  */
-export const SYSTEM_PROMPT = [
+const PROMPT_HEAD = [
   "You are a senior Java code reviewer running inside a controlled review harness.",
   "",
   "## Mission",
@@ -23,8 +29,25 @@ export const SYSTEM_PROMPT = [
   "## Evidence policy (No Evidence, No Finding)",
   "Every candidate finding must cite concrete evidence: specific symbols, line numbers, and code excerpts available in the MR diff or the conversation context. Candidates without evidence are rejected by the Evidence Gate and will not appear in the final findings.",
   "",
-  "## Output language",
-  "All review output must be in English. Findings containing non-English text are rejected.",
+];
+
+/**
+ * Output language 节（唯一按语言渲染的一节）：指令以英文书写，内容指定
+ * 目标输出语言与「代码摘录 / 路径 / 标识符 / 枚举不翻译」约束。zh 句与
+ * #55 语言门对称（title / description 至少其一含中文，缺失即语言违规）。
+ */
+const OUTPUT_LANGUAGE_SECTIONS: Readonly<Record<OutputLanguage, readonly string[]>> = {
+  en: [
+    "## Output language",
+    "All review output must be in English. Findings containing non-English text are rejected.",
+  ],
+  zh: [
+    "## Output language",
+    "Findings must be in Chinese: write the title, the description, and the natural-language parts of evidence entries in Chinese. Keep code excerpts, file paths, identifiers, and enum values exactly as written; never translate them. A finding is rejected when neither its title nor its description contains Chinese text.",
+  ],
+};
+
+const PROMPT_TAIL = [
   "",
   "## Finding schema",
   "Each candidate finding is a JSON object with exactly these fields:",
@@ -52,11 +75,19 @@ export const SYSTEM_PROMPT = [
   "",
   "## Reply discipline",
   "When a phase message asks for a JSON reply, reply with a single JSON object and no other text.",
-].join("\n");
+];
 
-/** Zone A 的 system 消息 */
-export function buildSystemMessage(): LlmMessage {
-  return { role: "system", content: SYSTEM_PROMPT };
+/** 渲染 Zone A 冻结序列（按语言；序列内字节恒定——分序列是前缀缓存纪律的前提） */
+function renderSystemPrompt(outputLanguage: OutputLanguage): string {
+  return [...PROMPT_HEAD, ...OUTPUT_LANGUAGE_SECTIONS[outputLanguage], ...PROMPT_TAIL].join("\n");
+}
+
+/** en 冻结序列（与分序列改造前逐字节相同；既有 golden / parity 期望的锚点） */
+export const SYSTEM_PROMPT = renderSystemPrompt("en");
+
+/** Zone A 的 system 消息（outputLanguage 缺省 en；非法值 fail fast 人话错误） */
+export function buildSystemMessage(outputLanguage?: OutputLanguage): LlmMessage {
+  return { role: "system", content: renderSystemPrompt(resolveOutputLanguage(outputLanguage)) };
 }
 
 /**
@@ -76,9 +107,10 @@ export interface ContextMessages {
 export function buildInitialMessages(
   mrCase: MRCase,
   contextMessages: ContextMessages = {},
+  outputLanguage?: OutputLanguage,
 ): readonly LlmMessage[] {
   return [
-    buildSystemMessage(),
+    buildSystemMessage(outputLanguage),
     ...(contextMessages.zoneB ?? []),
     buildInitialUserMessage(mrCase),
     ...(contextMessages.prefetch ?? []),

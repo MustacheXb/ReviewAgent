@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { SYSTEM_PROMPT } from "../../../../src/loop/messages.js";
+import { SYSTEM_PROMPT, buildSystemMessage } from "../../../../src/loop/messages.js";
 import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
 
 import type { FakeLlmScriptStep } from "../../src/llm/fake-adapter.js";
@@ -113,6 +113,28 @@ describe("spike：Zone A 字节稳定（同单元两次运行）", () => {
       );
 
       // 无变更重跑零 Cache Break（#22 AC3；工具面字节亦稳定）
+      expect(first.audit.cacheBreaks).toEqual([]);
+      expect(second.audit.cacheBreaks).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "zh 形态（#53）：两次独立运行的 Zone A 前缀逐字节相等且等于 zh 冻结序列（前缀缓存命中与 en 对称）",
+    async () => {
+      const first = await runOnce({ outputLanguage: "zh" });
+      const second = await runOnce({ outputLanguage: "zh" });
+
+      // 每次运行内部：6 个请求的 Zone A 前缀全同，且等于根包 zh 冻结序列
+      const zhPrompt = buildSystemMessage("zh").content;
+      expect(first.zoneSnapshots).toHaveLength(6);
+      expect(second.zoneSnapshots).toHaveLength(6);
+      expect(first.zoneSnapshots.every((zone) => zone === zhPrompt)).toBe(true);
+      expect(second.zoneSnapshots.every((zone) => zone === zhPrompt)).toBe(true);
+
+      // 两次运行之间：Zone A 前缀逐字节相等 + 零 Cache Break（zh 序列内
+      // 字节恒定——分序列保住前缀缓存命中，ADR-0010 主决策的执行点）
+      expect(second.zoneSnapshots).toEqual(first.zoneSnapshots);
       expect(first.audit.cacheBreaks).toEqual([]);
       expect(second.audit.cacheBreaks).toEqual([]);
     },

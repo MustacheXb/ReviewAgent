@@ -2,12 +2,26 @@ import { LlmAdapter, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { describe, expect, it } from "vitest";
 
+import type { OutputLanguage } from "../../../../src/contracts/output-language.js";
+import { SYSTEM_PROMPT, buildSystemMessage } from "../../../../src/loop/messages.js";
+
+import type { FakeLlmScriptStep } from "../../src/llm/fake-adapter.js";
 import { DEFAULT_MODEL, DEFAULT_TURN_TIMEOUT_MS, REAL_LLM_TURN_TIMEOUT_MS } from "../../src/plugins/review-policy.js";
 import { DEFAULT_DEEPSEEK_TIMEOUT_MS } from "../../src/llm/deepseek-adapter.js";
 import { realApiReviewPolicy } from "../../src/profile/assemble.js";
 import type { MrInput } from "../../src/plugins/review-context.js";
 import { REVIEW_PRESETS } from "../../src/presets/review-presets.js";
 import { mount, mountAdapter } from "../helpers/mount-profile.js";
+
+/** 六阶段纯文本脚本（语言面测试用：跑通一次会话取 audit.configId） */
+const PHASE_SCRIPT: readonly FakeLlmScriptStep[] = [
+  { kind: "reply", content: '{"summary":"s"}' },
+  { kind: "reply", content: '{"riskClass":"Low","reason":"r"}' },
+  { kind: "reply", content: '{"neededContext":[],"reason":"r"}' },
+  { kind: "reply", content: '{"notes":"n"}' },
+  { kind: "reply", content: '{"candidates":[]}' },
+  { kind: "reply", content: '{"verdicts":[],"complete":true}' },
+];
 
 const INPUT: MrInput = {
   caseId: "TIMEOUT-1",
@@ -133,6 +147,36 @@ describe("prefetch 开关（config B 形态）", () => {
     await expect(mount([], { policy: { prefetch: true, toolsEnabled: true } })).rejects.toThrow(
       /mutually exclusive/,
     );
+  });
+});
+
+describe("outputLanguage 政策化（#53：Zone A 按语言分序列，spec #49 / ADR-0010）", () => {
+  it("缺省政策：服务 outputLanguage = en，zoneA = 根包 en 冻结序列（SYSTEM_PROMPT）", async () => {
+    const { ctx } = await mount();
+
+    expect(ctx.reviewPolicy.outputLanguage).toBe("en");
+    expect(ctx.reviewPolicy.zoneA).toBe(SYSTEM_PROMPT);
+  });
+
+  it("组装转发：policy.outputLanguage = zh → 服务 zh，zoneA = 根包 zh 冻结序列（双副本逐语言 1:1）", async () => {
+    const { ctx } = await mount([], { policy: { outputLanguage: "zh" } });
+
+    expect(ctx.reviewPolicy.outputLanguage).toBe("zh");
+    expect(ctx.reviewPolicy.zoneA).toBe(buildSystemMessage("zh").content);
+  });
+
+  it("语言与 A–E 矩阵正交：config A 配 zh 组装通过，运行 configId 仍为 A（语言不进 configId 推导）", async () => {
+    const { ctx } = await mount(PHASE_SCRIPT, { policy: { outputLanguage: "zh" } });
+
+    const result = await ctx.reviewRuntime.run(INPUT);
+
+    expect(result.audit.configId).toBe("A");
+  });
+
+  it("非法值 fail fast：组装期拒绝（人话错误，含实际值）", async () => {
+    await expect(
+      mount([], { policy: { outputLanguage: "fr" as OutputLanguage } }),
+    ).rejects.toThrow('review-policy: outputLanguage must be "en" or "zh" (got "fr")');
   });
 });
 

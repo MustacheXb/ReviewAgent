@@ -27,7 +27,9 @@
 
 import { describe, expect, it } from "vitest";
 
+import type { ConfigId } from "../../../../src/contracts/config.js";
 import type { ToolSchema } from "../../../../src/contracts/llm-client.js";
+import type { OutputLanguage } from "../../../../src/contracts/output-language.js";
 import { buildSystemMessage } from "../../../../src/loop/messages.js";
 import { DEFAULT_EFFORT, DEFAULT_MODEL } from "../../../../src/run/run-review.js";
 import { buildReviewToolkit } from "../../../../src/tools/toolkit.js";
@@ -79,7 +81,9 @@ function phaseScript(): readonly FakeLlmScriptStep[] {
 }
 
 /** 冻结 oracle：同配置对照面——Zone A 字节（system + 工具 schema）+ 路由
- * （model / effort；非 Zone A 组成部分，作同配置对照的旁证位） */
+ * （model / effort；非 Zone A 组成部分，作同配置对照的旁证位）。
+ * #53 起按语言参数化：systemPrompt = 冻结 buildSystemMessage(language)——
+ * 双副本逐语言 1:1，任何一侧的字节漂移在此红灯 */
 interface ZoneAOracle {
   readonly systemPrompt: string;
   readonly model: string;
@@ -93,8 +97,13 @@ const FROZEN_TOOLS = buildReviewToolkit({
   diff: SAMPLE_MR_CASE.diff,
 }).tools;
 
-function oracleFor(tools: readonly ToolSchema[]): ZoneAOracle {
-  return { systemPrompt: FROZEN_SYSTEM_PROMPT, model: DEFAULT_MODEL, effort: DEFAULT_EFFORT, tools };
+function oracleFor(tools: readonly ToolSchema[], language: OutputLanguage = "en"): ZoneAOracle {
+  return {
+    systemPrompt: buildSystemMessage(language).content,
+    model: DEFAULT_MODEL,
+    effort: DEFAULT_EFFORT,
+    tools,
+  };
 }
 
 /**
@@ -169,6 +178,32 @@ describe("Zone A 对照（#23：DSH 组装 × 冻结薄 harness，差异集显�
     expect(result.audit.configId).toBe("E");
     expectParity(result.audit.requests, oracleFor(FROZEN_TOOLS));
   });
+
+  it(
+    "zh 序列（#53）：A / C / E 三形态逐语言 parity——system = 根包 zh 冻结序列，差异集 = ∅",
+    async () => {
+      // 三形态各跑一次 zh 会话（en 期望零改动见上三测——en 是回归锁，zh 是新增冻结）
+      const zhCases: readonly { configId: ConfigId; tools: readonly ToolSchema[] }[] = [
+        { configId: "A", tools: [] },
+        { configId: "C", tools: FROZEN_TOOLS },
+        { configId: "E", tools: FROZEN_TOOLS },
+      ];
+      for (const { configId, tools } of zhCases) {
+        const { ctx } = await mount(phaseScript(), {
+          policy: { ...REVIEW_PRESETS[configId], outputLanguage: "zh" },
+        });
+
+        const result = await ctx.reviewRuntime.run(INPUT);
+
+        // 语言与矩阵正交：configId 不随语言漂移
+        expect(result.audit.configId).toBe(configId);
+        expectParity(result.audit.requests, oracleFor(tools, "zh"));
+      }
+    },
+    // 三会话串行（含 config C 全仓扫描——满套件并行下可达 5s+，与
+    // zone-a-stability / cli-smoke 同款显式超时，防默认 5s 掐死）
+    30_000,
+  );
 
   it("失效自检（负面对照）：diffZoneA 对路由 / system / 工具面扰动逐一敏感", () => {
     const oracle = oracleFor(FROZEN_TOOLS);
