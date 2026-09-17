@@ -134,7 +134,8 @@ function anchorKey(finding: Finding): string {
   return JSON.stringify([finding.file, finding.rule, finding.category]);
 }
 
-function validateMergeConfig(config: MergeConfig): DatasetError | undefined {
+/** 合并配置校验（编排层入口先行调用：非法配置在零 LLM 成本时拒绝） */
+export function validateMergeConfig(config: MergeConfig): DatasetError | undefined {
   if (!Number.isInteger(config.lineWindow) || config.lineWindow < 1) {
     return new DatasetError(
       "MERGE_CONFIG_INVALID",
