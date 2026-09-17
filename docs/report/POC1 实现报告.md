@@ -26,6 +26,7 @@ POC1 的目标是为「低 Token、高质量代码检视 Agent」论文搭建**�
 | [0002](../adr/0002-poc1-model-pinned-to-deepseek-api.md)        | 模型锁定 DeepSeek API（deepseek-v4-flash，effort 单档） | 消除模型变量，五配置对比只剩上下文/缓存策略差异                                                                                                        |
 | [0003](../adr/0003-poc1-zero-build-static-code-intelligence.md) | 零构建静态代码智能（tree-sitter-java + ripgrep）          | 生产约束是「只有静态源码快照」，不依赖构建与运行时                                                                                                       |
 |                                                                 |                                                |                                                                                                                                 |
+|                                                                 |                                                |                                                                                                                                 |
 
 ## 4. 核心交付
 
@@ -40,13 +41,13 @@ TypeScript ESM、Node 24 / pnpm 10.30.3 / vitest，依赖仅 3 个（ripgrep、t
 
 ### 4.2 五实验配置 A–E（同一 harness，消息构造策略不同）
 
-| 配置 | 策略 | 角色 |
-|---|---|---|
-| A | Diff-only | 下限对照 |
-| B | Zone B + 固定管线确定性预取 | 预取 vs 主动检索对照 |
-| C | 全仓上下文注入 | **质量主锚**（S/A/B 判定基准） |
-| D | Minimal + Stable Prefix | 稳定前缀最小上下文 |
-| E | Ledger + Append-only | 追加式账本复用 |
+| 配置  | 策略                      | 角色                   |
+| --- | ----------------------- | -------------------- |
+| A   | Diff-only               | 下限对照                 |
+| B   | Zone B + 固定管线确定性预取      | 预取 vs 主动检索对照         |
+| C   | 全仓上下文注入                 | **质量主锚**（S/A/B 判定基准） |
+| D   | Minimal + Stable Prefix | 稳定前缀最小上下文            |
+| E   | Ledger + Append-only    | 追加式账本复用              |
 
 工具纪律：A/B 零工具；C/D/E 挂**同一套 7 个零构建 `review.*` 工具**（get_diff / get_file / get_symbol / find_references / get_call_chain / search_rule / search_history），工具 schema 字节一致（属 Zone A 稳定前缀，C/D/E 对比不被前缀差异污染）。
 
