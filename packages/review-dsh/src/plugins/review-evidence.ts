@@ -3,32 +3,28 @@
  *
  * Schema 校验与拦截链 1:1 移植自冻结 harness
  * src/finding/finding-schema.ts 与 src/gate/candidate-gate.ts：
- * 拦截顺序 SCHEMA_INVALID → NON_ENGLISH → NO_EVIDENCE → VERIFICATION_FAILED →
- * DUPLICATE_ID，每个候选最多一条拦截记录（首败即出），全部留痕进审计 rejections。
+ * 拦截顺序 SCHEMA_INVALID → 语言检查 → NO_EVIDENCE → VERIFICATION_FAILED →
+ * DUPLICATE_ID，每个候选最多一条拦截记录（首败即出），全部留痕进审计
+ * rejections。语言检查槽位随 outputLanguage 二选一（#55，spec #49 决策 4）：
+ * en = NON_ENGLISH（自然语言字段含 CJK 即拒，现状）/ zh = NON_CHINESE
+ * （title / description 至少其一含 CJK，缺失即拒——对称判据）。两侧门逐字段
+ * 对齐由 tests/plugins/review-evidence.test.ts 锁定（手写拷贝，非 import——
+ * import 会使对齐恒真）。
  *
  * 契约直接复用冻结 contracts（type-only import）：Finding / CandidateRejection /
- * RejectionStage 漂移即编译期报错，不靠形状巧合。
+ * RejectionStage 漂移即编译期报错，不靠形状巧合。语言校验助手
+ * resolveOutputLanguage 例外走值导入（叶子契约模块零依赖，先例 =
+ * review-presets 的 CONFIGS）——两侧门共用单源判据。
  */
 
 import type { Context, Plugin } from "@deepseek-ai/cordis";
 
 import type { Finding } from "../../../../src/contracts/finding.js";
-import type { CandidateRejection, RejectionStage } from "../../../../src/contracts/run.js";
+import { resolveOutputLanguage, type OutputLanguage } from "../../../../src/contracts/output-language.js";
+import type { CandidateRejection } from "../../../../src/contracts/run.js";
 import type { VerificationVerdict } from "../loop/parse.js";
 
 export type { Finding, CandidateRejection };
-
-/** Evidence Gate 阶段（每个候选按序检查，首个失败即拒绝并记录原因）；阶段全集
- * 经 RejectionStage 类型收口（冻结契约），数组字面漂移即编译期报错 */
-export const EVIDENCE_GATE_STAGES: readonly RejectionStage[] = [
-  "SCHEMA_INVALID",
-  "NON_ENGLISH",
-  "NO_EVIDENCE",
-  "VERIFICATION_FAILED",
-  "DUPLICATE_ID",
-];
-
-export type EvidenceGateStage = RejectionStage;
 
 /** 校验候选是否符合 Finding Schema（形状校验；空 evidence 不在此判，属 NO_EVIDENCE） */
 export function validateFinding(candidate: unknown): readonly string[] {
@@ -98,6 +94,8 @@ export interface GateInput {
   /** 已产出的 Finding id 集合（跨轮去重） */
   readonly emittedIds: ReadonlySet<string>;
   readonly round: number;
+  /** 输出语言（#55）：语言检查判据随其切换；缺省 en（现状零变化），非法值 fail fast */
+  readonly outputLanguage?: OutputLanguage;
 }
 
 export interface GateOutput {
@@ -108,13 +106,14 @@ export interface GateOutput {
 
 /** Evidence Gate（"No Evidence, No Finding"）+ 候选拦截链 */
 export function applyCandidateGate(input: GateInput): GateOutput {
+  const outputLanguage = resolveOutputLanguage(input.outputLanguage);
   const findings: Finding[] = [];
   const rejections: CandidateRejection[] = [];
   const emittedIds = new Set(input.emittedIds);
 
   input.candidates.forEach((candidate, index) => {
     const candidateId = readCandidateId(candidate, input.round, index);
-    const rejection = firstFailingStage(candidate, candidateId, input.verdicts, emittedIds);
+    const rejection = firstFailingStage(candidate, candidateId, input.verdicts, emittedIds, outputLanguage);
     if (rejection !== undefined) {
       rejections.push(rejection);
       return;
@@ -142,13 +141,15 @@ function firstFailingStage(
   candidateId: string,
   verdicts: ReadonlyMap<string, VerificationVerdict>,
   emittedIds: ReadonlySet<string>,
+  outputLanguage: OutputLanguage,
 ): CandidateRejection | undefined {
   const schemaErrors = validateFinding(candidate);
   if (schemaErrors.length > 0) {
     return { candidateId, stage: "SCHEMA_INVALID", reason: schemaErrors.join("; ") };
   }
-  if (containsNonEnglish(candidate)) {
-    return { candidateId, stage: "NON_ENGLISH", reason: "finding text must be English only" };
+  const language = languageRejection(candidate, candidateId, outputLanguage);
+  if (language !== undefined) {
+    return language;
   }
   if (!hasEvidence(candidate)) {
     return { candidateId, stage: "NO_EVIDENCE", reason: "no evidence cited (No Evidence, No Finding)" };
@@ -167,12 +168,47 @@ function firstFailingStage(
   return undefined;
 }
 
-/** 检查候选文本字段是否含 CJK 字符（POC1 输出全英文） */
+/**
+ * 语言门（#55，spec #49 决策 4）：检查槽位随 outputLanguage 二选一——
+ * en（缺省）：title / description / evidence 任一含 CJK 即拒（现状回归锁定）；
+ * zh：title / description 至少其一含 CJK，缺失即拒（对称判据）。evidence 是
+ * 代码引用面，不作 zh 判据——代码摘录中的 CJK 不引发 zh 误判。
+ */
+function languageRejection(
+  candidate: unknown,
+  candidateId: string,
+  outputLanguage: OutputLanguage,
+): CandidateRejection | undefined {
+  if (outputLanguage === "en") {
+    if (containsNonEnglish(candidate)) {
+      return { candidateId, stage: "NON_ENGLISH", reason: "finding text must be English only" };
+    }
+    return undefined;
+  }
+  if (!containsChinese(candidate)) {
+    return {
+      candidateId,
+      stage: "NON_CHINESE",
+      reason: "finding text must contain Chinese (title or description)",
+    };
+  }
+  return undefined;
+}
+
+/** en 判据：自然语言字段（title / description / evidence）任一含 CJK（POC1 输出全英文） */
 function containsNonEnglish(candidate: unknown): boolean {
   const record = candidate as Record<string, unknown>;
   const evidence = Array.isArray(record.evidence) ? (record.evidence as readonly unknown[]) : [];
   const texts = [record.title, record.description, ...evidence];
   return texts.some((text) => typeof text === "string" && CJK_PATTERN.test(text));
+}
+
+/** zh 判据：title / description 至少其一含 CJK */
+function containsChinese(candidate: unknown): boolean {
+  const record = candidate as Record<string, unknown>;
+  return [record.title, record.description].some(
+    (text) => typeof text === "string" && CJK_PATTERN.test(text),
+  );
 }
 
 const CJK_PATTERN = /[㐀-䶿一-鿿豈-﫿　-〿＀-￯]/;
@@ -203,9 +239,8 @@ function toFinding(candidate: unknown): Finding {
 
 /** reviewEvidence 服务：证据门面 */
 export interface ReviewEvidenceService {
-  /** Evidence Gate 阶段顺序（首败即出） */
-  readonly gateStages: readonly EvidenceGateStage[];
-  /** Evidence Gate：候选 × 裁决 → findings + rejections（跨轮 emittedIds 去重） */
+  /** Evidence Gate：候选 × 裁决 → findings + rejections（跨轮 emittedIds 去重）；
+   * 语言检查槽位随 input.outputLanguage 二选一（en = NON_ENGLISH / zh = NON_CHINESE） */
   applyGate(input: GateInput): GateOutput;
 }
 
@@ -220,7 +255,6 @@ export const reviewEvidence: Plugin.Object = {
   name: "review-evidence",
   apply(ctx: Context) {
     const service: ReviewEvidenceService = {
-      gateStages: EVIDENCE_GATE_STAGES,
       applyGate: (input) => applyCandidateGate(input),
     };
     return ctx.provide("reviewEvidence", service);

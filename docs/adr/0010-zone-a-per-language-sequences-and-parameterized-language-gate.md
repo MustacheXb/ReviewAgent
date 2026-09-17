@@ -6,7 +6,7 @@
 
 - **输出语言是产品配置**（`outputLanguage: "en" | "zh"`，缺省 en；生产部署显式 zh）：只切换 Finding 的自然语言字段（title / description / evidence 连接文本）；代码摘录、文件路径、标识符、枚举值与字段名不随语言变化。
 - **Zone A 按语言分序列（本 ADR 主决策）**：提示词主体英文不动，仅 Output language 节按语言渲染——但不是「一个会变的提示词」，而是**每语言一条冻结字节序列**：en 序列与现状逐字节相同（既有结论零迁移），zh 序列是新增的一条冻结前缀。同一部署固定一个语言时，序列内字节恒定，前缀缓存命中行为与 en 部署对称。语言节指令本身仍以英文书写（英文指令 + 中文输出是模型遵循稳定的组合），内容指定目标语言与「代码摘录 / 路径 / 标识符 / 枚举不翻译」约束。
-- **语言门对称参数化**：Evidence Gate 的语言检查跟随 outputLanguage——en 模式拒绝自然语言字段含 CJK（现状不变）；zh 模式要求 title / description 至少其一含 CJK（缺失即语言违规走既有拦截链）。检查的字段面不变，只换语言判据——zh 模式下语言纪律同样有执行器，不静默混语。
+- **语言门对称参数化**：Evidence Gate 的语言检查跟随 outputLanguage——en 模式拒绝自然语言字段含 CJK（现状不变，检查面 title / description / evidence）；zh 模式要求 title / description 至少其一含 CJK（缺失即语言违规走既有拦截链；evidence 是代码引用面，不作 zh 语言判据——代码摘录中的 CJK 不引发误判）。zh 模式下语言纪律同样有执行器，不静默混语。
 - **字节锁按语言参数化**：zone-a-parity（根包与 DSH 双副本 1:1）与 golden bytes 期望值扩为每语言一条——en 期望原样（回归锁），zh 期望新增冻结；任何一字节漂移即红灯。
 - **zh 质量主张独立成立**：输出语言影响模型行为，S 级结论不自动迁移到 zh——上线前 30 案 × Config B × 1 rep 抽样验证；judge 提示词逐字节不动（保持与 en 基线可比，语义匹配判据语言中立），全量前 5 案人工 sanity check。
 - **manifest 按语言分口径**：运行记录携带 outputLanguage，指标不跨语言混比。

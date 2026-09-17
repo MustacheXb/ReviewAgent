@@ -304,12 +304,15 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       }
 
       // Evidence Gate：第六阶段回合结束边界（serial）——本轮候选 × 本轮裁决 join，
-      // emittedIds 经 Gate 输出跨轮携带（已发出的 id 在后续轮重提 → DUPLICATE_ID）
+      // emittedIds 经 Gate 输出跨轮携带（已发出的 id 在后续轮重提 → DUPLICATE_ID）；
+      // 语言门跟随政策（#55）：policy.outputLanguage 决定判据档位（en = 全英文 /
+      // zh = title·description 至少其一含中文）
       const gate = ctx.reviewEvidence.applyGate({
         candidates: reasoning.candidates,
         verdicts: verification.verdicts,
         emittedIds,
         round,
+        outputLanguage: policy.outputLanguage,
       });
       findings = [...findings, ...gate.findings];
       rejections = [...rejections, ...gate.rejections];

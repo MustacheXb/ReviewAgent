@@ -121,10 +121,16 @@ export interface CandidateRejection {
   readonly reason: string;
 }
 
-/** 拦截阶段：Schema 校验 → 语言检查 → 证据检查 → 验证裁决 */
+/**
+ * 拦截阶段：Schema 校验 → 语言检查 → 证据检查 → 验证裁决 → 重复 id。语言检查
+ * 槽位随 outputLanguage 二选一（#55，spec #49 决策 4）：en = NON_ENGLISH
+ * （自然语言字段含 CJK 即拒，现状）/ zh = NON_CHINESE（title / description
+ * 至少其一含 CJK，缺失即拒——对称判据）。
+ */
 export type RejectionStage =
   | "SCHEMA_INVALID"
   | "NON_ENGLISH"
+  | "NON_CHINESE"
   | "NO_EVIDENCE"
   | "VERIFICATION_FAILED"
   | "DUPLICATE_ID";

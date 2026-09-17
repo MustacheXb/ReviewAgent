@@ -201,6 +201,49 @@ describe("Evidence Gate 三态（#21：第六阶段回合边界的候选 join）
   });
 });
 
+describe("语言门参数化（#55：policy.outputLanguage 贯穿 runtime → Evidence Gate）", () => {
+  /** zh 候选：自然语言字段中文，代码引用字段（file / rule / evidence 符号）原样 */
+  const ZH_CANDIDATE = {
+    ...CANDIDATE_F001,
+    title: "查询参数编码错误",
+    description: "该改动对拼接后的查询串整体编码，导致保留字符被破坏。",
+  };
+
+  it("zh 会话：中文候选（verdict 通过）放行为 Finding", async () => {
+    const script: readonly FakeLlmScriptStep[] = [
+      ...GENERIC_PHASE_REPLIES.map(reply),
+      reply(JSON.stringify({ candidates: [ZH_CANDIDATE] })),
+      reply(JSON.stringify({ verdicts: [{ id: "F001", pass: true, reason: "evidence supports the finding" }], complete: true })),
+    ];
+    const { ctx } = await mount(script, { policy: { outputLanguage: "zh" } });
+
+    const result = await ctx.reviewRuntime.run(INPUT);
+
+    expect(result.findings).toEqual([ZH_CANDIDATE]);
+    expect(result.audit.rejections).toEqual([]);
+  });
+
+  it("zh 会话：纯英文候选拒 NON_CHINESE 并留痕（语言纪律在 zh 模式同样有执行器）", async () => {
+    const script: readonly FakeLlmScriptStep[] = [
+      ...GENERIC_PHASE_REPLIES.map(reply),
+      reply(JSON.stringify({ candidates: [CANDIDATE_F001] })),
+      reply(JSON.stringify({ verdicts: [{ id: "F001", pass: true, reason: "evidence supports the finding" }], complete: true })),
+    ];
+    const { ctx } = await mount(script, { policy: { outputLanguage: "zh" } });
+
+    const result = await ctx.reviewRuntime.run(INPUT);
+
+    expect(result.findings).toEqual([]);
+    expect(result.audit.rejections).toEqual([
+      {
+        candidateId: "F001",
+        stage: "NON_CHINESE",
+        reason: "finding text must contain Chinese (title or description)",
+      },
+    ]);
+  });
+});
+
 describe("多轮驱动（#21：complete=false → 下一轮，MAX_ROUNDS 冻结硬上界）", () => {
   it("verdict 永不 complete：推进满 5 轮后截断——rounds=5、MAX_ROUNDS_REACHED、30 请求", async () => {
     // fallback 步：脚本耗尽后持续供给「永不完成」回复（fake 适配器为上界截断
