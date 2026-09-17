@@ -129,8 +129,8 @@ export function mergeShardFindings(
   return ok({ findings, decisions, config });
 }
 
-/** 锚点分组键：file + rule + category（JSON 数组序列化保证无分隔符歧义） */
-function anchorKey(finding: Finding): string {
+/** 锚点分组键：file + rule + category（JSON 数组序列化保证无分隔符歧义；导出供判据层复用同一口径） */
+export function anchorKey(finding: Finding): string {
   return JSON.stringify([finding.file, finding.rule, finding.category]);
 }
 
