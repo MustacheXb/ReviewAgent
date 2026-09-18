@@ -23,6 +23,11 @@ import { serializeUnifiedDiff } from "../../dataset/diff/serialize-unified-diff.
  *   只改「全快照仅本文件出现」的标识符（文件内全量一致替换）。
  * - 保守排除：非 .java、含文本块（"""）、不以换行收尾的文件不参与。
  * - 留痕：每条编辑（文件 / 行 / 类型）进 FillResult.edits，可入 manifest 重放。
+ * - 性能（输出等价的缓存层，仓库级快照必须）：全快照标识符 → 文件计数一次
+ *   构建（重命名唯一性 O(1) 判定，替代逐候选全快照扫描的 O(files²)）；逐文件
+ *   原始锚行缓存（正则命中不随占用变化，占用过滤取用时做）；逐文件重命名
+ *   候选缓存（该文件被放置编辑即失效）。rng 消耗序列与池构造不变 ⇒ 同输入
+ *   逐字节同输出。
  */
 
 /**
@@ -117,6 +122,23 @@ interface PlacementSession {
   readonly rng: () => number;
   readonly targets: FillTargets;
   readonly touched: ReadonlySet<string>;
+  /** 性能层（输出等价缓存；见模块头「性能」节） */
+  readonly index: FillIndex;
+}
+
+/**
+ * 性能层缓存（不承载语义——删掉即回退到逐次重算，输出不变）：
+ * 仓库级快照（数千文件）下，逐编辑重算全文件锚 / 重命名候选、逐候选全快照
+ * 扫描唯一性是 O(files²)，#59 干跑实测 45 分钟无产出。三层缓存把它压回
+ * 一次线性预热 + 逐编辑 O(files) 池构造。
+ */
+interface FillIndex {
+  /** 标识符 → 含它的快照文件数（全快照一次 tokenize；唯一 ⟺ 计数 1——本文件必含候选标识符） */
+  readonly identifierFileCounts: ReadonlyMap<string, number>;
+  /** 文件路径 → kind → 原始锚行（正则命中，升序；不含占用过滤——取用时过滤） */
+  readonly rawAnchors: Map<string, Map<FillEditKind, readonly number[]>>;
+  /** 文件路径 → 重命名候选（依赖占用状态 ⇒ 该文件被放置编辑即失效删除） */
+  readonly renameCandidates: Map<string, readonly RenameCandidate[]>;
 }
 
 export function generateBenignFill(
@@ -142,7 +164,18 @@ export function generateBenignFill(
     );
   }
   const touched = new Set<string>();
-  const session: PlacementSession = { files, base, rng: makeRng(seed), targets, touched };
+  const session: PlacementSession = {
+    files,
+    base,
+    rng: makeRng(seed),
+    targets,
+    touched,
+    index: {
+      identifierFileCounts: buildIdentifierFileCounts(base),
+      rawAnchors: new Map(),
+      renameCandidates: new Map(),
+    },
+  };
   const placed: PlacedEdit[] = [];
   let diffLines = 0;
   // round-robin 起点轮转 + 其余三类依序兜底：一轮四类全放不下即候选耗尽
@@ -164,6 +197,8 @@ export function generateBenignFill(
     placed.push(placedThisRound);
     touched.add(placedThisRound.edit.file);
     diffLines += placedThisRound.diffLines;
+    // 占用状态变化 ⇒ 该文件的重命名候选缓存失效（原始锚缓存不依赖占用，保留）
+    session.index.renameCandidates.delete(placedThisRound.edit.file);
   }
   const diff = buildFillDiff(placed);
   if (!diff.ok) {
@@ -244,7 +279,7 @@ function placeInsertion(
 ): PlacedEdit | null {
   const spec = INSERTION_SPECS[kind];
   const picked = pickFile(session, (file) => {
-    const anchors = anchorLines(file, spec.anchorRe);
+    const anchors = anchorLines(session, file, kind);
     return anchors.length > 0 ? anchors : null;
   });
   if (picked === null) {
@@ -267,7 +302,7 @@ function placeInsertion(
 /** 重命名：候选标识符 = 声明行捕获 + 全快照唯一出现 + 无冲突后缀；簇状 hunk */
 function placeRename(session: PlacementSession): PlacedEdit | null {
   const picked = pickFile(session, (file) => {
-    const candidates = renameCandidates(file, session.base);
+    const candidates = renameCandidates(session, file);
     return candidates.length > 0 ? candidates : null;
   });
   if (picked === null) {
@@ -292,15 +327,52 @@ function placeRename(session: PlacementSession): PlacedEdit | null {
   return null;
 }
 
-/** 锚行（1 起始）：类型对应的正则命中且未被占用 */
-function anchorLines(file: FillFile, anchorRe: RegExp | null): number[] {
+/** 锚行（1 起始）：类型正则命中且未被占用（原始命中走缓存，占用过滤取用时做） */
+function anchorLines(
+  session: PlacementSession,
+  file: FillFile,
+  kind: "comment" | "javadoc" | "log",
+): readonly number[] {
+  const raw = rawAnchorLines(session, file, kind);
+  // 无占用区间 ⇒ 过滤是恒等变换，直接复用缓存引用（绝大多数文件的快路径）
+  if (file.occupied.length === 0) {
+    return raw;
+  }
+  return raw.filter((lineNo) => !isOccupied(file, lineNo));
+}
+
+/**
+ * 原始锚行（忽略占用，正则命中升序）：逐 (文件, kind) 缓存——正则命中不随
+ * 占用状态变化，一次计算终身有效。comment 无锚正则 = 全部行。
+ */
+function rawAnchorLines(
+  session: PlacementSession,
+  file: FillFile,
+  kind: "comment" | "javadoc" | "log",
+): readonly number[] {
+  let byKind = session.index.rawAnchors.get(file.path);
+  if (byKind === undefined) {
+    byKind = new Map();
+    session.index.rawAnchors.set(file.path, byKind);
+  }
+  const cached = byKind.get(kind);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const anchorRe = INSERTION_SPECS[kind].anchorRe;
   const lines: number[] = [];
-  for (let index = 0; index < file.lines.length; index += 1) {
-    const lineNo = index + 1;
-    if ((anchorRe === null || anchorRe.test(file.lines[index]!)) && !isOccupied(file, lineNo)) {
+  if (anchorRe === null) {
+    for (let lineNo = 1; lineNo <= file.lines.length; lineNo += 1) {
       lines.push(lineNo);
     }
+  } else {
+    for (let index = 0; index < file.lines.length; index += 1) {
+      if (anchorRe.test(file.lines[index]!)) {
+        lines.push(index + 1);
+      }
+    }
   }
+  byKind.set(kind, lines);
   return lines;
 }
 
@@ -318,8 +390,18 @@ function wordBoundaryRe(identifier: string, flags?: string): RegExp {
   return new RegExp(`\\b${identifier}\\b`, flags);
 }
 
-/** 重命名候选：标识符只在快照本文件出现、出现行不含引号、重命名后缀无冲突 */
-function renameCandidates(file: FillFile, base: SourceSnapshot): RenameCandidate[] {
+/** 重命名候选（逐文件缓存，文件被放置编辑即失效）：标识符只在快照本文件出现、出现行不含引号、重命名后缀无冲突 */
+function renameCandidates(session: PlacementSession, file: FillFile): readonly RenameCandidate[] {
+  const cached = session.index.renameCandidates.get(file.path);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const computed = computeRenameCandidates(session, file);
+  session.index.renameCandidates.set(file.path, computed);
+  return computed;
+}
+
+function computeRenameCandidates(session: PlacementSession, file: FillFile): RenameCandidate[] {
   const candidates: RenameCandidate[] = [];
   for (let index = 0; index < file.lines.length; index += 1) {
     const match = RENAME_DECL_RE.exec(file.lines[index]!);
@@ -335,11 +417,12 @@ function renameCandidates(file: FillFile, base: SourceSnapshot): RenameCandidate
     if (occurrenceLines.some((line) => file.lines[line - 1]!.includes('"'))) {
       continue;
     }
-    if (!identifierUniqueInSnapshot(identifier, file.path, base)) {
+    // 全快照唯一性：含它的文件数恰为 1（本文件必含——声明行已命中）
+    if ((session.index.identifierFileCounts.get(identifier) ?? 0) !== 1) {
       continue;
     }
     const renamed = `${identifier}Filled`;
-    if (wordBoundaryRe(renamed).test(base[file.path]!)) {
+    if (wordBoundaryRe(renamed).test(session.base[file.path]!)) {
       continue;
     }
     candidates.push({ identifier, renamed, declLine: index + 1, occurrenceLines });
@@ -358,15 +441,24 @@ function occurrenceLineNumbers(file: FillFile, identifier: string): number[] {
   return lines;
 }
 
-/** 标识符全快照唯一性：其他任何文件出现即不可文件内安全重命名 */
-function identifierUniqueInSnapshot(identifier: string, path: string, base: SourceSnapshot): boolean {
-  const re = wordBoundaryRe(identifier);
-  for (const other of Object.keys(base)) {
-    if (other !== path && re.test(base[other]!)) {
-      return false;
+/**
+ * 全快照标识符 → 文件计数（一次 tokenize 线性构建）：identifierFileCounts.get(id) === 1
+ * ⟺ 含它的文件恰一个 ⟺ 旧逐候选扫描「其他文件均不含」的等价 O(1) 判定。
+ * 计数覆盖 base 全部文件（含禁改 / 被排除文件）——与旧扫描的遍历面一致。
+ */
+function buildIdentifierFileCounts(base: SourceSnapshot): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  const tokenRe = /\w+/g;
+  for (const path of Object.keys(base)) {
+    const distinct = new Set<string>();
+    for (const match of base[path]!.matchAll(tokenRe)) {
+      distinct.add(match[0]!);
+    }
+    for (const identifier of distinct) {
+      counts.set(identifier, (counts.get(identifier) ?? 0) + 1);
     }
   }
-  return true;
+  return counts;
 }
 
 // ---------- hunk 构造 ----------
