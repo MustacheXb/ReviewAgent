@@ -61,19 +61,43 @@ export interface BuildGroupInputsOutcome {
 /**
  * clone 目录 → SourceSnapshot：递归收 .java 文件，键 = 相对路径（posix 分隔、
  * 路径排序确定性——快照键序是填充选择流的输入），值 = 文件内容。
+ *
+ * 读取并发化：争用磁盘下串行逐文件 await 的往返延迟是主导项（#59 干跑实测
+ * 27KB/s，45 分钟未读完 143MB）——子目录并行遍历 + 内容有界并发读；产出按
+ * 路径序物化，与串行实现同键同值同键序（确定性不依赖完成顺序）。
  */
 export async function loadRepoSnapshot(repoPath: string): Promise<SourceSnapshot> {
   const files: string[] = [];
   await collectJavaFiles(repoPath, "", files);
   files.sort();
+  const contents = new Map<string, string>();
+  await readFilesBounded(repoPath, files, contents, 64);
   const snapshot: Record<string, string> = {};
   for (const file of files) {
-    snapshot[file] = await readFile(join(repoPath, file), "utf8");
+    snapshot[file] = contents.get(file)!;
   }
   return snapshot;
 }
 
-/** 递归收集 .java 相对路径（目录序不保证 → 收集后统一排序） */
+/** 有界并发读（worker 池共享游标；readFile 错误原样上抛——与串行同错误面） */
+async function readFilesBounded(
+  repoPath: string,
+  files: readonly string[],
+  into: Map<string, string>,
+  concurrency: number,
+): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < files.length) {
+      const file = files[next]!;
+      next += 1;
+      into.set(file, await readFile(join(repoPath, file), "utf8"));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker));
+}
+
+/** 递归收集 .java 相对路径（子目录并行遍历；收集序不确定 → 统一排序兜底） */
 async function collectJavaFiles(root: string, relative: string, out: string[]): Promise<void> {
   let entries;
   try {
@@ -82,14 +106,16 @@ async function collectJavaFiles(root: string, relative: string, out: string[]): 
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`loadRepoSnapshot: failed to read ${join(root, relative)}: ${message}`, { cause: error });
   }
+  const subdirectories: string[] = [];
   for (const entry of entries) {
     const child = relative === "" ? entry.name : `${relative}/${entry.name}`;
     if (entry.isDirectory()) {
-      await collectJavaFiles(root, child, out);
+      subdirectories.push(child);
     } else if (entry.isFile() && entry.name.endsWith(".java")) {
       out.push(child);
     }
   }
+  await Promise.all(subdirectories.map((child) => collectJavaFiles(root, child, out)));
 }
 
 /** 锚判定（与 composeComposite isAnchorAfter 同规则）：fix commit 最新者，同刻 caseId 码元序大者 */

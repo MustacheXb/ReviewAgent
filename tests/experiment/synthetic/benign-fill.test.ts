@@ -31,7 +31,9 @@ describe("generateBenignFill（确定性）", () => {
 
 describe("generateBenignFill（四类机械编辑与规模达标）", () => {
   it("四类编辑齐备（注释 / javadoc / 局部重命名 / 日志），双维目标均达标", () => {
-    const result = generateBenignFill(snapshotV2(), FORBIDDEN, { targetFiles: 3, targetDiffLines: 16 }, "seed-kinds");
+    // 行目标按注释块密度校准（16–32 行/条）：太小的档位两三条编辑即达标，
+    // round-robin 不保证轮完四类（模块头「不保证齐备」）。48 行驱动 ≥6 条编辑。
+    const result = generateBenignFill(snapshotV2(), FORBIDDEN, { targetFiles: 3, targetDiffLines: 48 }, "seed-kinds");
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
@@ -39,7 +41,7 @@ describe("generateBenignFill（四类机械编辑与规模达标）", () => {
     const kinds = new Set(result.value.edits.map((edit) => edit.kind));
     expect(kinds).toEqual(new Set(["comment", "javadoc", "rename", "log"]));
     expect(result.value.filesTouched.length).toBeGreaterThanOrEqual(3);
-    expect(result.value.diffLines).toBeGreaterThanOrEqual(16);
+    expect(result.value.diffLines).toBeGreaterThanOrEqual(48);
   });
 
   it("填充只触碰与案例文件不相交的文件", () => {
@@ -116,7 +118,9 @@ describe("generateBenignFill（局部重命名的封闭性）", () => {
 
   it("跨文件同名标识符不被重命名；唯一标识符文件内全量替换", () => {
     const base = renameSnapshot();
-    const result = generateBenignFill(base, new Set(), { targetFiles: 1, targetDiffLines: 16 }, "seed-rename");
+    // 行目标按注释块密度校准（16–32 行/条）：太小则两条插入类编辑即达标停机，
+    // round-robin 未轮到 rename（模块头「不保证齐备」）。40 行驱动 ≥4 条编辑。
+    const result = generateBenignFill(base, new Set(), { targetFiles: 1, targetDiffLines: 40 }, "seed-rename");
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;

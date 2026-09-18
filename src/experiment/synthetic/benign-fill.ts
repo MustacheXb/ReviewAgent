@@ -18,9 +18,15 @@ import { serializeUnifiedDiff } from "../../dataset/diff/serialize-unified-diff.
  * - 确定性：无时钟无随机源——种子（字符串）经 FNV-1a → mulberry32 驱动
  *   全部选择；同参数（快照 + 禁改集 + 目标 + 种子）必同输出。
  * - 良性（不引入缺陷、不污染真值）：只触碰与案例文件不相交的文件；
- *   四类编辑均为行级机械变换——整行注释可插入任意行间（token 边界空白），
- *   日志语句只插在语句边界前，javadoc 只挂在方法 / 类声明前，局部重命名
- *   只改「全快照仅本文件出现」的标识符（文件内全量一致替换）。
+ *   四类编辑均为行级机械变换——注释块（16–32 行，按编辑序确定性轮转）可
+ *   插入任意行间（token 边界空白），日志语句只插在语句边界前，javadoc 只
+ *   挂在方法 / 类声明前，局部重命名只改「全快照仅本文件出现」的标识符
+ *   （文件内全量一致替换）。
+ * - 档位收敛（#59 干跑修正：档位是合成 MR 的实际规模，非可膨胀下限）：
+ *   文件数未达标时开最大未触碰文件（大文件承载行维档位）、达标后密度打包
+ *   （优先已触碰文件，全满开最大未触碰文件兜底），文件数收敛到 targetFiles、
+ *   行数堆叠到 targetDiffLines——原均匀撒开策略使文件数随编辑数线性膨胀
+ *   （24f/2400l 档实测 507 文件）。
  * - 保守排除：非 .java、含文本块（"""）、不以换行收尾的文件不参与。
  * - 留痕：每条编辑（文件 / 行 / 类型）进 FillResult.edits，可入 manifest 重放。
  * - 性能（输出等价的缓存层，仓库级快照必须）：全快照标识符 → 文件计数一次
@@ -57,15 +63,28 @@ interface InsertionSpec {
 }
 
 const INSERTION_SPECS: Readonly<Record<"comment" | "javadoc" | "log", InsertionSpec>> = Object.freeze({
+  // 注释块 16–32 行（按编辑序确定性轮转）：占用按锚点上下文计（与块大小
+  // 无关）⇒ 行密度随块大小线性放大——「少文件多行」档位（如 cxf 单维行超界
+  // 组：≤10 文件内堆到 >2000 行）在机械编辑密度约束下唯一可达的路径（#59
+  // 档位探针实测：块 8–16 行时 cxf 9 文件容量 <1894 行、12–24 行时 <1994 行，
+  // 单维行形态均不可达；各仓每文件机械密度 33–200 行/文件，spring-sec 最小）。
   comment: {
     anchorRe: null,
-    buildLines: (indent, sequenceNo) => [`${indent}// benign note ${sequenceNo}`],
+    buildLines: (indent, sequenceNo) =>
+      Array.from({ length: 16 + (sequenceNo % 17) }, (_, line) => `${indent}// benign note ${sequenceNo} filler ${line + 1}`),
   },
   javadoc: {
     anchorRe: JAVADOC_ANCHOR_RE,
+    // 8 行（/** + 5 行内容 + */）= 真实 javadoc 块的常见规模；3 行版偏小失真，
+    // 且行密度不足以支撑「少文件多行」档位（#59 cxf 单维行档位实测差 ~3.5%）
     buildLines: (indent, sequenceNo) => [
       `${indent}/**`,
-      `${indent} * benign documentation note ${sequenceNo}`,
+      `${indent} * Benign documentation note ${sequenceNo}.`,
+      `${indent} *`,
+      `${indent} * <p>This block is mechanical filler for scale calibration;`,
+      `${indent} * it documents the declaring member without semantic change.`,
+      `${indent} *`,
+      `${indent} * @see #benignFillNote${sequenceNo}`,
       `${indent} */`,
     ],
   },
@@ -247,8 +266,14 @@ function buildFillFiles(base: SourceSnapshot, forbiddenFiles: ReadonlySet<string
 // ---------- 编辑放置 ----------
 
 /**
- * 选文件：payloadOf 单次计算每文件的可用容量（锚行 / 重命名候选），null = 无容量；
- * 文件数未达标时优先未触碰的文件（保证 targetFiles 可达，无可选时回退全体可用）。
+ * 选文件：payloadOf 单次计算每文件的可用容量（锚行 / 重命名候选），null = 无容量。
+ * 两档偏好（#59 干跑修正：目标档位是合成 MR 的实际规模，不是可无限膨胀的下限）：
+ * - 文件数未达标：开行数最大的未触碰文件（确定性 tie-break 按路径）——「少文
+ *   件多行」档位（≤10 文件堆 >2000 行）只有大文件承载得起：rng 均匀挑文件时
+ *   中小文件每文件仅 ~50-200 变更行，行维档位数学上不可达（容量 = 未触文件
+ *   累计上限）；
+ * - 文件数已达标：优先已触碰文件（密度打包——行数目标靠堆叠而非铺开，文件
+ *   数收敛到档位）；已触碰全满时开最大未触碰文件兜底（与下限档同款确定性）。
  * 返回随机命中的 {file, payload}；可用集为空返回 null。
  */
 function pickFile<T>(
@@ -262,13 +287,34 @@ function pickFile<T>(
   if (session.touched.size < session.targets.targetFiles) {
     const untouched = usable.filter((entry) => !session.touched.has(entry.file.path));
     if (untouched.length > 0) {
-      pool = untouched;
+      pool = [biggestOf(untouched)];
+    }
+  } else {
+    const touchedFiles = usable.filter((entry) => session.touched.has(entry.file.path));
+    if (touchedFiles.length > 0) {
+      pool = touchedFiles;
+    } else {
+      // 已触碰文件对当前编辑类全满：开行数最大的未触碰文件（容量兜底，确定性）
+      const untouched = usable.filter((entry) => !session.touched.has(entry.file.path));
+      if (untouched.length > 0) {
+        pool = [biggestOf(untouched)];
+      }
     }
   }
   if (pool.length === 0) {
     return null;
   }
   return pool[Math.floor(session.rng() * pool.length)]!;
+}
+
+/** 行数最大的候选（确定性 tie-break 按路径）：「开新文件」路径的统一选择器 */
+function biggestOf<T extends { readonly file: FillFile }>(entries: readonly T[]): T {
+  return entries.reduce((best, entry) =>
+    entry.file.lines.length > best.file.lines.length
+      || (entry.file.lines.length === best.file.lines.length && entry.file.path < best.file.path)
+      ? entry
+      : best,
+  );
 }
 
 /** 插入类（comment / javadoc / log）：选文件 → 选锚行 → 构造 hunk（行为查 INSERTION_SPECS） */

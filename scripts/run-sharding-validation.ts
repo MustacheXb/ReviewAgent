@@ -35,6 +35,10 @@ import { formatEnvLocalSummary, loadEnvLocalFile } from "../src/shared/env-local
 /** 控制臂统一档位（域内，留边界余量；跨组可比——实验设计 §2.2） */
 const CONTROL_FILL = { targetFiles: 9, targetDiffLines: 1500 } as const;
 
+// fs 线程池缺省 4：争用磁盘下快照装载的有界并发读被线程池卡住（#59 干跑
+// 实测串行 27KB/s）。必须在任何 fs 调用之前设置（线程池惰性定容）。
+process.env.UV_THREADPOOL_SIZE ??= "32";
+
 /** 组合清单与处理臂档位（实验设计 §2.1–2.2：单维 / 双维 / 边界邻域三类超界形态） */
 const GROUPS: readonly ShardingDriverGroup[] = [
   {
@@ -47,7 +51,9 @@ const GROUPS: readonly ShardingDriverGroup[] = [
     groupId: "spring-sec",
     caseIds: ["VUL4J-72", "VUL4J-73", "VUL4J-74"],
     treatmentFill: { targetFiles: 24, targetDiffLines: 1800 }, // 单维超界（文件）
-    controlFill: CONTROL_FILL,
+    // 小文件仓特例（#59 档位探针实测）：最大 7 个填充文件容量 <1486 行，1500 行
+    // 档兜底连环开文件破文件维（实测 13f/1515l 超界）；900 行为域内最大档（落地 9f/914l）
+    controlFill: { targetFiles: 9, targetDiffLines: 900 },
   },
   {
     groupId: "cxf",
