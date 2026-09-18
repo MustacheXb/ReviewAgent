@@ -21,6 +21,7 @@ import path from "node:path";
 import type { MRCase } from "../src/contracts/mr-case.js";
 import { createDshKernelDriver } from "../src/experiment/dsh-kernel.js";
 import { RunStore } from "../src/experiment/run-store.js";
+import { composeShardingArms } from "../src/experiment/sharding/arms.js";
 import {
   buildGroupInputs,
   loadRepoSnapshot,
@@ -28,6 +29,7 @@ import {
   type ShardingDriverGroup,
 } from "../src/experiment/sharding/validation-driver.js";
 import { DEFAULT_ORCHESTRATION_CONFIG } from "../src/sharding/orchestrate-review.js";
+import { planShards } from "../src/sharding/plan-shards.js";
 import { formatEnvLocalSummary, loadEnvLocalFile } from "../src/shared/env-local.js";
 
 /** 控制臂统一档位（域内，留边界余量；跨组可比——实验设计 §2.2） */
@@ -73,16 +75,19 @@ interface CliOptions {
   readonly groupIds: readonly string[];
   readonly reps: readonly number[];
   readonly root: string;
+  /** 零 LLM 干跑：compose 全矩阵 + 片数预估后即停（弃案 / 档位错提前暴露） */
+  readonly dryRun: boolean;
 }
 
 function usage(): never {
   console.log(
     [
-      "usage: pnpm sharding-validation -- [--group <id>]... [--reps <csv>] [--root <dir>]",
+      "usage: pnpm sharding-validation -- [--group <id>]... [--reps <csv>] [--root <dir>] [--dry-run]",
       "",
-      "  --group   执行的组（可重复；缺省全部：struts, spring-sec, cxf, uaa）",
-      "  --reps    执行的 rep 清单（逗号分隔；缺省 1,2,3）",
-      "  --root    产物根目录（缺省 runs/sharding-validation）",
+      "  --group    执行的组（可重复；缺省全部：struts, spring-sec, cxf, uaa）",
+      "  --reps     执行的 rep 清单（逗号分隔；缺省 1,2,3）",
+      "  --root     产物根目录（缺省 runs/sharding-validation）",
+      "  --dry-run  零 LLM 干跑：双臂 compose + planShards 片数预估后即停",
       "",
       "pilot（实验设计 §2.7）：pnpm sharding-validation -- --group struts --reps 1",
     ].join("\n"),
@@ -95,11 +100,14 @@ function parseArgs(argv: readonly string[]): CliOptions {
   const groupIds: string[] = [];
   const reps: number[] = [];
   let root = path.join("runs", "sharding-validation");
+  let dryRun = false;
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     const value = args[i + 1];
-    if (arg === "--group" && value !== undefined) {
+    if (arg === "--dry-run") {
+      dryRun = true;
+    } else if (arg === "--group" && value !== undefined) {
       groupIds.push(value);
       i++;
     } else if (arg === "--reps" && value !== undefined) {
@@ -122,7 +130,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
       usage();
     }
   }
-  return { groupIds, reps, root };
+  return { groupIds, reps, root, dryRun };
 }
 
 async function main(): Promise<number> {
@@ -172,6 +180,41 @@ async function main(): Promise<number> {
   for (const group of built.groups) {
     const ids = group.input.spec.candidates.map((candidate) => candidate.mrCase.caseId);
     console.log(`  group ${group.input.spec.groupId}: anchor=${group.anchorCaseId} candidates=${ids.join(" + ")}`);
+  }
+
+  // 零 LLM 干跑：双臂 compose（含干净套用 / 臂不变式预检）+ planShards 片数预估
+  if (options.dryRun) {
+    let failures = 0;
+    for (const group of built.groups) {
+      const groupId = group.input.spec.groupId;
+      const arms = composeShardingArms(group.input.spec, DEFAULT_ORCHESTRATION_CONFIG.shard);
+      if (!arms.ok) {
+        failures++;
+        console.error(`  group ${groupId}: COMPOSE FAILED — ${arms.error.message}`);
+        continue;
+      }
+      for (const arm of ["treatment", "control"] as const) {
+        const composite = arms.value[arm];
+        const plan = planShards(composite.mrCase, DEFAULT_ORCHESTRATION_CONFIG.shard);
+        if (!plan.ok) {
+          failures++;
+          console.error(`  group ${groupId}/${arm}: SHARD PLAN FAILED — ${plan.error.message}`);
+          continue;
+        }
+        console.log(
+          `  group ${groupId}/${arm}: ${composite.manifest.composite.files}f/${composite.manifest.composite.diffLines}l` +
+            ` → ${plan.value.sharded ? `${plan.value.shards.length} shards (${plan.value.reason})` : "direct（域内）"}`,
+        );
+      }
+      const manifest = arms.value.treatment.manifest;
+      const dropped =
+        manifest.droppedCases.length === 0
+          ? "无"
+          : manifest.droppedCases.map((drop) => `${drop.caseId}(${drop.reason})`).join(", ");
+      console.log(`    included=[${manifest.includedCaseIds.join(", ")}] dropped=[${dropped}]`);
+    }
+    console.log(failures === 0 ? "dry-run: 全组 compose 通过（零 LLM 消耗）" : `dry-run: ${failures} 处失败`);
+    return failures === 0 ? 0 : 1;
   }
 
   const kernel = createDshKernelDriver();
