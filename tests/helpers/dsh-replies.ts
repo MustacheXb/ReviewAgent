@@ -20,6 +20,24 @@ export const FINDING_F001: Finding = {
   confidence: 0.9,
 };
 
+/**
+ * F001 的 zh 形态（#58 zh 端到端剧本）：自然语言字段（title / description /
+ * evidence 连接文本）中文；代码引用面（文件路径 / 行号 / API 名 / 枚举值 /
+ * id / rule）原样——语言切换只作用于自然语言字段（spec #49 决策 1）。
+ */
+export const FINDING_F001_ZH: Finding = {
+  id: "F001",
+  severity: "P2",
+  category: "CORRECTNESS",
+  file: "src/main/java/Example.java",
+  line: 42,
+  title: "查询参数的 URL 编码错误",
+  description: "该改动对拼接后的查询串整体编码，而非逐个参数值编码。",
+  evidence: ["Example.java:42 - 对拼接后的查询串调用了 URLEncoder.encode，应逐个参数值编码"],
+  rule: "CORRECTNESS-001",
+  confidence: 0.9,
+};
+
 /** config A 六阶段的回复内容（phase 1–6；与进程内验收同内容） */
 export const CONFIG_A_REPLIES: readonly string[] = [
   '{"summary":"The change replaces manual URL encoding with a utility call."}',

@@ -25,7 +25,12 @@
  *   shards 节关联）；单文件超界单片 outOfDomain 执行（不拒绝）；分片数
  *   超限整单拒绝；diff 不可解析（纯重命名块等）回退 #26 原路径直通（旧
  *   CLI 从不解析 diff——该输入集必须保真）。域内 MR 的成功 / 截断路径同时
- *   是 #56 直通分支的回归网（呈现与 #26 原路径逐字节一致）。
+ *   是 #56 直通分支的回归网（呈现与 #26 原路径逐字节一致）；
+ * - #58 输出语言：--language 旗标进程级——zh 端到端（findings 自然语言
+ *   字段中文、代码引用面原样 + 审计顶层 outputLanguage 留痕 + 首请求
+ *   Zone A zh 分序列字节锚）；en 显式与缺省两次运行首请求逐字节一致
+ *   （现状回归——显式 en 是缺省的自述，不是新语言档）；非法值人话报错
+ *   退出码 1（stdout 干净）。
  *
  * 退出码契约（#56 起三态）：完成（含诚实截断、超界切分与超界单片执行）0 /
  * 分片数超限拒绝 2（与运行失败可区分，平台侧可据此提示拆 MR）/ 其余中止
@@ -46,10 +51,12 @@ import {
   configAResponses,
   CONFIG_A_REPLIES,
   FINDING_F001,
+  FINDING_F001_ZH,
   SMOKE_PING_TOOL_CALL_BODY,
 } from "../../../../tests/helpers/dsh-replies.js";
 import { fileBlock } from "../../../../tests/helpers/diff-blocks.js";
 import { startStubLlmServer } from "../../../../tests/helpers/stub-llm-server.js";
+import { ZONE_A } from "../../src/plugins/review-policy.js";
 
 const PACKAGE_DIR = fileURLToPath(new URL("../..", import.meta.url));
 const BIN_ENTRY = join(PACKAGE_DIR, "bin", "review-agent.js");
@@ -279,6 +286,143 @@ describe("CLI 进程级烟测（#26）", () => {
 
       expect(run.code).toBe(1);
       expect(run.stderr).toContain("DEEPSEEK_API_KEY");
+      expect(run.stdout).toBe("");
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+// ---------- #58 输出语言：--language 旗标的进程级三面（zh 端到端 / en 字节回归 / 非法值） ----------
+
+describe("CLI --language 输出语言（#58）", () => {
+  it(
+    "zh 端到端：--language zh → findings 自然语言字段中文（代码引用面原样）+ 审计顶层 outputLanguage=zh + 首请求 Zone A zh 分序列",
+    async () => {
+      const stub = await startStubLlmServer(configARepliesFor(FINDING_F001_ZH).map(chatResponse));
+      try {
+        const outDir = await mkdtemp(join(tmpdir(), "review-agent-cli-smoke-lang-zh-"));
+        workDirs.push(outDir);
+        const diffFile = join(outDir, "fix-url-encoding.diff");
+        await writeFile(diffFile, SAMPLE_MR_CASE.diff, "utf8");
+
+        const run = await runCli(
+          [
+            "review",
+            "--repo",
+            SAMPLE_MR_CASE.repoPath,
+            "--mr",
+            diffFile,
+            "--out",
+            outDir,
+            "--language",
+            "zh",
+          ],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-smoke-lang-zh-key" },
+        );
+
+        expect(run.code).toBe(0);
+        const outcome = JSON.parse(run.stdout) as Record<string, unknown>;
+        // —— findings：自然语言字段（title / description / evidence 连接文本）
+        //    中文；代码引用面（file / rule / id）原样——语言只切自然语言字段
+        //    （spec #49 决策 1），zh 剧本经语言门（zh 档只查 title/description）
+        expect(outcome.findings).toHaveLength(1);
+        expect((outcome.findings as Record<string, unknown>[])[0]).toMatchObject({
+          id: "F001",
+          title: "查询参数的 URL 编码错误",
+          description: "该改动对拼接后的查询串整体编码，而非逐个参数值编码。",
+          evidence: ["Example.java:42 - 对拼接后的查询串调用了 URLEncoder.encode，应逐个参数值编码"],
+          file: "src/main/java/Example.java",
+          rule: "CORRECTNESS-001",
+        });
+        // —— manifest 留痕（AC6）：审计顶层携带 outputLanguage
+        const audit = JSON.parse(
+          await readFile(outcome.auditPath as string, "utf8"),
+        ) as {
+          readonly outputLanguage: string;
+          readonly requests: readonly { readonly wireBody?: string }[];
+        };
+        expect(audit.outputLanguage).toBe("zh");
+        // —— 首请求 Zone A 分序列（#53 zh 字节锚的进程级兑现）
+        const firstWire = JSON.parse(String(audit.requests[0]?.wireBody)) as {
+          readonly messages: readonly { readonly content: unknown }[];
+        };
+        expect(firstWire.messages[0]?.content).toBe(ZONE_A.zh);
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "en 显式 = 缺省：--language en 与无旗标两次运行首请求逐字节一致（现状回归）",
+    async () => {
+      // 同一 diff 文件名 → 同 caseId → MR intro 逐字节稳定；两次运行除旗标外
+      // 输入全同，首请求必须逐字节一致——显式 en 是缺省的自述，不是新语言档
+      const stub = await startStubLlmServer([...configAResponses(), ...configAResponses()]);
+      try {
+        const outDir = await mkdtemp(join(tmpdir(), "review-agent-cli-smoke-lang-en-"));
+        workDirs.push(outDir);
+        const diffFile = join(outDir, "fix-url-encoding.diff");
+        await writeFile(diffFile, SAMPLE_MR_CASE.diff, "utf8");
+
+        const runDefault = await runCli(
+          ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", join(outDir, "default")],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-smoke-lang-en-key" },
+        );
+        const runExplicit = await runCli(
+          [
+            "review",
+            "--repo",
+            SAMPLE_MR_CASE.repoPath,
+            "--mr",
+            diffFile,
+            "--out",
+            join(outDir, "explicit"),
+            "--language",
+            "en",
+          ],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-smoke-lang-en-key" },
+        );
+
+        expect(runDefault.code).toBe(0);
+        expect(runExplicit.code).toBe(0);
+        const readAudit = async (stdout: string) => {
+          const outcome = JSON.parse(stdout) as Record<string, unknown>;
+          return JSON.parse(await readFile(outcome.auditPath as string, "utf8")) as {
+            readonly outputLanguage: string;
+            readonly requests: readonly { readonly wireBody?: string }[];
+          };
+        };
+        const defaultAudit = await readAudit(runDefault.stdout);
+        const explicitAudit = await readAudit(runExplicit.stdout);
+        // —— manifest：两次运行语言档同为 en
+        expect(defaultAudit.outputLanguage).toBe("en");
+        expect(explicitAudit.outputLanguage).toBe("en");
+        // —— 首请求逐字节一致（同 caseId 同 diff → 除语言外零差异，语言两跑同值）
+        expect(explicitAudit.requests[0]?.wireBody).toBe(defaultAudit.requests[0]?.wireBody);
+        const firstWire = JSON.parse(String(defaultAudit.requests[0]?.wireBody)) as {
+          readonly messages: readonly { readonly content: unknown }[];
+        };
+        expect(firstWire.messages[0]?.content).toBe(ZONE_A.en);
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "非法值：--language fr → 退出码 1 + stderr 人话错误（含合法值面），stdout 干净",
+    async () => {
+      const run = await runCli(
+        ["review", "--repo", "whatever", "--mr", "whatever.diff", "--language", "fr"],
+        { ...process.env },
+      );
+
+      expect(run.code).toBe(1);
+      expect(run.stderr).toContain("--language");
+      expect(run.stderr).toContain('"en" or "zh"');
       expect(run.stdout).toBe("");
     },
     TEST_TIMEOUT_MS,

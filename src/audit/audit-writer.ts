@@ -4,6 +4,7 @@ import type { ConfigId } from "../contracts/config.js";
 import type { Finding } from "../contracts/finding.js";
 import type { LedgerEntry } from "../contracts/ledger.js";
 import type { LlmRequest, LlmUsage } from "../contracts/llm-client.js";
+import type { OutputLanguage } from "../contracts/output-language.js";
 import type { PrefetchLayerRecord } from "../contracts/prefetch.js";
 import type { CacheBreakRecord } from "../contracts/run.js";
 import type { CandidateRejection, FullRepoRecord, PhaseRecord, RunAudit, ToolCallRecord } from "../contracts/run.js";
@@ -21,6 +22,8 @@ export interface AuditFileContent {
   readonly caseId: string;
   readonly configId: ConfigId;
   readonly model: string;
+  /** 输出语言（#58）：Finding 自然语言字段的语言档；缺席 = en（旧记录语义不变） */
+  readonly outputLanguage?: OutputLanguage;
   readonly effort: string;
   readonly startedAt: string;
   readonly finishedAt: string;
@@ -57,6 +60,7 @@ export function buildAuditFileContent(args: {
   readonly caseId: string;
   readonly configId: ConfigId;
   readonly model: string;
+  readonly outputLanguage?: OutputLanguage;
   readonly effort: string;
   readonly startedAt: Date;
   readonly finishedAt: Date;
@@ -74,6 +78,7 @@ export function buildAuditFileContent(args: {
     caseId: args.caseId,
     configId: args.configId,
     model: args.model,
+    ...(args.outputLanguage !== undefined ? { outputLanguage: args.outputLanguage } : {}),
     effort: args.effort,
     startedAt: args.startedAt.toISOString(),
     finishedAt: args.finishedAt.toISOString(),

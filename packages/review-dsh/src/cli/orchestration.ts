@@ -22,6 +22,7 @@ import { Context } from "@deepseek-ai/cordis";
 
 import { writeAuditFile } from "../../../../src/audit/audit-writer.js";
 import type { ConfigId } from "../../../../src/contracts/config.js";
+import type { OutputLanguage } from "../../../../src/contracts/output-language.js";
 import type { MRCase } from "../../../../src/contracts/mr-case.js";
 import type { SingleMrRun, SingleMrRunner } from "../../../../src/sharding/orchestrate-review.js";
 import { toAuditFileContent, type DshAuditFileContent } from "../audit/audit-export.js";
@@ -42,10 +43,12 @@ export function cliMrCase(args: ReviewCliArgs, repoPath: string, diff: string): 
   };
 }
 
-/** 运行单元的组装输入（CLI 旗标原样下传：config / model / 输出根目录） */
+/** 运行单元的组装输入（CLI 旗标原样下传：config / model / language / 输出根目录） */
 export interface ProductionRunnerInputs {
   readonly config: ConfigId;
   readonly model: string;
+  /** 输出语言（#58）：CLI 解析后恒携带（缺省 en）——policy 面语言档 */
+  readonly language: OutputLanguage;
   /** 输出根目录：sessions/（会话 jsonl）与 audit/（审计文件）在其下按片创建 */
   readonly outDir: string;
 }
@@ -74,7 +77,7 @@ export function dshSingleMrRunner(inputs: ProductionRunnerInputs): SingleMrRunne
         const handle = await assembleReviewProfile(ctx, {
           sessionRoot,
           adapter: new DeepSeekLlmAdapter(),
-          policy: realApiReviewPolicy(inputs.config, inputs.model),
+          policy: realApiReviewPolicy(inputs.config, inputs.model, inputs.language),
         });
         const result = await ctx.reviewRuntime.run({
           caseId: mrCase.caseId,

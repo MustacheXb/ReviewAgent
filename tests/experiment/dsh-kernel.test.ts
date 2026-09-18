@@ -196,12 +196,17 @@ describe("实验 runner 接 DSH 内核（#27）", () => {
   });
 });
 
-/** 录制驱动器用的最小合法 RunResult（usage/审计零事件；model 由调用方指定） */
-function kernelRunResult(request: DshKernelUnitRequest, model: string): RunResult {
+/** 录制驱动器用的最小合法 RunResult（usage/审计零事件；model / outputLanguage 由调用方指定） */
+function kernelRunResult(
+  request: DshKernelUnitRequest,
+  model: string,
+  outputLanguage?: "en" | "zh",
+): RunResult {
   return {
     caseId: request.caseId,
     configId: request.configId,
     model,
+    ...(outputLanguage !== undefined ? { outputLanguage } : {}),
     findings: [],
     usage: { inputTokens: 0, outputTokens: 0 },
     rounds: 1,
@@ -217,3 +222,122 @@ function kernelRunResult(request: DshKernelUnitRequest, model: string): RunResul
     },
   };
 }
+
+describe("语言面（#58：outputLanguage 经 plan → runUnit 请求 → 运行记录）", () => {
+  it("zh 透传：plan.outputLanguage 经 runUnit 的 language 参数下传；记录携带 zh", async () => {
+    const experimentRoot = await makeExperimentRoot("dsh-kernel-language-zh-");
+    const requests: DshKernelUnitRequest[] = [];
+    const driver: DshKernelDriver = {
+      runUnit: async (request) => {
+        requests.push(request);
+        return kernelRunResult(request, "deepseek-v4-flash", "zh");
+      },
+      close: async () => {},
+    };
+
+    const outcome = await runExperiment(
+      experimentPlan({ experimentId: "dsh-language-zh", outputLanguage: "zh" }),
+      [experimentMainCase("dsh-language-zh")],
+      { llmClient: FakeLlmClient.fromResponses([]), dshKernel: driver },
+      { experimentRoot },
+    );
+
+    // 请求面：language 作为 review/run 参数下传（缺省值硬编码在内核侧）
+    expect(outcome.failures).toEqual([]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.language).toBe("zh");
+    // 记录面：RunRecord 恒携带解析后的语言（manifest 留痕，读取端无缺席归一）
+    expect(outcome.records).toHaveLength(1);
+    expect(outcome.records[0]?.outputLanguage).toBe("zh");
+  });
+
+  it("缺省：plan 无 outputLanguage → 请求 language 字段缺席（en 走内核缺省）；记录携带 en", async () => {
+    const experimentRoot = await makeExperimentRoot("dsh-kernel-language-default-");
+    const requests: DshKernelUnitRequest[] = [];
+    const driver: DshKernelDriver = {
+      runUnit: async (request) => {
+        requests.push(request);
+        return kernelRunResult(request, "deepseek-v4-flash");
+      },
+      close: async () => {},
+    };
+
+    const outcome = await runExperiment(
+      experimentPlan({ experimentId: "dsh-language-default" }),
+      [experimentMainCase("dsh-language-default")],
+      { llmClient: FakeLlmClient.fromResponses([]), dshKernel: driver },
+      { experimentRoot },
+    );
+
+    expect(outcome.failures).toEqual([]);
+    // 请求面：字段缺席（exactOptionalPropertyTypes：缺省 = 不传，非显式 undefined）
+    expect(requests).toHaveLength(1);
+    expect("language" in (requests[0] ?? {})).toBe(false);
+    // 记录面：恒携带 en（新记录永远带语言字段）
+    expect(outcome.records[0]?.outputLanguage).toBe("en");
+  });
+
+  it("回传漂移拒绝：plan zh、内核回传 en → 单元失败留痕，不落假记录", async () => {
+    const experimentRoot = await makeExperimentRoot("dsh-kernel-language-drift-");
+    const driver: DshKernelDriver = {
+      // 模拟内核答非所问：plan 要 zh，回传 en——记录会撒谎，必须拒绝落盘
+      runUnit: async (request) => kernelRunResult(request, "deepseek-v4-flash", "en"),
+      close: async () => {},
+    };
+
+    const outcome = await runExperiment(
+      experimentPlan({ experimentId: "dsh-language-drift", outputLanguage: "zh" }),
+      [experimentMainCase("dsh-language-drift")],
+      { llmClient: FakeLlmClient.fromResponses([]), dshKernel: driver },
+      { experimentRoot },
+    );
+
+    expect(outcome.executed).toBe(0);
+    expect(outcome.records).toHaveLength(0);
+    expect(outcome.failures).toHaveLength(1);
+    expect(outcome.failures[0]?.message).toMatch(/outputLanguage/u);
+  });
+
+  it("POC1 基线护栏：plan zh 且无 dshKernel → 启动即报错（POC1 冻结 harness 是 en 锚定，zh 必须走 DSH 内核）", async () => {
+    const experimentRoot = await makeExperimentRoot("dsh-kernel-language-poc1-");
+
+    await expect(
+      runExperiment(
+        experimentPlan({ experimentId: "dsh-language-poc1", outputLanguage: "zh" }),
+        [experimentMainCase("dsh-language-poc1")],
+        { llmClient: FakeLlmClient.fromResponses([]) },
+        { experimentRoot },
+      ),
+    ).rejects.toThrow(/outputLanguage.*zh.*DSH kernel/u);
+  });
+
+  it("断点续跑口径护栏：既有 zh 记录 + 缺省 en 计划 → 启动即报错（指标不跨语言混比）", async () => {
+    const experimentRoot = await makeExperimentRoot("dsh-kernel-language-resume-");
+    const zhDriver: DshKernelDriver = {
+      runUnit: async (request) => kernelRunResult(request, "deepseek-v4-flash", "zh"),
+      close: async () => {},
+    };
+    await runExperiment(
+      experimentPlan({ experimentId: "dsh-language-resume", outputLanguage: "zh" }),
+      [experimentMainCase("dsh-language-resume")],
+      { llmClient: FakeLlmClient.fromResponses([]), dshKernel: zhDriver },
+      { experimentRoot },
+    );
+
+    // 同 id 续跑但计划缺省 en：既有 zh 记录与新计划口径不符——启动即报错
+    const enDriver: DshKernelDriver = {
+      runUnit: async () => {
+        throw new Error("language resume guard must reject before any unit runs");
+      },
+      close: async () => {},
+    };
+    await expect(
+      runExperiment(
+        experimentPlan({ experimentId: "dsh-language-resume" }),
+        [experimentMainCase("dsh-language-resume")],
+        { llmClient: FakeLlmClient.fromResponses([]), dshKernel: enDriver },
+        { experimentRoot },
+      ),
+    ).rejects.toThrow(/outputLanguage/u);
+  });
+});

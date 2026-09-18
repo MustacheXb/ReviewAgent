@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ConfigId } from "../contracts/config.js";
 import type { Finding } from "../contracts/finding.js";
 import type { LlmRequest, LlmUsage } from "../contracts/llm-client.js";
+import type { OutputLanguage } from "../contracts/output-language.js";
 import type { CandidateRejection, CacheBreakRecord, FullRepoRecord, PhaseRecord, RunAudit, RunResult, ToolCallRecord } from "../contracts/run.js";
 import type { LedgerEntry } from "../contracts/ledger.js";
 import type { PrefetchLayerRecord } from "../contracts/prefetch.js";
@@ -53,6 +54,12 @@ export interface RunRecord {
   readonly configId: ConfigId;
   readonly rep: number;
   readonly model: ExperimentModel;
+  /**
+   * 输出语言（#58）：写入期恒携带解析后语言（runner composeRecord 恒写入）；
+   * 类型可选只服务旧记录（JSON 边界）——旧记录缺席 = en（既有 en 基线口径）。
+   * 断点续跑把语言视为口径维度（混语言记录启动即报错，runner 层守门）。
+   */
+  readonly outputLanguage?: OutputLanguage;
   readonly verifier: VerifierMode;
   readonly completedAt: string;
   /** 基线（六阶段循环单遍自证）结果快照 */
@@ -119,6 +126,7 @@ export function recordToRunResult(record: RunRecord): RunResult {
     caseId: record.caseId,
     configId: record.configId,
     model: record.model,
+    ...(record.outputLanguage !== undefined ? { outputLanguage: record.outputLanguage } : {}),
     findings: snapshot.findings,
     usage: snapshot.usage,
     rounds: snapshot.rounds,

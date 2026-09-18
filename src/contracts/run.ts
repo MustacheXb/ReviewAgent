@@ -2,6 +2,7 @@ import type { MetricsConfigId } from "./config.js";
 import type { Finding } from "./finding.js";
 import type { LedgerEntry } from "./ledger.js";
 import type { LlmRequest, LlmUsage } from "./llm-client.js";
+import type { OutputLanguage } from "./output-language.js";
 import type { PrefetchLayerRecord } from "./prefetch.js";
 
 /**
@@ -25,6 +26,12 @@ export interface RunResult {
   readonly configId: MetricsConfigId;
   /** 被测模型 id（#43 指标层画像分口径用；旧记录 / DSH 路径缺省 = 走旧口径） */
   readonly model?: string;
+  /**
+   * 输出语言（#58，spec #49 决策 1）：Finding 自然语言字段的语言档；缺席 =
+   * en（既有实验结论的锚定语言，旧记录语义不变）。metrics 按语言分口径的
+   * 分组维度（不跨语言混比，ADR-0010）。
+   */
+  readonly outputLanguage?: OutputLanguage;
   readonly findings: readonly Finding[];
   /** 本次 Run 累计 */
   readonly usage: LlmUsage;

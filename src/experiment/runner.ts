@@ -4,6 +4,7 @@ import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
 import type { LlmClient } from "../contracts/llm-client.js";
 import type { MRCase } from "../contracts/mr-case.js";
+import { resolveOutputLanguage } from "../contracts/output-language.js";
 import type { RunResult } from "../contracts/run.js";
 import { addUsage } from "../loop/usage.js";
 import { DEFAULT_EFFORT, runReview } from "../run/run-review.js";
@@ -24,7 +25,8 @@ import { runVerifierPass } from "./verifier.js";
  * - 断点续跑：每单元落盘记录，已完成（含计划兼容校验）即跳过；
  * - 冷热分层：单元按 case → config → rep 顺序执行，记录按 rep 升序进入指标聚合
  *   （rep1 冷单列 / rep2+ 热主口径由 T10 aggregate 实现）；
- * - 模型/消融配置变更（model、verifier）与既有记录冲突时启动即报错，不静默重跑烧钱。
+ * - 模型/消融/语言配置变更（model、verifier、outputLanguage）与既有记录冲突时
+ *   启动即报错，不静默重跑烧钱。
  */
 
 export interface RunnerPaths {
@@ -104,6 +106,13 @@ export async function runExperiment(
         `(plan.model = "${plan.model}"; deepseek-chat / deepseek-reasoner were retired on 2026-07-24 and must not be used, ADR-0002): pick a live model id.`,
     );
   }
+  if (deps.dshKernel === undefined && resolveOutputLanguage(plan.outputLanguage) === "zh") {
+    // POC1 基线护栏（#58）：root 冻结 harness 是 en 实验锚定（全部既有结论
+    // 的基线形态），zh 只有 DSH 内核的参数化路径——静默 en 混跑会让记录撒谎
+    throw new Error(
+      `experiment "${plan.experimentId}" declares outputLanguage "zh" but no DSH kernel is wired: the POC1 frozen harness is the en baseline (ADR-0010) — zh experiments must run on the DSH kernel (wire dshKernel, or drop outputLanguage to run the en baseline).`,
+    );
+  }
   const store = new RunStore(path.join(paths.experimentRoot, "runs"));
   await persistPlanAndCases(paths.experimentRoot, plan, expanded.cases);
   const existing = await loadCompatibleRecords(store, plan, expanded.units);
@@ -169,7 +178,9 @@ async function executeUnit(
     // DSH 路径（#27）：单元经长驻 host 进程执行（review/run；configId 逐单元切
     // preset，审计由 host 落盘、auditPath 随响应回传）——返回 POC1 RunResult，
     // 下游 composeRecord / store 零改动。model 随请求透传（#45）；回传 model
-    // 与 plan 漂移 = 记录会撒谎 → 拒绝落盘（口径诚实护栏，单元失败留痕）
+    // 与 plan 漂移 = 记录会撒谎 → 拒绝落盘（口径诚实护栏，单元失败留痕）。
+    // outputLanguage 同款（#58）：language 随请求透传，回传语言与 plan 漂移
+    // 同样拒绝落盘
     const baseline =
       deps.dshKernel !== undefined
         ? await deps.dshKernel.runUnit({
@@ -180,6 +191,7 @@ async function executeUnit(
             repoPath: mrCase.repoPath,
             auditDir,
             model: plan.model,
+            ...(plan.outputLanguage !== undefined ? { language: plan.outputLanguage } : {}),
           })
         : await runReview(CONFIGS[unit.configId], mrCase, deps.llmClient, {
             auditDir,
@@ -190,6 +202,12 @@ async function executeUnit(
       throw new Error(
         `DSH kernel returned a different model than the plan claims (plan.model = "${plan.model}", ` +
           `kernel result.model = ${JSON.stringify(baseline.model)}): persisting the record would be dishonest — fix the kernel model route before rerunning`,
+      );
+    }
+    if (resolveOutputLanguage(baseline.outputLanguage) !== resolveOutputLanguage(plan.outputLanguage)) {
+      throw new Error(
+        `DSH kernel returned a different outputLanguage than the plan claims (plan.outputLanguage = ${JSON.stringify(resolveOutputLanguage(plan.outputLanguage))}, ` +
+          `kernel result.outputLanguage = ${JSON.stringify(baseline.outputLanguage)}): persisting the record would be dishonest — fix the kernel language route before rerunning`,
       );
     }
     const { record } = await composeRecord(unit, mrCase, plan, baseline, deps, now);
@@ -221,6 +239,7 @@ async function composeRecord(
         configId: unit.configId,
         rep: unit.rep,
         model: plan.model,
+        outputLanguage: resolveOutputLanguage(plan.outputLanguage),
         verifier: "off",
         completedAt: now().toISOString(),
         baseline: baselineSnapshot,
@@ -245,6 +264,7 @@ async function composeRecord(
       configId: unit.configId,
       rep: unit.rep,
       model: plan.model,
+      outputLanguage: resolveOutputLanguage(plan.outputLanguage),
       verifier: "on",
       completedAt: now().toISOString(),
       baseline: baselineSnapshot,
@@ -256,7 +276,8 @@ async function composeRecord(
 
 /**
  * 断点续跑兼容检查：读取计划内全部既有记录；
- * model / verifier 与计划不符的记录视为过期配置——启动即报错（防静默重跑烧钱）。
+ * model / verifier / outputLanguage 与计划不符的记录视为过期配置——启动即报错
+ * （防静默重跑烧钱；旧记录 outputLanguage 缺席归一 en 比较）。
  */
 async function loadCompatibleRecords(
   store: RunStore,
@@ -270,7 +291,11 @@ async function loadCompatibleRecords(
     if (record === null) {
       continue;
     }
-    if (record.model !== plan.model || record.verifier !== plan.verifier) {
+    if (
+      record.model !== plan.model ||
+      record.verifier !== plan.verifier ||
+      resolveOutputLanguage(record.outputLanguage) !== resolveOutputLanguage(plan.outputLanguage)
+    ) {
       stale.push(`${record.source}/${record.caseId}/${record.configId}/rep-${record.rep}`);
       continue;
     }
@@ -279,7 +304,7 @@ async function loadCompatibleRecords(
   if (stale.length > 0) {
     throw new Error(
       `experiment "${plan.experimentId}" has ${stale.length} persisted run record(s) from a different ` +
-        `model/verifier configuration (e.g. ${stale.slice(0, 3).join(", ")}${stale.length > 3 ? ", ..." : ""}). ` +
+        `model/verifier/outputLanguage configuration (e.g. ${stale.slice(0, 3).join(", ")}${stale.length > 3 ? ", ..." : ""}). ` +
         `Resume keeps cost accounting honest: use a new --id, or delete runs/${plan.experimentId}/ to start fresh.`,
     );
   }

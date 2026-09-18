@@ -11,15 +11,24 @@
 export type OutputLanguage = "en" | "zh";
 
 /**
- * 语言值校验：缺省 en；非法值 fail fast（人话错误——配置错误在启动期
- * 暴露，不产出语言错乱的结果，spec #49 用户故事 9）。配置入口（CLI /
- * JSON-RPC，#58）与 Zone A 渲染共用本校验。
+ * 成员判定（类型守卫，#58）：CLI 旗标 / JSON-RPC 参数 / 实验计划 / 内核
+ * 回传四类入口的枚举校验单源——各入口的错误消息自带语境前缀（--language /
+ * review/run / plan.outputLanguage / dsh-kernel），枚举面只在此定义一次。
+ */
+export function isOutputLanguage(value: unknown): value is OutputLanguage {
+  return value === "en" || value === "zh";
+}
+
+/**
+ * 语言值解析：缺席归一 en（旧记录 / 旧结果的锚定语义）；非法值 fail fast
+ * （人话错误——配置错误在启动期暴露，不产出语言错乱的结果，spec #49
+ * 用户故事 9）。Zone A 渲染与运行记录写入共用本解析。
  */
 export function resolveOutputLanguage(value: unknown): OutputLanguage {
   if (value === undefined) {
     return "en";
   }
-  if (value !== "en" && value !== "zh") {
+  if (!isOutputLanguage(value)) {
     throw new Error(`outputLanguage must be "en" or "zh" (got ${JSON.stringify(value)})`);
   }
   return value;

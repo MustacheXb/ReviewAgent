@@ -21,6 +21,7 @@ import ToolRuntime from "@deepseek-ai/dsh-tools";
 
 import { REVIEW_TOOL_ORDER } from "../../../../src/tools/registry.js";
 import type { ConfigId } from "../../../../src/contracts/config.js";
+import type { OutputLanguage } from "../../../../src/contracts/output-language.js";
 import { reviewCache } from "../plugins/review-cache.js";
 import { reviewContext } from "../plugins/review-context.js";
 import { reviewEvidence } from "../plugins/review-evidence.js";
@@ -34,12 +35,19 @@ import { REVIEW_PRESETS } from "../presets/review-presets.js";
  * CLI wrapper 共用——两处都承载真实适配器，thinking 单 turn 分钟级，缺省 10s
  * 只对进程内 fake 成立；#29 冒烟回归）。model 覆盖（#45）：缺省回落
  * review-policy 的 DEFAULT_MODEL（自由 id 透传，空串由插件组装期拒绝）。
+ * outputLanguage 覆盖（#58）：缺省 en（现状锚定），zh 切换 Zone A 分序列与
+ * 语言门档位（CLI 旗标与 review/run 参数双通道同语义）。
  */
-export function realApiReviewPolicy(configId: ConfigId, model?: string): ReviewPolicyConfig {
+export function realApiReviewPolicy(
+  configId: ConfigId,
+  model?: string,
+  language?: OutputLanguage,
+): ReviewPolicyConfig {
   return {
     ...REVIEW_PRESETS[configId],
     turnTimeoutMs: REAL_LLM_TURN_TIMEOUT_MS,
     ...(model !== undefined ? { model } : {}),
+    ...(language !== undefined ? { outputLanguage: language } : {}),
   };
 }
 

@@ -104,6 +104,15 @@ describe("validateExperimentPlan（fail fast）", () => {
     );
   });
 
+  it("outputLanguage（#58）：可选；缺席 = en 旧口径；在场须为 en|zh", () => {
+    expect(() => validateExperimentPlan(experimentPlan())).not.toThrow();
+    expect(() => validateExperimentPlan(experimentPlan({ outputLanguage: "en" }))).not.toThrow();
+    expect(() => validateExperimentPlan(experimentPlan({ outputLanguage: "zh" }))).not.toThrow();
+    expect(() => validateExperimentPlan(experimentPlan({ outputLanguage: "fr" as never }))).toThrow(
+      /outputLanguage/,
+    );
+  });
+
   it("judgeModel：null = 缺省；异构 id（glm-5.3）通过（#33）", () => {
     expect(() => validateExperimentPlan(experimentPlan({ judgeModel: null }))).not.toThrow();
     expect(() =>

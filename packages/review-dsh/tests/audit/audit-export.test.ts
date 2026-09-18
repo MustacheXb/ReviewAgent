@@ -451,3 +451,25 @@ describe("model 审计导出 + wire 画像容忍（#45）", () => {
     expect(() => replayAuditRequest(driftedGear as never)).toThrow(/thinking and reasoning_effort/u);
   });
 });
+
+describe("outputLanguage 审计携带（#58）：policy → audit 顶层 → RunResult / 审计文件透传", () => {
+  it("zh 政策：audit.outputLanguage / RunResult.outputLanguage / 审计文件顶层均 zh", async () => {
+    // zh 政策下英文候选 F001 会被语言门拒 NON_CHINESE（findings 空）——语言门
+    // 行为 #55 已锁（tests/loop/evidence-gate.test.ts）；本用例只测语言字段的携带透传
+    const { result } = await runIsolated(configAFindingScript(), { policy: { outputLanguage: "zh" } }, INPUT);
+
+    expect(result.audit.outputLanguage).toBe("zh");
+    // RunResult（metrics / judge 读取端可按语言分口径；root 契约可选字段）
+    expect(toPoc1RunResult(result).outputLanguage).toBe("zh");
+    // 审计文件顶层（manifest 留痕面）
+    expect(toAuditFileContent(result).outputLanguage).toBe("zh");
+  });
+
+  it("缺省：恒携带 en（现状回归——en 是既有实验结论的锚定语言）", async () => {
+    const result = await runConfigA();
+
+    expect(result.audit.outputLanguage).toBe("en");
+    expect(toPoc1RunResult(result).outputLanguage).toBe("en");
+    expect(toAuditFileContent(result).outputLanguage).toBe("en");
+  });
+});

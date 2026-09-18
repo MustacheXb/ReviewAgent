@@ -22,6 +22,7 @@ import { SessionId } from "@deepseek-ai/dsh-session";
 
 import type { MetricsConfigId } from "../../../../src/contracts/config.js";
 import type { LlmRequest, LlmUsage } from "../../../../src/contracts/llm-client.js";
+import type { OutputLanguage } from "../../../../src/contracts/output-language.js";
 import type { PrefetchLayerRecord } from "../../../../src/contracts/prefetch.js";
 import type { CacheBreakRecord, FullRepoRecord } from "../../../../src/contracts/run.js";
 import type { LedgerEntry } from "../../../../src/contracts/ledger.js";
@@ -86,6 +87,8 @@ export interface ReviewAudit {
   readonly caseId: string;
   readonly configId: MetricsConfigId;
   readonly model: string;
+  /** 输出语言（#58）：policy 快照透传（en/zh 恒携带——语言门档位与 manifest 留痕共用） */
+  readonly outputLanguage: OutputLanguage;
   readonly effort: string;
   readonly startedAt: string;
   readonly finishedAt: string;
@@ -352,6 +355,7 @@ async function driveReview(ctx: Context, input: MrInput): Promise<ReviewRunResul
       caseId: input.caseId,
       configId,
       model: policy.model,
+      outputLanguage: policy.outputLanguage,
       effort: policy.effortLabel,
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),

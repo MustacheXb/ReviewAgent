@@ -32,13 +32,16 @@ export interface DshAuditFileContent extends AuditFileContent {
 
 /** DSH 运行结果 → POC1 RunResult（metrics / judge 读取端直接消费的形态）。
  * model 是实验数据（#45）：audit.model 直达 RunResult——读取端从此可按模型
- * 分口径，旧记录 / 缺席字段的既有语义不变（root 契约 model?: string）。 */
+ * 分口径，旧记录 / 缺席字段的既有语义不变（root 契约 model?: string）。
+ * outputLanguage 同款（#58，spec #49 决策 1）：直达 RunResult 供指标按语言
+ * 分口径（缺席 = en 旧口径，root 契约可选字段）。 */
 export function toPoc1RunResult(result: ReviewRunResult): RunResult {
   const audit = result.audit;
   return {
     caseId: audit.caseId,
     configId: audit.configId,
     model: audit.model,
+    outputLanguage: audit.outputLanguage,
     findings: result.findings,
     usage: audit.usage,
     rounds: audit.rounds,
@@ -55,6 +58,7 @@ export function toAuditFileContent(result: ReviewRunResult): DshAuditFileContent
     caseId: audit.caseId,
     configId: narrowConfigId(audit.configId),
     model: audit.model,
+    outputLanguage: audit.outputLanguage,
     effort: audit.effort,
     startedAt: new Date(audit.startedAt),
     finishedAt: new Date(audit.finishedAt),

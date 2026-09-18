@@ -57,6 +57,7 @@ describe("parseCliArgs review（#26）", () => {
         issue: "",
         out: "review-agent-output",
         model: "deepseek-v4-flash",
+        language: "en",
       } satisfies ReviewCliArgs,
     });
   });
@@ -87,7 +88,7 @@ describe("parseCliArgs review（#26）", () => {
     expect(parsed).toEqual({
       ok: true,
       command: "review",
-      args: { repo: "r", mr: "m", caseId: "m", config: "A", issue: "Vulnerability fix", out: "/tmp/out", model: "deepseek-v4-flash" },
+      args: { repo: "r", mr: "m", caseId: "m", config: "A", issue: "Vulnerability fix", out: "/tmp/out", model: "deepseek-v4-flash", language: "en" },
     });
   });
 
@@ -191,6 +192,37 @@ describe("parseCliArgs review --model（#45）", () => {
     expect(parsed).toMatchObject({ ok: false });
     if (parsed.ok === false) {
       expect(parsed.message).toContain("--model");
+    }
+  });
+});
+
+// ---------- --language（#58：输出语言经 review 旗标下传） ----------
+
+describe("parseCliArgs review --language（#58）", () => {
+  it("透传：--language zh 进入解析结果（policy 面语言档）", () => {
+    const parsed = parseCliArgs(["review", "--repo", "r", "--mr", "m", "--language", "zh"]);
+    expect(parsed).toMatchObject({ ok: true, args: { language: "zh" } });
+  });
+
+  it("缺省：不带 --language → en（现状锚定语言，既有实验结论零迁移）", () => {
+    const parsed = parseCliArgs(["review", "--repo", "r", "--mr", "m"]);
+    expect(parsed).toMatchObject({ ok: true, args: { language: "en" } });
+  });
+
+  it("非法值：--language fr → 用法错误（人话错误含期望枚举，解析缝拒绝不留给组装期）", () => {
+    const parsed = parseCliArgs(["review", "--repo", "r", "--mr", "m", "--language", "fr"]);
+    expect(parsed).toMatchObject({ ok: false });
+    if (parsed.ok === false) {
+      expect(parsed.message).toContain("--language");
+      expect(parsed.message).toContain('"en" or "zh"');
+    }
+  });
+
+  it("smoke 子命令：--language 是未知旗标（冒烟自检无检视输出，参数面更窄）", () => {
+    const parsed = parseCliArgs(["smoke", "--language", "zh"]);
+    expect(parsed).toMatchObject({ ok: false });
+    if (parsed.ok === false) {
+      expect(parsed.message).toContain("unknown flag");
     }
   });
 });
@@ -305,6 +337,7 @@ describe("cliMrCase（#56）", () => {
       issue: "refactor across packages",
       out: "review-agent-output",
       model: "deepseek-v4-flash",
+      language: "en",
     };
     expect(cliMrCase(args, "/repos/x", "diff-bytes")).toEqual({
       caseId: "big-mr",

@@ -169,7 +169,7 @@ describe("runExperiment（断点续跑）", () => {
         { llmClient: scriptedLlmClient(1) },
         root,
       ),
-    ).rejects.toThrow(/different\s+model\/verifier configuration/);
+    ).rejects.toThrow(/different\s+model\/verifier\/outputLanguage configuration/);
     await expect(
       runExperiment(
         experimentPlan({ experimentId: "runner-stale", verifier: "on" }),
@@ -177,7 +177,7 @@ describe("runExperiment（断点续跑）", () => {
         { llmClient: scriptedLlmClient(1) },
         root,
       ),
-    ).rejects.toThrow(/different\s+model\/verifier configuration/);
+    ).rejects.toThrow(/different\s+model\/verifier\/outputLanguage configuration/);
   });
 
   it("同 id 不同数据集选择：报错（防同目录混入异数据集记录）", async () => {

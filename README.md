@@ -57,12 +57,12 @@ CI（push / PR）跑两层门：`discipline-gate`（确定性纪律门 · 零网
 | `pnpm materialize:vul4j` | VUL4J 数据集物化（case → 本地仓库 + MR） |
 | `pnpm reference -- --id <id> --cases-file <file>` | Claude Code 外部参照运行器（单列报告，不进 S/A/B 主判定） |
 | `pnpm --filter review-dsh gate:discipline` | DSH 侧纪律门（本地同 CI） |
-| `pnpm --filter review-dsh cli review --repo <path> --mr <diff> [--config A-E] [--model <id>]` | 单 MR 检视（DSH 内核 CLI；凭据经 `.env.local` / `REVIEWER_*`） |
+| `pnpm --filter review-dsh cli review --repo <path> --mr <diff> [--config A-E] [--model <id>] [--language en|zh]` | 单 MR 检视（DSH 内核 CLI；凭据经 `.env.local` / `REVIEWER_*`） |
 | `pnpm --filter review-dsh cli smoke [--model <id>]` | 网关冒烟自检（#46）：双探针 + 人话诊断，通过 0 / 失败 1 |
 
 ## 单次检视执行（review-agent CLI）
 
-单案检视入口是 `review-agent` CLI：薄 wrapper（解析 → `.env.local` 装载 → 装配 → run → 导出 → 呈现），**内核为 DSH**（cordis Context + 核内五插件，进程内直挂，见 `packages/review-dsh/src/cli/main.ts`；区别于根 `src/` 的 POC1 薄 harness——后者是冻结参照与共享模块源，不再被执行）。stdout 输出单个 JSON 文档（findings / rounds / toolCalls / truncated / auditPath）；审计与会话落 `--out` 目录；退出码：完成（含诚实截断）0 / 中止 1。被测模型缺省 `deepseek-v4-flash`，换模型加 `--model <id>`。以下命令均从**仓库根**以 `node packages/review-dsh/bin/review-agent.js` 直跑，以复用仓根 `.env.local`（`pnpm --filter` 形式的 cwd 在包目录，见下节凭据说明）。
+单案检视入口是 `review-agent` CLI：薄 wrapper（解析 → `.env.local` 装载 → 装配 → run → 导出 → 呈现），**内核为 DSH**（cordis Context + 核内五插件，进程内直挂，见 `packages/review-dsh/src/cli/main.ts`；区别于根 `src/` 的 POC1 薄 harness——后者是冻结参照与共享模块源，不再被执行）。stdout 输出单个 JSON 文档（findings / rounds / toolCalls / truncated / auditPath）；审计与会话落 `--out` 目录；退出码：完成（含诚实截断）0 / 中止 1。被测模型缺省 `deepseek-v4-flash`，换模型加 `--model <id>`；输出语言缺省 `en`，切中文加 `--language zh`（只切 findings 自然语言字段，代码摘录 / 路径 / 枚举不翻译，#58）。以下命令均从**仓库根**以 `node packages/review-dsh/bin/review-agent.js` 直跑，以复用仓根 `.env.local`（`pnpm --filter` 形式的 cwd 在包目录，见下节凭据说明）。
 
 ### 评测场景（VUL4J 单案）
 
@@ -105,7 +105,7 @@ node packages/review-dsh/bin/review-agent.js review \
 
 三个使用注意：
 
-1. **中文 MR 描述是当前内核的已知边界，不是用户义务**：检视产出（title / description / evidence）被 NON_ENGLISH 门要求纯英文（Zone A 提示词同步锁英文），而模型会把 `--issue` 中的中文描述自然引用进 evidence，导致整条 finding 被拒。评测场景用数据集原生英文 issue 属测量契约；日常单次检视想稳定拿到产出，`--issue` 暂用英文是权宜绕行。企业场景 MR 标题/描述多为中文，正解在内核侧——输出语言配置化已列入《Config B 生产化方案——差距分析、推荐路线与修改建议》（`docs/design/`，§3.2：`outputLanguage: "en" | "zh"`，Zone A 按语言分序列稳定前缀，换语言后须抽样质量验证）。
+1. **中文 MR 描述：`--language zh` 已打通，质量验证待跑**：缺省（`en`）档下，检视产出（title / description / evidence）被 NON_ENGLISH 门要求不含中文，而模型会把 `--issue` 中的中文描述自然引用进 evidence，导致整条 finding 被拒——评测场景用数据集原生英文 issue 属测量契约。日常单次检视遇中文 MR 描述，加 `--language zh`（#58）：Zone A 切中文分序列、语言门换 NON_CHINESE 判据（title / description 至少其一含中文即可，evidence 是代码引用面不设语言门——中文引用不再触发拒绝）、findings 自然语言字段中文产出（代码摘录 / 路径 / 枚举不翻译）。zh 档的抽样质量验证列入 #59 验证跑，未跑前不对 zh 产出质量背书。
 2. **内核面向 Java**：角色提示词为 senior Java code reviewer、符号索引基于 tree-sitter-java。检视非 Java 仓可运行（diff 与 Zone B 仓库结构图仍工作），但符号预取层为空、角色错配，质量不保证。
 3. **基线态语义**：检视读的上下文以仓内现状为准（CLI 不 apply diff）；评测约定仓停在 diff 的 base 侧。日常检视「仓在 head、diff 描述该段变更」亦可，上下文有轻微漂移。
 

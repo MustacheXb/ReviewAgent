@@ -8,24 +8,34 @@
  * 完整性事故。
  *
  * #46 起 smoke 子命令只有一个旗标 --model（与 review 同缺省同校验，双包
- * 各自单源 DEFAULT_MODEL）；review 专属旗标（--repo 等）对 smoke 是未知
- * 旗标——冒烟自检不跑检视，参数面自然更窄。
+ * 各自单源 DEFAULT_MODEL）；review 专属旗标（--repo / --language 等）对 smoke
+ * 是未知旗标——冒烟自检不跑检视，参数面自然更窄（--language 是检视输出
+ * 语义，#58：smoke 无检视输出）。
  */
 
 import { basename } from "node:path";
 
 import type { ConfigId } from "../../../../src/contracts/config.js";
+import { isOutputLanguage, type OutputLanguage } from "../../../../src/contracts/output-language.js";
 import { DEFAULT_MODEL } from "../plugins/review-policy.js";
 import { REVIEW_PRESETS } from "../presets/review-presets.js";
 
 /** review 子命令的已知旗标（未知旗标 = 用法错误） */
-const KNOWN_REVIEW_FLAGS: readonly string[] = ["--repo", "--mr", "--config", "--issue", "--out", "--model"];
+const KNOWN_REVIEW_FLAGS: readonly string[] = [
+  "--repo",
+  "--mr",
+  "--config",
+  "--issue",
+  "--out",
+  "--model",
+  "--language",
+];
 
 /** smoke 子命令的已知旗标（#46） */
 const KNOWN_SMOKE_FLAGS: readonly string[] = ["--model"];
 
 /** 用法文案（stderr 错误路径的同款文案，单一来源） */
-export const USAGE_TEXT = `usage: review-agent review --repo <path> --mr <diff-file> [--config A-E] [--issue <text>] [--out <dir>] [--model <id>]
+export const USAGE_TEXT = `usage: review-agent review --repo <path> --mr <diff-file> [--config A-E] [--issue <text>] [--out <dir>] [--model <id>] [--language en|zh]
        review-agent smoke [--model <id>]
   （smoke = 网关冒烟自检，#46：对目标端点发 1 次最小补全 + 1 次最小工具调用探针，输出人话诊断）
 
@@ -36,6 +46,7 @@ review 旗标：
   --issue   <text>       MR 议题描述（缺省空）
   --out     <dir>        输出目录（审计与会话落盘；缺省 review-agent-output）
   --model   <id>         被测模型 id（缺省 deepseek-v4-flash；自由 id 透传，退役 id 拒绝）
+  --language <en|zh>     输出语言（缺省 en；只切换 findings 自然语言字段，代码摘录 / 路径 / 枚举不翻译）
 
 smoke 旗标：
   --model   <id>         被测模型 id（同上缺省与校验；端点/key 走 REVIEWER_* 环境变量或 .env.local）`;
@@ -51,6 +62,8 @@ export interface ReviewCliArgs {
   readonly out: string;
   /** 被测模型（#45）：缺省 DEFAULT_MODEL；自由 id 透传（空串/空白 = 用法错误） */
   readonly model: string;
+  /** 输出语言（#58）：缺省 en（现状锚定）；只切换 findings 自然语言字段（en|zh 枚举） */
+  readonly language: OutputLanguage;
 }
 
 /** 解析后的 smoke 命令参数（#46） */
@@ -98,6 +111,15 @@ function parseModelFlag(values: Map<string, string>): { readonly ok: true; reado
   return { ok: true, model: modelRaw };
 }
 
+/** --language 的缺省与校验（review 专属；#58） */
+function parseLanguageFlag(values: Map<string, string>): { readonly ok: true; readonly language: OutputLanguage } | { readonly ok: false; readonly message: string } {
+  const languageRaw = values.get("--language") ?? "en";
+  if (!isOutputLanguage(languageRaw)) {
+    return { ok: false, message: `invalid --language ${JSON.stringify(languageRaw)}: expected "en" or "zh"` };
+  }
+  return { ok: true, language: languageRaw };
+}
+
 export function parseCliArgs(argv: readonly string[]): ParseCliArgsResult {
   const [command, ...rest] = argv;
   if (command !== "review" && command !== "smoke") {
@@ -119,6 +141,10 @@ export function parseCliArgs(argv: readonly string[]): ParseCliArgsResult {
   }
   if (command === "smoke") {
     return { ok: true, command: "smoke", args: { model: model.model } };
+  }
+  const language = parseLanguageFlag(flags.values);
+  if (!language.ok) {
+    return language;
   }
 
   const repo = flags.values.get("--repo");
@@ -145,6 +171,7 @@ export function parseCliArgs(argv: readonly string[]): ParseCliArgsResult {
       issue: flags.values.get("--issue") ?? "",
       out: flags.values.get("--out") ?? "review-agent-output",
       model: model.model,
+      language: language.language,
     },
   };
 }

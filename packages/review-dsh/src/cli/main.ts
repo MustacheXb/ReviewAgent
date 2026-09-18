@@ -26,10 +26,12 @@
  * 是单个 JSON 文档。凭据经 reviewer 角色环境变量（REVIEWER_API_KEY /
  * REVIEWER_URL，别名 DEEPSEEK_API_KEY / DEEPSEEK_URL），适配器构造期
  * fail fast，错误消息不回显 key 值。model 是实验数据（#45）：经 --model
- * 旗标下传（缺省 deepseek-v4-flash），无 model 环境变量。
+ * 旗标下传（缺省 deepseek-v4-flash），无 model 环境变量。outputLanguage（#58）：
+ * 经 --language 旗标下传（缺省 en；zh 切换 Zone A 分序列与语言门档位），无
+ * language 环境变量。
  *
  * 进程调用形态：review-agent review --repo <path> --mr <diff-file>
- *   [--config A-E] [--issue <text>] [--out <dir>] [--model <id>]
+ *   [--config A-E] [--issue <text>] [--out <dir>] [--model <id>] [--language en|zh]
  *   review-agent smoke [--model <id>]
  */
 
@@ -118,7 +120,7 @@ async function runReviewCommand(args: ReviewCliArgs): Promise<number> {
   // 文件）、findings 按锚点键合并为单份结果。运行单元 profile-per-run
   // （kernel-host 单元隔离同款），sessions / audit 目录由运行器按片创建。
   const mrCase = cliMrCase(args, repoPath, diff);
-  const runner = dshSingleMrRunner({ config: args.config, model: args.model, outDir });
+  const runner = dshSingleMrRunner({ config: args.config, model: args.model, language: args.language, outDir });
   const orchestrated = await orchestrateReview(mrCase, runner);
   if (!orchestrated.ok) {
     return presentOrchestrationRejection(orchestrated.error, mrCase, runner);

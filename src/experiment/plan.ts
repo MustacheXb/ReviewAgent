@@ -1,6 +1,8 @@
 import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
 import type { MRCase } from "../contracts/mr-case.js";
+import type { OutputLanguage } from "../contracts/output-language.js";
+import { isOutputLanguage } from "../contracts/output-language.js";
 
 /**
  * 实验计划（Ticket 12 / issue #13）：五配置 × 数据集 × 重复 的可编排放跑参数。
@@ -50,6 +52,13 @@ export interface ExperimentPlan {
    * 持久化——记录「连到哪」，绝不记录 key。缺省未设（非 CLI 构造的计划）。
    */
   readonly reviewerBaseUrl?: string;
+  /**
+   * 输出语言（#58，spec #49 决策 1）：Finding 自然语言字段的语言档；缺席 =
+   * en（既有 en 基线口径，旧计划语义不变）。zh 实验必须走 DSH 内核（POC1
+   * 冻结 harness 是 en 锚定——运行器启动期护栏）；指标按语言分口径，断点
+   * 续跑把语言视为口径维度（混语言记录启动即报错）。
+   */
+  readonly outputLanguage?: OutputLanguage;
   /** 仅跑 riskClass = High 的 case（高险子集消融的入样过滤） */
   readonly highRiskOnly: boolean;
   /** 每源 case 数上限（null = 不限量） */
@@ -139,6 +148,11 @@ export function validateExperimentPlan(plan: ExperimentPlan): void {
   if (plan.reviewerBaseUrl !== undefined && (typeof plan.reviewerBaseUrl !== "string" || plan.reviewerBaseUrl.trim().length === 0)) {
     throw new Error(
       `plan.reviewerBaseUrl must be a non-empty base URL string when present (got ${JSON.stringify(plan.reviewerBaseUrl)})`,
+    );
+  }
+  if (plan.outputLanguage !== undefined && !isOutputLanguage(plan.outputLanguage)) {
+    throw new Error(
+      `plan.outputLanguage must be "en" or "zh" when present (got ${JSON.stringify(plan.outputLanguage)}; absent means en, the anchored baseline language)`,
     );
   }
   if (typeof plan.highRiskOnly !== "boolean") {

@@ -16,7 +16,10 @@
  * 凭据经 reviewer 角色环境变量（REVIEWER_API_KEY / REVIEWER_URL，别名
  * DEEPSEEK_API_KEY / DEEPSEEK_URL），适配器每请求构造期 fail fast；错误消息
  * 不回显 key 值。model 是实验数据（#45）：经 review/run 参数下传进 policy
- * （缺省回落 DEFAULT_MODEL），无 model 环境变量。stdout 只承载 JSON-RPC 帧
+ * （缺省回落 DEFAULT_MODEL），无 model 环境变量。outputLanguage（#58）：
+ * 经 review/run 的 language 参数下传（缺省 en；zh 切换 Zone A 分序列与
+ * 语言门档位），非法值错误帧、进程存活（与 CLI --language 旗标双通道同
+ * 语义）。stdout 只承载 JSON-RPC 帧
  * （协议纯净性由部署保证——同 dsh-sdk-jsonrpc-server 约定），诊断不写 stdout。
  *
  * 进程调用形态：review-kernel-host（stdin/stdout = JSON-RPC；EOF / shutdown /
@@ -31,6 +34,7 @@ import { JsonRpcLineTransport } from "@deepseek-ai/dsh-sdk-protocol";
 
 import { writeAuditFile } from "../../../../src/audit/audit-writer.js";
 import type { ConfigId } from "../../../../src/contracts/config.js";
+import { isOutputLanguage, type OutputLanguage } from "../../../../src/contracts/output-language.js";
 import { toAuditFileContent, toPoc1RunResult } from "../audit/audit-export.js";
 import { DeepSeekLlmAdapter } from "../llm/deepseek-adapter.js";
 import { REVIEW_PRESETS } from "../presets/review-presets.js";
@@ -47,6 +51,8 @@ interface ReviewRunParams {
   readonly auditDir: string;
   /** 被测模型（#45）：缺省回落 DEFAULT_MODEL；自由 id 透传（空串 fail fast） */
   readonly model?: string;
+  /** 输出语言（#58）：缺省 en；en|zh 枚举（非法值 fail fast 错误帧） */
+  readonly language?: OutputLanguage;
 }
 
 /** 必填非空字符串字段提取（缺场/空串/类型错误 = fail fast 错误帧） */
@@ -76,6 +82,10 @@ function parseReviewRunParams(params: Record<string, unknown>): ReviewRunParams 
   if (model !== undefined && (typeof model !== "string" || model.trim().length === 0)) {
     throw new Error(`review/run: "model" must be a non-empty string when present`);
   }
+  const language = params.language;
+  if (language !== undefined && !isOutputLanguage(language)) {
+    throw new Error(`review/run: "language" must be "en" or "zh" when present (got ${JSON.stringify(language)})`);
+  }
   return {
     configId: configId as ConfigId,
     caseId: requireString(params, "caseId"),
@@ -84,6 +94,7 @@ function parseReviewRunParams(params: Record<string, unknown>): ReviewRunParams 
     ...(repoPath !== undefined ? { repoPath } : {}),
     auditDir: requireString(params, "auditDir"),
     ...(model !== undefined ? { model } : {}),
+    ...(language !== undefined ? { language } : {}),
   };
 }
 
@@ -102,7 +113,7 @@ async function handleReviewRun(params: Record<string, unknown>): Promise<unknown
     await assembleReviewProfile(ctx, {
       sessionRoot,
       adapter,
-      policy: realApiReviewPolicy(request.configId, request.model),
+      policy: realApiReviewPolicy(request.configId, request.model, request.language),
     });
     const result = await ctx.reviewRuntime.run({
       caseId: request.caseId,

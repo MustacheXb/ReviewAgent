@@ -26,8 +26,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDshKernelDriver } from "../../../../src/experiment/dsh-kernel.js";
 import type { ConfigId } from "../../../../src/contracts/config.js";
 import { SAMPLE_MR_CASE } from "../../../../tests/fixtures/sample-mr-case.js";
-import { configAResponses } from "../../../../tests/helpers/dsh-replies.js";
+import {
+  chatResponse,
+  configARepliesFor,
+  configAResponses,
+  FINDING_F001_ZH,
+} from "../../../../tests/helpers/dsh-replies.js";
 import { startStubLlmServer } from "../../../../tests/helpers/stub-llm-server.js";
+
+import { ZONE_A } from "../../src/plugins/review-policy.js";
 
 const PACKAGE_DIR = fileURLToPath(new URL("../..", import.meta.url));
 const HOST_BIN = join(PACKAGE_DIR, "bin", "review-kernel-host.js");
@@ -420,6 +427,178 @@ describe("DSH kernel host — model 下传与凭据透传（#45）", () => {
 
         // 角色名凭据完成整条链路（host 子进程解析别名 → 适配器 → stub 端点）
         expect(result.findings.map((finding) => finding.id)).toEqual(["F001"]);
+      } finally {
+        await driver.close();
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe("DSH kernel host — language 下传（#58）", () => {
+  it(
+    "zh 端到端：语言参数贯穿 policy（zh 序列 + 语言门放行）→ 中文 findings + 审计顶层 zh + wire system = zh 冻结序列",
+    async () => {
+      const stub = await startStubLlmServer(configARepliesFor(FINDING_F001_ZH).map(chatResponse));
+      const auditDir = await makeAuditDir("dsh-host-language-zh-");
+      const driver = createDshKernelDriver({ env: stubEnv(stub.url, "sk-language-zh-sentinel") });
+      try {
+        const result = await driver.runUnit({
+          configId: "A",
+          caseId: "language-zh",
+          issueDescription: "",
+          diff: SAMPLE_MR_CASE.diff,
+          repoPath: SAMPLE_MR_CASE.repoPath,
+          auditDir,
+          language: "zh",
+        });
+
+        // 语言门 zh 判据放行中文候选（title / description 中文；file / rule / 枚举原样）
+        expect(result.outputLanguage).toBe("zh");
+        expect(result.findings).toHaveLength(1);
+        expect(result.findings[0]).toMatchObject({
+          id: "F001",
+          file: "src/main/java/Example.java",
+          rule: "CORRECTNESS-001",
+          title: "查询参数的 URL 编码错误",
+          description: "该改动对拼接后的查询串整体编码，而非逐个参数值编码。",
+          evidence: ["Example.java:42 - 对拼接后的查询串调用了 URLEncoder.encode，应逐个参数值编码"],
+        });
+        if (result.auditPath === undefined) {
+          throw new Error("driver result is missing auditPath");
+        }
+        const audit = JSON.parse(await readFile(result.auditPath, "utf8")) as {
+          readonly outputLanguage: string;
+          readonly requests: readonly { readonly wireBody?: string }[];
+        };
+        expect(audit.outputLanguage).toBe("zh");
+        // wire 首请求 system = zh 冻结序列（Zone A 按语言分序列的进程级字节锚）
+        const firstWire = JSON.parse(String(audit.requests[0]?.wireBody)) as {
+          readonly messages: readonly { readonly role: string; readonly content: string }[];
+        };
+        expect(firstWire.messages[0]?.role).toBe("system");
+        expect(firstWire.messages[0]?.content).toBe(ZONE_A.zh);
+      } finally {
+        await driver.close();
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "非法 language：裸 wire language \"fr\" → -32603 错误帧且进程存活（后续有效请求成功）",
+    async () => {
+      const stub = await startStubLlmServer(configAResponses());
+      const auditDir = await makeAuditDir("dsh-host-language-fr-");
+      const child = spawn(process.execPath, [HOST_BIN], {
+        env: stubEnv(stub.url, "sk-language-fr-sentinel"),
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      const stdout = child.stdout;
+      const stdin = child.stdin;
+      if (stdout === null || stdin === null) {
+        child.kill();
+        throw new Error("kernel-host spawned without piped stdio");
+      }
+      const lines = createInterface({ input: stdout })[Symbol.asyncIterator]();
+      const write = (frame: unknown): void => {
+        stdin.write(`${JSON.stringify(frame)}\n`);
+      };
+      try {
+        // 1) 非法 language → -32603（handler throw），进程存活
+        write({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "review/run",
+          params: {
+            configId: "A",
+            caseId: "language-fr",
+            issueDescription: "",
+            diff: SAMPLE_MR_CASE.diff,
+            repoPath: SAMPLE_MR_CASE.repoPath,
+            auditDir,
+            language: "fr",
+          },
+        });
+        const invalid = await readFrame(lines);
+        expect(invalid.id).toBe(1);
+        expect(errorCode(invalid)).toBe(-32603);
+        expect(JSON.stringify(invalid)).toContain("language");
+
+        // 2) 进程存活：同进程后续有效请求成功（缺省 en）
+        write({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "review/run",
+          params: {
+            configId: "A",
+            caseId: "language-recovered",
+            issueDescription: "",
+            diff: SAMPLE_MR_CASE.diff,
+            repoPath: SAMPLE_MR_CASE.repoPath,
+            auditDir,
+          },
+        });
+        const ok = await readFrame(lines);
+        expect(ok.id).toBe(2);
+        const result = ok.result as { readonly outputLanguage?: string; readonly findings: readonly unknown[] };
+        expect(result.outputLanguage).toBe("en");
+        expect(result.findings).toHaveLength(1);
+      } finally {
+        child.kill();
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "en 字节回归：显式 language \"en\" 与缺省运行的请求字节逐字节一致（system = en 冻结序列 = 现状）",
+    async () => {
+      const stub = await startStubLlmServer([...configAResponses(), ...configAResponses()]);
+      const auditDir = await makeAuditDir("dsh-host-language-en-");
+      const driver = createDshKernelDriver({ env: stubEnv(stub.url, "sk-language-en-sentinel") });
+      try {
+        const omitted = await driver.runUnit({
+          configId: "A",
+          caseId: "language-en-default",
+          issueDescription: "",
+          diff: SAMPLE_MR_CASE.diff,
+          repoPath: SAMPLE_MR_CASE.repoPath,
+          auditDir,
+        });
+        const explicit = await driver.runUnit({
+          configId: "A",
+          caseId: "language-en-explicit",
+          issueDescription: "",
+          diff: SAMPLE_MR_CASE.diff,
+          repoPath: SAMPLE_MR_CASE.repoPath,
+          auditDir,
+          language: "en",
+        });
+
+        // 恒携带 en（缺省与显式同档）
+        expect(omitted.outputLanguage).toBe("en");
+        expect(explicit.outputLanguage).toBe("en");
+        // AC5：en 显式不改变请求字节——语言的影响面是 Zone A system 消息
+        // （messages[0]；MR intro 内嵌 caseId，两次运行天然不同，不在对照面）
+        expect(explicit.auditPath).toBeDefined();
+        const [defaultAudit, explicitAudit] = await Promise.all([
+          readFile(omitted.auditPath ?? "", "utf8"),
+          readFile(explicit.auditPath ?? "", "utf8"),
+        ]) as [string, string];
+        const firstWireOf = (auditJson: string): unknown =>
+          JSON.parse(String((JSON.parse(auditJson) as { readonly requests: readonly { readonly wireBody?: string }[] }).requests[0]?.wireBody));
+        const systemOf = (auditJson: string): string =>
+          (firstWireOf(auditJson) as { readonly messages: readonly { readonly role: string; readonly content: string }[] }).messages[0]?.content ?? "";
+        // 显式 en 的 system 与缺省运行逐字节一致，且即 en 冻结序列（= 现状，
+        // #53 字节锁的进程级对照锚——en 序列与 #53 前逐字节相同）
+        expect(systemOf(explicitAudit)).toBe(systemOf(defaultAudit));
+        expect(systemOf(defaultAudit)).toBe(ZONE_A.en);
+        expect(systemOf(explicitAudit)).toBe(ZONE_A.en);
       } finally {
         await driver.close();
         await stub.close();

@@ -13,6 +13,8 @@
  * close = 协议 shutdown（有界）→ stdin EOF → SIGTERM → SIGKILL 阶梯。
  * 凭据经环境变量透传（REVIEWER_API_KEY / REVIEWER_URL，别名 DEEPSEEK_*），
  * 不落代码与日志；model 是实验数据（#45），走 review/run 请求参数而非环境。
+ * language（#58）同款：review/run 的 language 参数（缺省 en），回传
+ * outputLanguage 与计划漂移由 runner 断言兜底。
  */
 
 import { spawn } from "node:child_process";
@@ -23,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { JsonRpcLineTransport } from "@deepseek-ai/dsh-sdk-protocol";
 
 import { CONFIGS, type ConfigId, REFERENCE_CONFIG_ID } from "../contracts/config.js";
+import { isOutputLanguage, type OutputLanguage } from "../contracts/output-language.js";
 import type { RunResult } from "../contracts/run.js";
 
 /** 单元请求（host 的 review/run 参数；configId 逐单元切换 preset） */
@@ -35,6 +38,8 @@ export interface DshKernelUnitRequest {
   readonly auditDir: string;
   /** 被测模型（#45）：缺省回落 host 侧 DEFAULT_MODEL；自由 id 透传 */
   readonly model?: string;
+  /** 输出语言（#58）：缺省 en；经 review/run 的 language 参数下传 policy */
+  readonly language?: OutputLanguage;
 }
 
 export interface DshKernelDriverOptions {
@@ -139,6 +144,7 @@ export function createDshKernelDriver(options: DshKernelDriverOptions = {}): Dsh
         ...(unit.repoPath !== undefined ? { repoPath: unit.repoPath } : {}),
         auditDir: unit.auditDir,
         ...(unit.model !== undefined ? { model: unit.model } : {}),
+        ...(unit.language !== undefined ? { language: unit.language } : {}),
       });
       return parseRunResult(response, stderrTail.join(""));
     },
@@ -194,6 +200,7 @@ function parseRunResult(response: unknown, stderrTail: string): RunResult {
   const audit = record.audit;
   const usage = record.usage;
   const model = record.model;
+  const outputLanguage = record.outputLanguage;
   if (!Array.isArray(findings) || findings.some(isNotPlainObject)) {
     throw new Error(`dsh-kernel: review/run response field "findings" must be an array of objects`);
   }
@@ -208,10 +215,14 @@ function parseRunResult(response: unknown, stderrTail: string): RunResult {
   if (model !== undefined && typeof model !== "string") {
     throw new Error(`dsh-kernel: review/run response field "model" must be a string when present`);
   }
+  if (outputLanguage !== undefined && !isOutputLanguage(outputLanguage)) {
+    throw new Error(`dsh-kernel: review/run response field "outputLanguage" must be "en" or "zh" when present`);
+  }
   return {
     caseId: stringField("caseId"),
     configId: requireKnownConfigId(record),
     ...(model !== undefined ? { model } : {}),
+    ...(outputLanguage !== undefined ? { outputLanguage } : {}),
     findings: findings as RunResult["findings"],
     usage: usage as RunResult["usage"],
     rounds: numberField("rounds"),
