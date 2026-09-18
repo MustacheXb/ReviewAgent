@@ -133,6 +133,18 @@ describe("parseExperimentArgs — 列表 / 枚举 / 数值校验", () => {
     );
   });
 
+  it("--language 只接受 en|zh（#58：zh 实验需 DSH 内核；缺省缺席 = en 基线口径）", () => {
+    const zh = parseOk(["--id", "a", "--language", "zh"]);
+    expect(zh.ok && zh.options.language).toBe("zh");
+    const en = parseOk(["--id", "a", "--language", "en"]);
+    expect(en.ok && en.options.language).toBe("en");
+    expect(parseFail(["--id", "a", "--language", "fr"]).message).toBe(
+      '--language must be "en" or "zh" (got "fr")',
+    );
+    const dflt = parseOk(["--id", "a"]);
+    expect(dflt.ok && dflt.options.language).toBeUndefined();
+  });
+
   it("--model 自由 id + 别名（#43）：任意非空 id 直通；flash/pro 别名保留", () => {
     const flash = parseOk(["--id", "a", "--model", "flash"]);
     expect(flash.ok && flash.options.model).toBe("deepseek-v4-flash");
@@ -300,6 +312,24 @@ describe("cliOptionsToPlan — 校验透传", () => {
     const downgraded = parseOk(["--id", "a", "--judge-model", "deepseek-chat"]);
     if (!downgraded.ok) throw new Error("unreachable");
     expect(cliOptionsToPlan(downgraded.options).judgeModel).toBe("deepseek-chat");
+  });
+
+  it("--language 进计划（#58）：zh/en 显式入计划；缺席 = outputLanguage 缺席（en 基线口径）", () => {
+    const zhDsh = parseOk(["--id", "a", "--language", "zh", "--kernel", "dsh"]);
+    if (!zhDsh.ok) throw new Error("unreachable");
+    expect(cliOptionsToPlan(zhDsh.options).outputLanguage).toBe("zh");
+    const en = parseOk(["--id", "a", "--language", "en"]);
+    if (!en.ok) throw new Error("unreachable");
+    expect(cliOptionsToPlan(en.options).outputLanguage).toBe("en");
+    const absent = parseOk(["--id", "a"]);
+    if (!absent.ok) throw new Error("unreachable");
+    expect(cliOptionsToPlan(absent.options).outputLanguage).toBeUndefined();
+  });
+
+  it("--language zh + poc1 内核 → CLI 预检拦截（用法错误不烧钱，#58：POC1 冻结 harness 是 en 锚定）", () => {
+    const zhPoc1 = parseOk(["--id", "a", "--language", "zh"]);
+    if (!zhPoc1.ok) throw new Error("unreachable");
+    expect(() => cliOptionsToPlan(zhPoc1.options)).toThrow(/--kernel dsh/);
   });
 });
 

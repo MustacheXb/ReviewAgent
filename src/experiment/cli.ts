@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ConfigId } from "../contracts/config.js";
 import { CONFIGS } from "../contracts/config.js";
 import type { LlmClient } from "../contracts/llm-client.js";
+import { isOutputLanguage, type OutputLanguage } from "../contracts/output-language.js";
 import { runUnitKeyString } from "../contracts/run-unit.js";
 import { DeepSeekClient } from "../deepseek/deepseek-client.js";
 import type { JudgeClient } from "../judge/index.js";
@@ -73,6 +74,11 @@ export interface ExperimentCliOptions {
   readonly judgeModel: string | null;
   readonly humanReviewRate: number;
   readonly humanReviewSeed: string;
+  /**
+   * 输出语言（#58）：缺席 = en（既有基线口径，plan.outputLanguage 不设置）；
+   * zh 要求 --kernel dsh（cliOptionsToPlan 预检——用法错误不烧钱）。
+   */
+  readonly language?: OutputLanguage;
   readonly casesFile?: string;
   readonly cleanMr: boolean;
   readonly cleanMrRepoPath?: string;
@@ -117,6 +123,8 @@ export function experimentCliUsage(): string {
     "                            rejected unless a custom endpoint is set (#43 warning)",
     "  --human-review-rate <r>   sampling rate in (0,1] (default: 0.1)",
     "  --human-review-seed <s>   deterministic sampling seed",
+    "  --language <en|zh>        findings output language (default: en; zh requires",
+    "                            --kernel dsh — the POC1 frozen harness is the en baseline)",
     "  --report-only             rebuild the report from persisted records (no review runs)",
     "  --runs-root <dir>         experiments root (default: runs)",
     "  --help                    show this help",
@@ -139,6 +147,7 @@ type CliValues = {
   judgeModel: string | null;
   humanReviewRate: number;
   humanReviewSeed: string;
+  language: OutputLanguage | undefined;
   casesFile: string | undefined;
   cleanMr: boolean;
   cleanMrRepoPath: string | undefined;
@@ -201,6 +210,10 @@ const VALUE_FLAGS: Readonly<Record<string, ValueFlagParser<CliValues>>> = {
     value.trim().length === 0
       ? flagFail("--human-review-seed must be a non-empty string")
       : flagOk({ humanReviewSeed: value }),
+  "--language": (value) =>
+    isOutputLanguage(value)
+      ? flagOk({ language: value })
+      : flagFail(`--language must be "en" or "zh" (got ${JSON.stringify(value)})`),
 };
 
 /** 整数参数 → 补丁（保留 parseInt 截断语义：带数字前缀的脏值可截断通过） */
@@ -233,6 +246,7 @@ function defaultCliValues(): CliValues {
     judgeModel: null,
     humanReviewRate: DEFAULT_HUMAN_REVIEW_RATE,
     humanReviewSeed: DEFAULT_HUMAN_REVIEW_SEED,
+    language: undefined,
     casesFile: undefined,
     cleanMr: false,
     cleanMrRepoPath: undefined,
@@ -271,6 +285,7 @@ function finalizeCliValues(
       judgeModel: values.judgeModel,
       humanReviewRate: values.humanReviewRate,
       humanReviewSeed: values.humanReviewSeed,
+      ...(values.language !== undefined ? { language: values.language } : {}),
       ...(values.casesFile !== undefined ? { casesFile: values.casesFile } : {}),
       cleanMr: values.cleanMr,
       ...(cleanMrRepoPath !== undefined ? { cleanMrRepoPath } : {}),
@@ -296,6 +311,14 @@ export function parseExperimentArgs(argv: readonly string[]): ParseArgsResult {
 
 /** CLI 选项 → ExperimentPlan（含校验；校验失败抛错由调用方捕获转退出码） */
 export function cliOptionsToPlan(options: ExperimentCliOptions): ExperimentPlan {
+  // #58 预检：zh 只有 DSH 内核的参数化路径（POC1 冻结 harness 是 en 基线，
+  // ADR-0010）——用法错误在装配期拦截，不进矩阵烧钱（运行器启动期护栏兜底）
+  if (options.language === "zh" && options.kernel !== "dsh") {
+    throw new Error(
+      `--language zh requires --kernel dsh: the POC1 frozen harness is the en baseline ` +
+        `(ADR-0010) — zh experiments must run on the DSH kernel.`,
+    );
+  }
   const plan: ExperimentPlan = {
     experimentId: options.experimentId,
     sources: options.sources,
@@ -310,6 +333,7 @@ export function cliOptionsToPlan(options: ExperimentCliOptions): ExperimentPlan 
     judgeModel: options.judgeModel,
     humanReviewRate: options.humanReviewRate,
     humanReviewSeed: options.humanReviewSeed,
+    ...(options.language !== undefined ? { outputLanguage: options.language } : {}),
   };
   validateExperimentPlan(plan);
   return plan;
