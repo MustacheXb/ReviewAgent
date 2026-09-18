@@ -1,0 +1,68 @@
+[
+  {
+    "caseId": "VUL4J-29",
+    "repoSlug": "apache/struts",
+    "fixSha": "1a668af7f1ff",
+    "fixCommitAt": "2014-05-01T09:31:12Z"
+  },
+  {
+    "caseId": "VUL4J-30",
+    "repoSlug": "apache/struts",
+    "fixSha": "554b9dddb0fb",
+    "fixCommitAt": "2016-11-16T06:30:46Z"
+  },
+  {
+    "caseId": "VUL4J-33",
+    "repoSlug": "apache/struts",
+    "fixSha": "f238cf4f1091",
+    "fixCommitAt": "2016-05-04T07:20:04Z"
+  },
+  {
+    "caseId": "VUL4J-35",
+    "repoSlug": "apache/struts",
+    "fixSha": "1f301038a751",
+    "fixCommitAt": "2014-11-21T18:21:35Z"
+  },
+  {
+    "caseId": "VUL4J-72",
+    "repoSlug": "spring-projects/spring-security",
+    "fixSha": "c70b65c5df0e",
+    "fixCommitAt": "2018-11-13T15:20:18Z"
+  },
+  {
+    "caseId": "VUL4J-73",
+    "repoSlug": "spring-projects/spring-security",
+    "fixSha": "b2d4fec3617c",
+    "fixCommitAt": "2019-06-19T17:48:55Z"
+  },
+  {
+    "caseId": "VUL4J-74",
+    "repoSlug": "spring-projects/spring-security",
+    "fixSha": "1304c958bf9c",
+    "fixCommitAt": "2019-04-02T15:36:43Z"
+  },
+  {
+    "caseId": "VUL4J-15",
+    "repoSlug": "apache/cxf",
+    "fixSha": "d9e2a6e7",
+    "fixCommitAt": "2016-11-23T14:27:36Z"
+  },
+  {
+    "caseId": "VUL4J-16",
+    "repoSlug": "apache/cxf",
+    "fixSha": "845eccb6484b",
+    "fixCommitAt": "2015-07-30T16:55:32Z"
+  },
+  {
+    "caseId": "VUL4J-39",
+    "repoSlug": "cloudfoundry/uaa",
+    "fixSha": "a61bfabbad22",
+    "fixCommitAt": "2018-01-09T20:17:09Z"
+  },
+  {
+    "caseId": "VUL4J-40",
+    "repoSlug": "cloudfoundry/uaa",
+    "fixSha": "daeedbe49945",
+    "fixCommitAt": "2019-01-28T17:44:22Z"
+  }
+]

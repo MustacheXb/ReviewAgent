@@ -18,7 +18,9 @@
     "alignment-gate": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --outDir .tmp-gen scripts/run-alignment-gate.ts && node .tmp-gen/scripts/run-alignment-gate.js",
     "reference": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --outDir .tmp-gen scripts/run-claude-code-reference.ts && node .tmp-gen/scripts/run-claude-code-reference.js",
     "analyze:phase2": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --rootDir . --outDir .tmp-gen scripts/analyze-phase2.ts && node .tmp-gen/scripts/analyze-phase2.js",
-    "materialize:vul4j": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --outDir .tmp-gen scripts/materialize-vul4j.ts && node .tmp-gen/scripts/materialize-vul4j.js"
+    "materialize:vul4j": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --outDir .tmp-gen scripts/materialize-vul4j.ts && node .tmp-gen/scripts/materialize-vul4j.js",
+    "sharding-validation": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --outDir .tmp-gen scripts/run-sharding-validation.ts && node .tmp-gen/scripts/run-sharding-validation.js",
+    "sharding-analysis": "pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2023 --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --skipLibCheck --outDir .tmp-gen scripts/analyze-sharding-validation.ts && node .tmp-gen/scripts/analyze-sharding-validation.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
