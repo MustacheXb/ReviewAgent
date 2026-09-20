@@ -27,11 +27,20 @@ export interface RgMatch {
 export interface RgSearchOptions {
   /** 文件 glob，默认 "*.java"（POC1 锁定 Java 单语言） */
   readonly glob?: string;
-  /** 单次调用超时（毫秒），默认 30000；超时杀进程并抛错（不静默挂起） */
+  /**
+   * 单次调用超时（毫秒），默认 300000；超时杀进程并抛错（不静默挂起）。
+   * 超时是防挂护栏而非语义参数——扫描结果与时长无关，宽限只影响「何时放弃」。
+   * #59 切分验证跑实测（本机磁盘过滤驱动延迟下）：低频符号全仓扫描呈
+   * 重尾分布（中位 ~15s、尾部 82s+，与匹配量无关——260 bytes 输出同样
+   * 82s），30s 旧默认被间歇击穿致 cxf 三 rep 连环阵亡（不同符号不同
+   * 时刻）；300s 对该尾部留 3.7× 余量（正常机器 <1s 不受影响）。
+   * 边界如实声明：高频标识符（如 next，匹配数万行）的输出爆炸路径仍可
+   * 超时——检索量与截断属上层预算层职责（见模块头注），非护栏兜底范围。
+   */
   readonly timeoutMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 
 /** 列出 root 下匹配 glob 的全部文件（排序去重后的仓库相对 POSIX 路径） */
 export function rgListFiles(root: string, glob: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<readonly string[]> {
