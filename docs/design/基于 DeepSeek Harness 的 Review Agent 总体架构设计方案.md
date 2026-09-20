@@ -1,5 +1,7 @@
 # 基于 DeepSeek Harness 的 Review Agent 总体架构设计方案
 
+> **Supersession 注记（2026-09-18）**：本文档（v2.1）已完成历史使命，**spec 真源地位由《[基于 Pi 内核的 Review Agent 总体架构设计方案](基于 Pi 内核的 Review Agent 总体架构设计方案.md)》接替**（[ADR-0009](../adr/0009-pi-kernel-from-scratch-rewrites-review-runtime.md)：Review Runtime 在 pi fork 上从 0 重写，DSH 内核已移除）。本文内核无关的内容（实验纪律、评测方法论、S/A/B 判级、五源数据集、缓存冷/热协议、零构建代码智能）已由新文档承接；DSH 内核专属内容（插件挂接、能力核对、`setFactory` 等）随内核移除转为历史记录。本文作为 DSH 线（POC1 → Phase1 迁移 → Phase2 对照）的设计事实源继续有效；其评测数据保留为 Runtime Benchmark 对照基线（`runs/phase2-dsh`，450 单元）。
+
 > **文首说明（原文首注）**：重新核对了当前 DeepSeek Harness 的官方架构：它将 `session`、`system-prompt`、`tools`、`agent`、`agent-loop`、`llm` 等声明为可替换插件能力（代码层核对：仅 `ctx.llm` 有多实现 seam，其余为 core 单实现，详见第 2 章"DSH 能力核对"）；`agent/pre-step` 可以决定模型实际看到的消息；Session 是 append-only event log；这些都非常适合实现我们的"**Cache-Stable Review Loop**"。（[GitHub](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md)）
 
 > **修订记录（v2.1，2026-09-08）**：v2.0（2026-09-02）为设计共识评审（28 项设计决策 + 四轮事实核查：DSH 代码仓、DeepSeek API、Java 代码智能工具链、Java 公开数据集）后的写回版。主要修订：
