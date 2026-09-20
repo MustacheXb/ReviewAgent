@@ -336,8 +336,15 @@ function validateInput(input: ComposeCompositeInput): DatasetError | undefined {
   return undefined;
 }
 
-/** 锚判定：candidate 晚于 best（时间戳数值比较；同刻按 caseId 码元序大者） */
-function isAnchorAfter(candidate: CompositeCandidate, best: CompositeCandidate): boolean {
+/**
+ * 锚判定：candidate 晚于 best（时间戳数值比较；同刻按 caseId 码元序大者）。
+ * 结构类型参数——编排层（validation-driver）同规则复用（单一事实源，防
+ * tie-break 单侧改动漂移）；CompositeCandidate 结构上满足本签名。
+ */
+export function isAnchorAfter(
+  candidate: { readonly mrCase: { readonly caseId: string }; readonly fixCommitAt: string },
+  best: { readonly mrCase: { readonly caseId: string }; readonly fixCommitAt: string },
+): boolean {
   const candidateAt = Date.parse(candidate.fixCommitAt);
   const bestAt = Date.parse(best.fixCommitAt);
   if (candidateAt !== bestAt) {

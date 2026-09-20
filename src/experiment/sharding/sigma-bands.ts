@@ -251,7 +251,7 @@ function unionTruth(
 }
 
 /** 锚点键校准：处理臂各片以 ±1/±3/±5 重放合并 + 误并判据 */
-function calibrateAnchorKey(input: SigmaBandInput) {
+function calibrateAnchorKey(input: SigmaBandInput): SigmaBandAnalysis["anchorKeyCalibration"] {
   return CALIBRATION_WINDOWS.map((lineWindow) => {
     let mergedCount = 0;
     let wrongMergeEntries = 0;

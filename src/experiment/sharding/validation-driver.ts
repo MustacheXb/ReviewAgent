@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { SourceSnapshot } from "../../dataset/diff/apply-unified-diff.js";
 import type { ConfigId } from "../../contracts/config.js";
 import type { MRCase } from "../../contracts/mr-case.js";
-import type { CompositeFillParams } from "../synthetic/compose-composite.js";
+import { isAnchorAfter, type CompositeFillParams } from "../synthetic/compose-composite.js";
 import type { RunRecord } from "../run-store.js";
 import type { ShardingGroupInput, ShardingValidationConfig } from "./harness.js";
 import { runShardingValidation, writeShardingValidationReport, type GroupFailure, type ShardingHarnessDeps } from "./harness.js";
@@ -116,19 +116,6 @@ async function collectJavaFiles(root: string, relative: string, out: string[]): 
     }
   }
   await Promise.all(subdirectories.map((child) => collectJavaFiles(root, child, out)));
-}
-
-/** 锚判定（与 composeComposite isAnchorAfter 同规则）：fix commit 最新者，同刻 caseId 码元序大者 */
-function isAnchorAfter(
-  candidate: { readonly mrCase: { readonly caseId: string }; readonly fixCommitAt: string },
-  best: { readonly mrCase: { readonly caseId: string }; readonly fixCommitAt: string },
-): boolean {
-  const candidateAt = Date.parse(candidate.fixCommitAt);
-  const bestAt = Date.parse(best.fixCommitAt);
-  if (candidateAt !== bestAt) {
-    return candidateAt > bestAt;
-  }
-  return candidate.mrCase.caseId > best.mrCase.caseId;
 }
 
 /** 组装真跑矩阵的组输入（锚统一 + 基线装载；组装输入错误 fail fast） */
