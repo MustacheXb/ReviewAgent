@@ -8,9 +8,9 @@
  * （prompt 即用户消息、模型自行推进），与「策略驱动器代码级强制六阶段」
  * （ADR-0006）正面冲突；本 host 在 SDK 传输层上直接暴露检视服务调用面。
  *
- * 单元隔离：每请求全新 Context + assembleReviewProfile（profile-per-run，与
- * CLI wrapper 同款）——reviewCache / 工具预算 / Ledger 均为请求私有，单元间
- * 零共享状态；config 经请求参数逐单元切换（REVIEW_PRESETS 真源）。失败单元
+ * 单元隔离：每请求全新运行单元（#61 第一步起与 CLI 共享 dshSingleMrRunner——
+ * profile-per-run：reviewCache / 工具预算 / Ledger 均为请求私有，单元间零共享
+ * 状态）；config 经请求参数逐单元切换（REVIEW_PRESETS 真源）。失败单元
  * 经错误帧回报（-32603），进程存活继续下一单元（实验运行器的失败隔离）。
  *
  * 凭据经 reviewer 角色环境变量（REVIEWER_API_KEY / REVIEWER_URL，别名
@@ -26,19 +26,14 @@
  * 信号均以 0 退出）。
  */
 
-import { mkdir, mkdtemp } from "node:fs/promises";
-import { join } from "node:path";
-
-import { Context } from "@deepseek-ai/cordis";
 import { JsonRpcLineTransport } from "@deepseek-ai/dsh-sdk-protocol";
 
-import { writeAuditFile } from "../../../../src/audit/audit-writer.js";
 import type { ConfigId } from "../../../../src/contracts/config.js";
 import { isOutputLanguage, type OutputLanguage } from "../../../../src/contracts/output-language.js";
-import { toAuditFileContent, toPoc1RunResult } from "../audit/audit-export.js";
+import { toPoc1RunResult } from "../audit/audit-export.js";
 import { DeepSeekLlmAdapter } from "../llm/deepseek-adapter.js";
 import { REVIEW_PRESETS } from "../presets/review-presets.js";
-import { assembleReviewProfile, realApiReviewPolicy } from "../profile/assemble.js";
+import { dshSingleMrRunner } from "../run-unit/single-mr-runner.js";
 import { exitGracefully } from "../process/graceful-exit.js";
 
 /** review/run 请求参数（进程边界契约；字段校验 fail fast） */
@@ -98,37 +93,27 @@ function parseReviewRunParams(params: Record<string, unknown>): ReviewRunParams 
   };
 }
 
-/** review/run：组装 → 运行 → 导出（审计落盘 + POC1 RunResult 返回） */
+/** review/run：共享运行单元（#61 第一步与 CLI 消重复——组装 → 运行 → 导出） */
 async function handleReviewRun(params: Record<string, unknown>): Promise<unknown> {
   const request = parseReviewRunParams(params);
-  // 环境凭据先检（适配器构造期 fail fast——错误帧回报，进程存活）
-  const adapter = new DeepSeekLlmAdapter();
+  // 环境凭据先检（适配器构造期 fail fast——错误帧回报，进程存活）；实例即弃：
+  // 运行单元每片自建适配器（wire 字节捕获按片私有）——CLI 侧凭据前置检查同款
+  new DeepSeekLlmAdapter();
 
-  const sessionParent = join(request.auditDir, "sessions");
-  await mkdir(sessionParent, { recursive: true });
-  const sessionRoot = await mkdtemp(join(sessionParent, "run-"));
-
-  const ctx = new Context();
-  try {
-    await assembleReviewProfile(ctx, {
-      sessionRoot,
-      adapter,
-      policy: realApiReviewPolicy(request.configId, request.model, request.language),
-    });
-    const result = await ctx.reviewRuntime.run({
-      caseId: request.caseId,
-      issueDescription: request.issueDescription,
-      diff: request.diff,
-      ...(request.repoPath !== undefined ? { repoPath: request.repoPath } : {}),
-    });
-    const content = toAuditFileContent(result);
-    const auditPath = await writeAuditFile(join(request.auditDir, "audit"), content);
-    // POC1 RunResult（metrics / judge 读取端直接消费）+ auditPath
-    return { ...toPoc1RunResult(result), auditPath };
-  } finally {
-    // 每请求树拆卸（半挂树同样拆；失败单元不污染下一单元的内核状态）
-    await ctx.fiber.dispose();
-  }
+  const runner = dshSingleMrRunner({
+    config: request.configId,
+    ...(request.model !== undefined ? { model: request.model } : {}),
+    ...(request.language !== undefined ? { language: request.language } : {}),
+    outDir: request.auditDir,
+  });
+  const run = await runner.run({
+    caseId: request.caseId,
+    issueDescription: request.issueDescription,
+    diff: request.diff,
+    ...(request.repoPath !== undefined ? { repoPath: request.repoPath } : {}),
+  });
+  // POC1 RunResult（metrics / judge 读取端直接消费）+ auditPath
+  return { ...toPoc1RunResult(run.result), auditPath: run.auditPath };
 }
 
 const transport = new JsonRpcLineTransport(process.stdin, process.stdout);

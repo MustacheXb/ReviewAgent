@@ -46,7 +46,8 @@ import { formatEnvLocalSummary, loadEnvLocalFile } from "../../../../src/shared/
 import { DeepSeekLlmAdapter } from "../llm/deepseek-adapter.js";
 import { exitGracefully } from "../process/graceful-exit.js";
 import { parseCliArgs, USAGE_TEXT, type ReviewCliArgs, type SmokeCliArgs } from "./args.js";
-import { cliMrCase, dshSingleMrRunner, type ProductionMrRun } from "./orchestration.js";
+import { cliMrCase } from "./orchestration.js";
+import { dshSingleMrRunner, type ProductionMrRun } from "../run-unit/single-mr-runner.js";
 import { renderReviewOutcome, renderShardedReviewOutcome } from "./render.js";
 import { renderSmokeReport, runGatewaySmoke } from "./smoke.js";
 
