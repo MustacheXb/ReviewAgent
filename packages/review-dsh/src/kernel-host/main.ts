@@ -13,6 +13,13 @@
  * 状态）；config 经请求参数逐单元切换（REVIEW_PRESETS 真源）。失败单元
  * 经错误帧回报（-32603），进程存活继续下一单元（实验运行器的失败隔离）。
  *
+ * #61 超界编排（spec Q1–Q9）：review/run 套 orchestrateReview（与 CLI 同一
+ * 编排函数——单一语义入口，双面零漂移）——域内直通形状零变化（实验面兼容）；
+ * 超界切分串行合并（求和口径摘要 + shards 节，每片一帧 review/progress
+ * 通知，仅切分执行时发）；分片数超限 → 专用错误帧 -32000 + error.data（经
+ * Q9 接管的服务端分发产生，见 request-dispatch.ts——SDK transport 服务端无
+ * 自定义错误帧路径）；不可解析 diff 退回直通（内核从不解析 diff，现状保真）。
+ *
  * 凭据经 reviewer 角色环境变量（REVIEWER_API_KEY / REVIEWER_URL，别名
  * DEEPSEEK_API_KEY / DEEPSEEK_URL），适配器每请求构造期 fail fast；错误消息
  * 不回显 key 值。model 是实验数据（#45）：经 review/run 参数下传进 policy
@@ -29,11 +36,15 @@
 import { JsonRpcLineTransport } from "@deepseek-ai/dsh-sdk-protocol";
 
 import type { ConfigId } from "../../../../src/contracts/config.js";
+import type { MRCase } from "../../../../src/contracts/mr-case.js";
 import { isOutputLanguage, type OutputLanguage } from "../../../../src/contracts/output-language.js";
+import type { DatasetError } from "../../../../src/dataset/diff/types.js";
+import { DEFAULT_ORCHESTRATION_CONFIG, orchestrateReview } from "../../../../src/sharding/orchestrate-review.js";
 import { toPoc1RunResult } from "../audit/audit-export.js";
 import { DeepSeekLlmAdapter } from "../llm/deepseek-adapter.js";
 import { REVIEW_PRESETS } from "../presets/review-presets.js";
 import { dshSingleMrRunner } from "../run-unit/single-mr-runner.js";
+import { installHostRequestDispatch, ShardLimitRejection } from "./request-dispatch.js";
 import { exitGracefully } from "../process/graceful-exit.js";
 
 /** review/run 请求参数（进程边界契约；字段校验 fail fast） */
@@ -93,7 +104,9 @@ function parseReviewRunParams(params: Record<string, unknown>): ReviewRunParams 
   };
 }
 
-/** review/run：共享运行单元（#61 第一步与 CLI 消重复——组装 → 运行 → 导出） */
+/** review/run：单语义入口（#61——与 CLI 同一 orchestrateReview 分流，双面同语义）
+ * 域内直通（现状形状零变化，AC4）/ 超界切分串行合并（超界形状，AC1）/ 计划类
+ * 拒绝映射（超限 → ShardLimitRejection → -32000 帧，AC2；不可解析 → 退回直通，AC3） */
 async function handleReviewRun(params: Record<string, unknown>): Promise<unknown> {
   const request = parseReviewRunParams(params);
   // 环境凭据先检（适配器构造期 fail fast——错误帧回报，进程存活）；实例即弃：
@@ -106,24 +119,89 @@ async function handleReviewRun(params: Record<string, unknown>): Promise<unknown
     ...(request.language !== undefined ? { language: request.language } : {}),
     outDir: request.auditDir,
   });
-  const run = await runner.run({
+  // MRCase 构造（truth 恒 null、labels 中性载体——与 CLI cliMrCase 同款）；
+  // repoPath 可选 → 空串占位（MRCase 契约必填 string；共享 runner falsy 归一
+  // 回缺席语义——config A 零工具时合法缺席，与 #27 既有行为一致）
+  const mrCase: MRCase = {
     caseId: request.caseId,
-    issueDescription: request.issueDescription,
+    repoPath: request.repoPath ?? "",
     diff: request.diff,
-    ...(request.repoPath !== undefined ? { repoPath: request.repoPath } : {}),
+    issueDescription: request.issueDescription,
+    truth: null,
+    labels: { source: "production", riskClass: "Medium", allowedConfigs: [request.configId] },
+  };
+  const orchestrated = await orchestrateReview(mrCase, runner, DEFAULT_ORCHESTRATION_CONFIG, {
+    // 片完成进度帧（Q4/Q6）：每片一帧 review/progress（transport.notify 公开面），
+    // 仅切分执行时发生（域内直通与超限拒绝零帧——与 shards 节同口径）
+    onShardRunComplete: (info) => {
+      transport.notify("review/progress", {
+        shardIndex: info.shardIndex,
+        shardCount: info.shardCount,
+        shardId: info.shardId,
+        runId: info.run.runId,
+        ...(info.run.auditPath !== undefined ? { auditPath: info.run.auditPath } : {}),
+      });
+    },
   });
-  // POC1 RunResult（metrics / judge 读取端直接消费）+ auditPath
-  return { ...toPoc1RunResult(run.result), auditPath: run.auditPath };
+  if (!orchestrated.ok) {
+    return mapPlannedRejection(orchestrated.error, mrCase, runner);
+  }
+  const { sharded, findings, usage, runs, shards } = orchestrated.value;
+  if (!sharded) {
+    // 域内直通：现状形状零变化（POC1 RunResult + auditPath——实验面兼容硬约束）
+    const run = runs[0]!;
+    return { ...toPoc1RunResult(run.result), auditPath: run.auditPath };
+  }
+  // 超界合并形状（Q2）：求和口径摘要（决策 13：rounds / toolCalls / usage =
+  // 各片之和，truncated 任一片即 true）+ shards 节（每片 runId / auditPath
+  // 关联独立审计）+ 合并 findings（shardIds 溯源）；顶层无 audit 投影与
+  // auditPath（超界由多次运行组成，无单一关联键——各片条目承载）。
+  // sharded = true 时 shards 节必在场（直通分支已提前返回）。
+  const first = runs[0]!.content;
+  return {
+    caseId: request.caseId,
+    configId: first.configId,
+    ...(first.model !== undefined ? { model: first.model } : {}),
+    ...(first.outputLanguage !== undefined ? { outputLanguage: first.outputLanguage } : {}),
+    truncated: runs.some((run) => run.content.truncated),
+    rounds: runs.reduce((sum, run) => sum + run.content.rounds, 0),
+    toolCalls: runs.reduce((sum, run) => sum + run.content.toolCalls, 0),
+    usage,
+    findings,
+    shards: shards!,
+  };
+}
+
+/** 计划类拒绝的 host 侧映射（Q1）：超限 → ShardLimitRejection（分发层映射
+ * -32000 + error.data 帧）；不可解析 diff → 退回直通（现状行为——内核从不
+ * 解析 diff，该输入集保真，绝不比旧行为差）；其余计划错误按异常上抛（→ -32603） */
+async function mapPlannedRejection(
+  error: DatasetError,
+  mrCase: MRCase,
+  runner: ReturnType<typeof dshSingleMrRunner>,
+): Promise<unknown> {
+  if (error.code === "SHARD_LIMIT_EXCEEDED") {
+    throw new ShardLimitRejection(error.message, {
+      rejectReason: "shard-limit",
+      ...(error.details ?? {}),
+    });
+  }
+  if (error.code === "MALFORMED_DIFF") {
+    const run = await runner.run(mrCase);
+    return { ...toPoc1RunResult(run.result), auditPath: run.auditPath };
+  }
+  throw new Error(error.message);
 }
 
 const transport = new JsonRpcLineTransport(process.stdin, process.stdout);
 
-transport.onRequest(async (method, params) => {
+/** 方法面分发（review/run + shutdown；未知方法按异常 → -32603） */
+async function handleRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
   if (method === "review/run") {
     return handleReviewRun(params);
   }
   if (method === "shutdown") {
-    // 响应帧由 transport 在 handler 返回后写出；微任务写帧完成后优雅退出
+    // 响应帧由分发层在 handler 返回后写出；微任务写帧完成后优雅退出
     // （停读 stdin 等循环排干——立即 exit 与在飞线程池写竞争会 fail-fast）
     setTimeout(() => {
       void transport.flush().finally(() => exitGracefully(0, { destroyStdin: true }));
@@ -131,7 +209,14 @@ transport.onRequest(async (method, params) => {
     return {};
   }
   throw new Error(`kernel-host: unknown method ${JSON.stringify(method)} (expected "review/run" or "shutdown")`);
-});
+}
+
+// #61 Q9：SDK transport 服务端无自定义错误帧路径（onRequest handler 拿不到
+// 请求 id、throw 恒 -32603、writeError 无 data——已核验全部已发布版本）——
+// 接管 handleIncomingRequest 为 host 自家分发以持有 id，计划类拒绝（超限）
+// 自写 -32000 + error.data 帧。私有依赖收敛到该方法名与签名；AC2 裸 wire
+// 测试锁帧形状（详见 request-dispatch.ts 头注与 #61 Q9 注记）。
+installHostRequestDispatch(transport, process.stdout, handleRequest);
 
 transport.start();
 

@@ -102,6 +102,8 @@ export function planShards(
       new DatasetError(
         "SHARD_LIMIT_EXCEEDED",
         `所需分片数 ${packed.length} 超过上限 ${config.maxShards}`,
+        // 结构化拒绝参数（#61）：RPC 错误帧 error.data / 平台侧可编程区分的源
+        { requiredShards: packed.length, shardLimit: config.maxShards },
       ),
     );
   }

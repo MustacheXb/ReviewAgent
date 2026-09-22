@@ -77,7 +77,9 @@ export function dshSingleMrRunner(
           caseId: input.caseId,
           issueDescription: input.issueDescription,
           diff: input.diff,
-          ...(input.repoPath !== undefined ? { repoPath: input.repoPath } : {}),
+          // repoPath falsy 归一回缺席（host 侧 MRCase 必填 string → 空串占位；
+          // 缺席语义保留——config A 零工具时合法，与 #27 既有行为一致）
+          ...(input.repoPath ? { repoPath: input.repoPath } : {}),
         });
         const content = toAuditFileContent(result);
         const auditPath = await writeAuditFile(join(inputs.outDir, "audit"), content);

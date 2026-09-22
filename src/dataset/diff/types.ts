@@ -9,11 +9,20 @@
 /** 数据集侧统一错误：带稳定错误码，便于上游过滤报告留痕 */
 export class DatasetError extends Error {
   readonly code: string;
+  /** 结构化附加字段（如超限拒绝的 requiredShards / shardLimit——#61 错误帧 error.data 源）；未携带时缺席 */
+  readonly details?: Readonly<Record<string, number | string>>;
 
-  constructor(code: string, message: string) {
+  constructor(
+    code: string,
+    message: string,
+    details?: Readonly<Record<string, number | string>>,
+  ) {
     super(message);
     this.name = "DatasetError";
     this.code = code;
+    if (details !== undefined) {
+      this.details = details;
+    }
   }
 }
 

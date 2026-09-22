@@ -70,6 +70,21 @@ function configATruncatingResponses(): string[] {
   return replies.map(chatResponse);
 }
 
+/** shard-002 剧本 finding：与 F001 同规则同类别、异文件异行 → 锚点键不命中（各自独立呈现）；
+ * #56 超界切分与 #61 进度行两 describe 共用 */
+const FINDING_F002 = {
+  ...FINDING_F001,
+  id: "F002",
+  file: "src/main/java/Other.java",
+  line: 7,
+  evidence: ["Other.java:7 - URLEncoder.encode applied to the joined query string"],
+};
+
+/** shard-002 剧本：config A 六阶段同款，candidates / verdicts 换 F002（剧本结构单源） */
+function configAF002Responses(): string[] {
+  return configARepliesFor(FINDING_F002).map(chatResponse);
+}
+
 interface CliRunResult {
   readonly code: number;
   readonly stdout: string;
@@ -596,20 +611,6 @@ interface ShardsSectionView {
 }
 
 describe("CLI 内建切分（#56）", () => {
-  /** shard-002 剧本 finding：与 F001 同规则同类别、异文件异行 → 锚点键不命中（各自独立呈现） */
-  const FINDING_F002 = {
-    ...FINDING_F001,
-    id: "F002",
-    file: "src/main/java/Other.java",
-    line: 7,
-    evidence: ["Other.java:7 - URLEncoder.encode applied to the joined query string"],
-  };
-
-  /** shard-002 剧本：config A 六阶段同款，candidates / verdicts 换 F002（剧本结构单源） */
-  function configAF002Responses(): string[] {
-    return configARepliesFor(FINDING_F002).map(chatResponse);
-  }
-
   it(
     "超界切分：12 文件 → 2 片串行 → 退出码 0 + 单 JSON 合并呈现（shards 节 + 各片审计关联）",
     async () => {
@@ -816,6 +817,69 @@ describe("CLI 内建切分（#56）", () => {
         };
         expect(audit.runId).toBe(outcome.runId);
         expect(audit.requests).toHaveLength(6);
+      } finally {
+        await stub.close();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+// ---------- #61 AC5：超界切分的 stderr 进度行（stdout 单 JSON 契约零变化） ----------
+
+describe("CLI 超界切分进度行（#61）", () => {
+  it(
+    "超界切分：每片完成 → stderr 一行人话（片 N/M + 该片 auditPath）；域内直通零进度行",
+    async () => {
+      // 剧本按序：回复 1–6 = 片 1（F001）、7–12 = 片 2（F002）、13–18 = 域内直通（F001）
+      const stub = await startStubLlmServer([
+        ...configAResponses(),
+        ...configAF002Responses(),
+        ...configAResponses(),
+      ]);
+      try {
+        const outDir = await mkdtemp(join(tmpdir(), "review-agent-cli-61-progress-"));
+        workDirs.push(outDir);
+        const diffFile = join(outDir, "big-mr.diff");
+        const diff = [
+          ...Array.from({ length: 6 }, (_, i) => `src/pkg-a/A${i + 1}.java`),
+          ...Array.from({ length: 6 }, (_, i) => `src/pkg-b/B${i + 1}.java`),
+        ]
+          .map((file) => fileBlock(file, 2))
+          .join("");
+        await writeFile(diffFile, diff, "utf8");
+
+        const sharded = await runCli(
+          ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", diffFile, "--out", outDir],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-61-progress-key" },
+        );
+
+        // —— 超界切分完成 = 0；stdout 仍是单 JSON 文档（进度行走 stderr——Q7 契约）
+        expect(sharded.code).toBe(0);
+        const outcome = JSON.parse(sharded.stdout) as Record<string, unknown>;
+        const shards = outcome.shards as ShardsSectionView;
+        expect(shards.count).toBe(2);
+        // —— stderr 进度行：每片一行，片序 / 完成 / 该片 auditPath 与 shards 条目对位
+        const progressLines = sharded.stderr
+          .split("\n")
+          .filter((line) => line.startsWith("review-agent: 片"));
+        expect(progressLines).toHaveLength(2);
+        expect(progressLines[0]).toContain("片 1/2");
+        expect(progressLines[0]).toContain("完成");
+        expect(progressLines[0]).toContain(shards.entries[0]!.auditPath);
+        expect(progressLines[1]).toContain("片 2/2");
+        expect(progressLines[1]).toContain("完成");
+        expect(progressLines[1]).toContain(shards.entries[1]!.auditPath);
+
+        // —— 域内直通运行（同 stub 续供）：零进度行（Q7——仅超界切分时写）
+        const smallFile = join(outDir, "small-mr.diff");
+        await writeFile(smallFile, fileBlock("src/main/java/Small.java", 10), "utf8");
+        const direct = await runCli(
+          ["review", "--repo", SAMPLE_MR_CASE.repoPath, "--mr", smallFile, "--out", outDir],
+          { ...process.env, DEEPSEEK_URL: stub.url, DEEPSEEK_API_KEY: "sk-cli-61-progress-key" },
+        );
+        expect(direct.code).toBe(0);
+        expect(direct.stderr).not.toContain("review-agent: 片");
       } finally {
         await stub.close();
       }

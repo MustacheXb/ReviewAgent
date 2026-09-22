@@ -40,7 +40,7 @@ import { resolve } from "node:path";
 
 import { type DatasetError } from "../../../../src/dataset/diff/types.js";
 import type { MergedFinding } from "../../../../src/sharding/merge-findings.js";
-import { orchestrateReview } from "../../../../src/sharding/orchestrate-review.js";
+import { DEFAULT_ORCHESTRATION_CONFIG, orchestrateReview } from "../../../../src/sharding/orchestrate-review.js";
 import type { EnvLocalLoadResult } from "../../../../src/shared/env-local.js";
 import { formatEnvLocalSummary, loadEnvLocalFile } from "../../../../src/shared/env-local.js";
 import { DeepSeekLlmAdapter } from "../llm/deepseek-adapter.js";
@@ -122,7 +122,17 @@ async function runReviewCommand(args: ReviewCliArgs): Promise<number> {
   // （kernel-host 单元隔离同款），sessions / audit 目录由运行器按片创建。
   const mrCase = cliMrCase(args, repoPath, diff);
   const runner = dshSingleMrRunner({ config: args.config, model: args.model, language: args.language, outDir });
-  const orchestrated = await orchestrateReview(mrCase, runner);
+  // 片完成进度行（#61 Q7）：每片一行 stderr 人话（含该片审计路径——片级回看
+  // 入口），stdout 单 JSON 文档契约零变化；仅超界切分执行时发生（域内直通 /
+  // 超限拒绝 / 不可解析回退直通零行——与 kernel-host 的 review/progress 同源
+  // hook，双面零漂移）
+  const orchestrated = await orchestrateReview(mrCase, runner, DEFAULT_ORCHESTRATION_CONFIG, {
+    onShardRunComplete: (info) => {
+      process.stderr.write(
+        `review-agent: 片 ${info.shardIndex}/${info.shardCount} 完成 → ${info.run.auditPath}\n`,
+      );
+    },
+  });
   if (!orchestrated.ok) {
     return presentOrchestrationRejection(orchestrated.error, mrCase, runner);
   }

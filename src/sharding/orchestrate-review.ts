@@ -100,10 +100,27 @@ export interface OrchestratedReview<TRun extends SingleMrRun = SingleMrRun> {
   readonly shards?: ShardsSection;
 }
 
+/** 片完成回调信息（#61：进度帧 / 进度行的数据源） */
+export interface ShardRunCompleteInfo<TRun extends SingleMrRun = SingleMrRun> {
+  /** 片序（1 起，与 shardId 的 NNN 对位） */
+  readonly shardIndex: number;
+  readonly shardCount: number;
+  readonly shardId: string;
+  /** 该片运行产出（runId / auditPath 源） */
+  readonly run: TRun;
+}
+
+/** 编排过程回调（#61 进度挂点；仅切分分支调用，域内直通零回调） */
+export interface OrchestrationHooks<TRun extends SingleMrRun = SingleMrRun> {
+  /** 每片运行完成后立即回调（片完成即时，非聚合后）；抛出按基础设施失败上抛 */
+  onShardRunComplete?: (info: ShardRunCompleteInfo<TRun>) => void;
+}
+
 export async function orchestrateReview<TRun extends SingleMrRun>(
   mrCase: MRCase,
   runner: SingleMrRunner<TRun>,
   config: OrchestrationConfig = DEFAULT_ORCHESTRATION_CONFIG,
+  hooks: OrchestrationHooks<TRun> = {},
 ): Promise<Result<OrchestratedReview<TRun>>> {
   // 合并配置先行校验（切分器配置由 planShards 自校验）：非法配置零运行成本拒绝
   const mergeConfigError = validateMergeConfig(config.merge);
@@ -128,7 +145,16 @@ export async function orchestrateReview<TRun extends SingleMrRun>(
   // 分片串行下发（决策 10）：顺序 await 保证执行序无交错
   const runs: TRun[] = [];
   for (const shard of shardPlan.shards) {
-    runs.push(await runner.run(shard.mrCase));
+    const run = await runner.run(shard.mrCase);
+    runs.push(run);
+    // 片完成即时回调（#61 进度挂点）：host 进度通知 / CLI 进度行的单一挂点，
+    // 仅切分发生时逐片触发（直通零回调）
+    hooks.onShardRunComplete?.({
+      shardIndex: runs.length,
+      shardCount: shardPlan.shards.length,
+      shardId: shard.shardId,
+      run,
+    });
   }
   // 片 × 运行对位（执行序 = 片序），合并输入与 entries 共用
   const shardRuns = shardPlan.shards.map((shard, index) => ({ shard, run: runs[index]! }));

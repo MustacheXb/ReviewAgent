@@ -337,6 +337,19 @@ describe("planShards（分片数超上限拒绝）", () => {
     expect(result.error.message).toContain("上限 2");
   });
 
+  it("超限拒绝携带结构化 details（requiredShards / shardLimit——#61 RPC 错误帧 error.data 源）", () => {
+    const diff = Array.from({ length: 25 }, (_, i) => fileBlock(`src/pkg/P${i}.java`, 3)).join("");
+    const result = planShards(makeCase("over-limit-details", diff), {
+      boundary: { maxFiles: 10, maxDiffLines: 2000 },
+      maxShards: 2,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.details).toEqual({ requiredShards: 3, shardLimit: 2 });
+  });
+
   it("所需分片数恰等于上限：不拒绝（边界含端点）", () => {
     const diff = Array.from({ length: 25 }, (_, i) => fileBlock(`src/pkg/P${i}.java`, 3)).join("");
     const result = planShards(makeCase("at-shard-limit", diff), {

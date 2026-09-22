@@ -326,3 +326,73 @@ describe("orchestrateReview（合并层接线与配置统一传入）", () => {
     expect(fake.runCount()).toBe(0);
   });
 });
+
+describe("orchestrateReview（片完成 hooks——#61 进度挂点）", () => {
+  it("超界：每片完成后回调（shardIndex 1 起 / shardCount / shardId / run 产出对位）", async () => {
+    const diff = Array.from({ length: 25 }, (_, i) => fileBlock(`src/pkg/P${i}.java`, 3)).join("");
+    const fake = makeFakeRunner((_mrCase, index) =>
+      makeRun({ runId: `run-${index + 1}`, auditPath: `audit/run-${index + 1}.json` }),
+    );
+    const events: { shardIndex: number; shardCount: number; shardId: string; runId: string; auditPath?: string }[] = [];
+    const result = await orchestrateReview(makeCase("hooks-sharded", diff), fake.runner, DEFAULT_ORCHESTRATION_CONFIG, {
+      onShardRunComplete: (info) => {
+        events.push({
+          shardIndex: info.shardIndex,
+          shardCount: info.shardCount,
+          shardId: info.shardId,
+          runId: info.run.runId,
+          ...(info.run.auditPath !== undefined ? { auditPath: info.run.auditPath } : {}),
+        });
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(events).toEqual([
+      { shardIndex: 1, shardCount: 3, shardId: "hooks-sharded#shard-001", runId: "run-1", auditPath: "audit/run-1.json" },
+      { shardIndex: 2, shardCount: 3, shardId: "hooks-sharded#shard-002", runId: "run-2", auditPath: "audit/run-2.json" },
+      { shardIndex: 3, shardCount: 3, shardId: "hooks-sharded#shard-003", runId: "run-3", auditPath: "audit/run-3.json" },
+    ]);
+  });
+
+  it("hook 片完成即时回调（片 1 回调时后续片尚未运行——进度帧语义）", async () => {
+    const diff = [fileBlock("src/a/X.java", 3), fileBlock("src/b/Y.java", 3)].join("");
+    const fake = makeFakeRunner((_mrCase, index) => makeRun({ runId: `run-${index + 1}` }));
+    const runCountAtCallback: number[] = [];
+    const result = await orchestrateReview(
+      makeCase("hooks-timing", diff),
+      fake.runner,
+      {
+        ...DEFAULT_ORCHESTRATION_CONFIG,
+        shard: { boundary: { maxFiles: 1, maxDiffLines: 2000 }, maxShards: 20 },
+      },
+      {
+        onShardRunComplete: () => {
+          runCountAtCallback.push(fake.runCount());
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(runCountAtCallback).toEqual([1, 2]);
+  });
+
+  it("域内直通：零回调（进度仅切分发生时出现——与 shards 节同口径）", async () => {
+    const mrCase = makeCase("hooks-direct", fileBlock("src/A.java", 10));
+    const fake = makeFakeRunner(() => makeRun());
+    let calls = 0;
+    const result = await orchestrateReview(mrCase, fake.runner, DEFAULT_ORCHESTRATION_CONFIG, {
+      onShardRunComplete: () => {
+        calls += 1;
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(calls).toBe(0);
+  });
+});
