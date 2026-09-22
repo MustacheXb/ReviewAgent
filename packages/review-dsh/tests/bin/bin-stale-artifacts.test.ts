@@ -86,11 +86,14 @@ describe("bin 判鲜接线（#45）：陈旧产物 → spawn 前重编", () => {
       // 同时验证基线路径（在位/新建产物 + shutdown）本身健康
       await spawnHostAndShutdown("前置");
 
-      // 制造陈旧：双腿产物回拨 30 天（源树最新 mtime 必然晚于它）
+      // 制造陈旧：双腿产物回拨 30 天（源树最新 mtime 必然晚于它）。
+      // 卫戍断言带 5ms 容差：utimes 往返在 ext4 上可损 ~1µs（CI 实测
+      // .999 vs 整毫秒 → 间歇红灯），NTFS 精确——回拨是否生效看数量级
+      // （差 30 天 = 失效，响亮失败）而非往返精度
       const mirrorBackdatedAt = backdate(COMPILED_ENTRY);
       const distBackdatedAt = backdate(REVIEW_LLM_DIST_ENTRY);
-      expect(statSync(COMPILED_ENTRY).mtimeMs).toBe(mirrorBackdatedAt);
-      expect(statSync(REVIEW_LLM_DIST_ENTRY).mtimeMs).toBe(distBackdatedAt);
+      expect(Math.abs(statSync(COMPILED_ENTRY).mtimeMs - mirrorBackdatedAt)).toBeLessThan(5);
+      expect(Math.abs(statSync(REVIEW_LLM_DIST_ENTRY).mtimeMs - distBackdatedAt)).toBeLessThan(5);
 
       // 陈旧态 spawn：判鲜必须触发重编，host 以新产物完成 shutdown 握手
       await spawnHostAndShutdown("陈旧态");
