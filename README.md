@@ -58,6 +58,7 @@ CI（push / PR）跑两层门：`discipline-gate`（确定性纪律门 · 零网
 | `pnpm reference -- --id <id> --cases-file <file>` | Claude Code 外部参照运行器（单列报告，不进 S/A/B 主判定） |
 | `pnpm --filter review-dsh gate:discipline` | DSH 侧纪律门（本地同 CI） |
 | `pnpm --filter review-dsh cli review --repo <path> --mr <diff> [--config A-E] [--model <id>] [--language en|zh]` | 单 MR 检视（DSH 内核 CLI；凭据经 `.env.local` / `REVIEWER_*`） |
+| `node packages/review-dsh/bin/review-kernel-host.js` | JSON-RPC 检视宿主（`review/run` + `shutdown`，stdio 帧；与 CLI 同编排语义，见「RPC 调用」节） |
 | `pnpm --filter review-dsh cli smoke [--model <id>]` | 网关冒烟自检（#46）：双探针 + 人话诊断，通过 0 / 失败 1 |
 
 ## 单次检视执行（review-agent CLI）
@@ -108,6 +109,110 @@ node packages/review-dsh/bin/review-agent.js review \
 1. **中文 MR 描述：`--language zh` 已打通，质量验证待跑**：缺省（`en`）档下，检视产出（title / description / evidence）被 NON_ENGLISH 门要求不含中文，而模型会把 `--issue` 中的中文描述自然引用进 evidence，导致整条 finding 被拒——评测场景用数据集原生英文 issue 属测量契约。日常单次检视遇中文 MR 描述，加 `--language zh`（#58）：Zone A 切中文分序列、语言门换 NON_CHINESE 判据（title / description 至少其一含中文即可，evidence 是代码引用面不设语言门——中文引用不再触发拒绝）、findings 自然语言字段中文产出（代码摘录 / 路径 / 枚举不翻译）。zh 档的抽样质量验证列入 #59 验证跑，未跑前不对 zh 产出质量背书。
 2. **内核面向 Java**：角色提示词为 senior Java code reviewer、符号索引基于 tree-sitter-java。检视非 Java 仓可运行（diff 与 Zone B 仓库结构图仍工作），但符号预取层为空、角色错配，质量不保证。
 3. **基线态语义**：检视读的上下文以仓内现状为准（CLI 不 apply diff）；评测约定仓停在 diff 的 base 侧。日常检视「仓在 head、diff 描述该段变更」亦可，上下文有轻微漂移。
+
+## RPC 调用（review-kernel-host，长驻检视服务）
+
+CLI 之外的第二调用面：`packages/review-dsh/bin/review-kernel-host.js` 启动长驻内核进程，stdin / stdout 承载 JSON-RPC 2.0（newline-delimited），方法面 `review/run` + `shutdown`。与 CLI 共享同一编排入口（#61：域内直通 / 超界切分 / 拒绝映射三态双面同语义）；一个 host 进程可服务整批检视单元（单元间零共享状态），失败单元经错误帧回报、进程存活继续下一单元。stdout 只承载 JSON-RPC 帧（诊断走 stderr）。
+
+**凭据注意**：kernel-host **不装载 `.env.local`**（那是 CLI 的 #46 特性）——启动前须自行注入 `REVIEWER_API_KEY` / `REVIEWER_URL`（别名 `DEEPSEEK_API_KEY` / `DEEPSEEK_URL`）；key 缺失在首个 `review/run` 时以错误帧回报。
+
+### review/run 参数
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `configId` / `caseId` / `diff` / `auditDir` | ✅ | `configId` 取 A–E（非法值错误帧）；`auditDir` 为审计与会话落盘目录 |
+| `repoPath` | — | **config B 必传**（Zone B 预取要读仓库，缺失/空串 fail fast）；A 零工具合法缺席 |
+| `issueDescription` | — | 缺省 `""` |
+| `model` | — | 被测模型自由 id 透传（#45），缺省 `DEFAULT_MODEL` |
+| `language` | — | `"en"`（缺省）/ `"zh"`，与 CLI `--language` 同语义（#58） |
+
+### 响应三态与流式纪律
+
+| 结局 | 响应形状 |
+|---|---|
+| 域内直通 | POC1 RunResult 十键 + `auditPath`（findings / usage / rounds / toolCalls / audit 等，实验面兼容形状） |
+| 超界切分 | 求和口径摘要（rounds / toolCalls / usage 为各片之和，`truncated` 任一片即 true）+ `shards` 节（每片 runId / auditPath）+ 合并 findings（`shardIds` 溯源）；顶层无 `auditPath`；每片完成发一帧 `review/progress` 通知 |
+| 错误帧 | `-32603` 一般错误（凭据缺失 / 参数非法 / B 缺 repoPath）；`-32000` + `error.data`（`{"rejectReason":"shard-limit","requiredShards":…,"shardLimit":…}`）＝分片数超限 |
+
+**流式纪律（易踩）**：`shutdown` 与 EOF **都不等待在飞请求**（#27 快停设计）——把 `review/run` + `shutdown` 两帧一次性管道倾倒（如 `printf … | node host`）会被抢杀，响应丢失并留下半成品会话。调用方必须：spawn 后保持 stdin 打开 → 读帧直到 **id 匹配的响应帧**到手 → 再写 `shutdown` → 关 stdin。单单元耗时约 1 分钟（A）至 3.5 分钟（B），等待期间可能出现 `review/progress` 通知帧（仅切分执行时）。
+
+### 可运行案例（VUL4J-38 × Config B，真实网关）
+
+三步，均从仓库根执行。第一步生成请求帧（取 `data/vul4j/smoke-cases.json` 首案，CVE-2014-4172 URL 参数注入，写 `.cache/rpc-demo-requests.jsonl`）：
+
+```bash
+node -e "
+const fs = require('fs');
+const first = JSON.parse(fs.readFileSync('data/vul4j/smoke-cases.json','utf8'))[0];
+const requests = [
+  { jsonrpc: '2.0', id: 1, method: 'review/run', params: {
+    configId: 'B', caseId: 'rpc-demo-b', diff: first.diff,
+    issueDescription: first.issueDescription,
+    repoPath: first.repoPath,          // config B 必传；A 可省
+    auditDir: 'runs/rpc-demo-b', language: 'zh',
+  } },
+  { jsonrpc: '2.0', id: 2, method: 'shutdown' },
+];
+fs.writeFileSync('.cache/rpc-demo-requests.jsonl', requests.map((r) => JSON.stringify(r)).join('\n') + '\n');
+"
+```
+
+第二步，流式最小客户端 `.cache/rpc-demo-client.mjs`（上述纪律的最小实现——等 id 响应帧再 shutdown）：
+
+```js
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+import { readFileSync } from "node:fs";
+
+const [requestFrame] = readFileSync(".cache/rpc-demo-requests.jsonl", "utf8").trim().split("\n");
+const child = spawn(process.execPath, ["packages/review-dsh/bin/review-kernel-host.js"], {
+  stdio: ["pipe", "pipe", "pipe"],
+});
+const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+child.stderr.on("data", (chunk) => process.stderr.write(`[host] ${chunk}`));
+
+child.stdin.write(requestFrame + "\n");
+
+// 读帧直到 id:1 的响应（期间的通知帧——review/progress——原样打印）
+let response = null;
+for (let guard = 0; response === null; guard++) {
+  const { value, done } = await lines.next();
+  if (done) throw new Error("stdout closed before response frame");
+  const frame = JSON.parse(value);
+  if (frame.id === 1) { response = frame; break; }
+  console.log("[notification]", JSON.stringify(frame));
+}
+if (response.error) {
+  console.log("[review/run] ERROR:", response.error.message);   // -32603 一般 / -32000 超限
+  if (response.error.data) console.log("[review/run] error.data:", JSON.stringify(response.error.data));
+  process.exitCode = 1;
+} else {
+  const result = response.result;
+  console.log("[review/run] findings:", result.findings?.length, "| rounds:", result.rounds,
+    "| usage:", JSON.stringify(result.usage));
+  console.log("[review/run] auditPath:", result.auditPath);
+}
+
+// 响应到手才 shutdown（快停语义下抢发会杀掉在飞请求）
+child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "shutdown" }) + "\n");
+child.stdin.end();
+for (let guard = 0; guard < 5; guard++) {
+  const { value, done } = await lines.next();
+  if (done) break;
+  console.log("[frame]", value.slice(0, 80));
+}
+const code = await new Promise((resolve) => child.once("exit", resolve));
+console.log("[exit]", code);
+```
+
+第三步，注入凭据并执行：
+
+```bash
+set -a; source <(grep -E '^(REVIEWER_API_KEY|REVIEWER_URL|DEEPSEEK_API_KEY|DEEPSEEK_URL)=' .env.local); set +a
+node .cache/rpc-demo-client.mjs
+```
+
+实测输出（2026-09-22，`deepseek-v4-flash`）：2 条中文 findings（F001 P0「ticket 参数不再编码仍可注入」+ F002 P2「编码契约破坏回归」）、rounds 1、usage `{"inputTokens":16032,"outputTokens":12120,"cacheReadTokens":21760}`、审计与会话落 `runs/rpc-demo-b/`、shutdown 后退出码 0。审计文件名形如 `<时间戳>-B-rpc-demo-b.json`（含 configId，A/B 同案重跑不互相覆盖）。
 
 ## 凭据配置（.env.local，绝不入库）
 
